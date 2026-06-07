@@ -109,7 +109,10 @@ pub extern "C" fn rffi_terminal_init() -> *mut () {
     // Save state before INITIALIZED is set — order matters.
     save_termios_and_fd();
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // Inner body: init terminal, return handle or null on error.
+    // Extracted so the cfg-gated catch_unwind wrapper below stays readable.
+    #[inline(always)]
+    fn init_body() -> *mut () {
         let mut out = stdout();
         if let Err(e) = enable_raw_mode() {
             set_last_error(format!("rffi_terminal_init: enable_raw_mode: {e}"));
@@ -136,15 +139,24 @@ pub extern "C" fn rffi_terminal_init() -> *mut () {
                 std::ptr::null_mut()
             }
         }
-    }));
+    }
 
-    match result {
-        Ok(ptr) => ptr,
-        Err(payload) => {
-            let msg = crate::guard::panic_message(payload);
-            set_last_error(format!("rffi_terminal_init: panic: {msg}"));
-            std::ptr::null_mut()
+    #[cfg(debug_assertions)]
+    {
+        // Dev profile: catch_unwind converts panics to a null return.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(init_body)) {
+            Ok(ptr) => ptr,
+            Err(payload) => {
+                let msg = crate::guard::panic_message(payload);
+                set_last_error(format!("rffi_terminal_init: panic: {msg}"));
+                std::ptr::null_mut()
+            }
         }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        // Release profile (panic = "abort"): no unwind machinery; panics abort.
+        init_body()
     }
 }
 
