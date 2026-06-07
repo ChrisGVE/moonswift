@@ -185,44 +185,44 @@ jobs:
 
       # RatatuiKitTests: FFI bindings — links the Rust static lib.
       # Run with continue-on-error so the crash-report step runs even on signal.
+      # --no-parallel disables Swift Testing's parallel test runner, serialising
+      # all tests so a concurrent-access race does not mask the root cause.
       - name: Test RatatuiKitTests
         id: ratatui_tests
         continue-on-error: true
-        run: swift test --filter RatatuiKitTests
+        run: swift test --filter RatatuiKitTests --no-parallel
 
       # Capture any macOS crash report written by the test binary; the report
       # includes the exact faulting address, thread stack, and instruction that
       # raised the signal — essential for diagnosing arm64 SIGBUS root causes.
       - name: Capture crash reports (arm64 SIGBUS diagnostics)
         if: steps.ratatui_tests.outcome == 'failure'
+        shell: bash
         run: |
+          set +e   # Do not exit on individual step failures in this diagnostic.
           echo "=== RatatuiKitTests exited with signal ==="
 
           echo "=== macOS Diagnostic Reports (all paths) ==="
-          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports \
-                     ~/Library/Logs/CrashReporter /Library/Logs/CrashReporter; do
-            [ -d "$dir" ] && echo "--- $dir ---" && ls -la "$dir" | tail -10
-          done || true
-          for f in ~/Library/Logs/DiagnosticReports/*.crash \
-                   ~/Library/Logs/DiagnosticReports/*.ips \
-                   /Library/Logs/DiagnosticReports/*.crash \
-                   /Library/Logs/DiagnosticReports/*.ips; do
-            [ -f "$f" ] && echo "=== $f ===" && cat "$f" | head -200 && echo
-          done || echo "(no crash files found)"
+          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
+            if [ -d "$dir" ]; then
+              echo "--- $dir ---"
+              ls -la "$dir" | tail -10
+            fi
+          done
 
           echo "=== TLS section check on static lib ==="
           ALIB="rust/ratatui-ffi/target/release/libratatui_ffi.a"
           echo "Static lib size: $(du -sh $ALIB 2>/dev/null || echo 'missing')"
           mkdir -p /tmp/tlv_check
-          (cd /tmp/tlv_check && ar -x "$OLDPWD/$ALIB" 2>&1) || echo "ar extract failed"
-          OBJ_COUNT=$(ls /tmp/tlv_check/*.o 2>/dev/null | wc -l)
+          (cd /tmp/tlv_check && ar -x "$OLDPWD/$ALIB") 2>&1 || true
+          OBJ_COUNT=$(ls /tmp/tlv_check/*.o 2>/dev/null | wc -l || echo 0)
           echo "Objects extracted: $OBJ_COUNT"
           TLS_COUNT=0
           for o in /tmp/tlv_check/*.o; do
             [ -f "$o" ] || continue
-            segs=$(otool -l "$o" 2>/dev/null | grep "sectname" | grep "__thread")
-            if [ -n "$segs" ]; then
-              echo "TLS: $(basename $o): $segs"
+            segs=$(otool -l "$o" 2>/dev/null | grep "sectname" | grep -c "__thread" || echo 0)
+            if [ "$segs" -gt 0 ] 2>/dev/null; then
+              echo "TLS: $(basename $o) ($segs __thread sections)"
               TLS_COUNT=$((TLS_COUNT + 1))
             fi
           done
@@ -233,12 +233,15 @@ jobs:
           TEST_BIN=$(find .build -name "MoonSwiftPackageTests.xctest" -type d 2>/dev/null | head -1)
           if [ -n "$TEST_BIN" ]; then
             echo "Test bundle: $TEST_BIN"
-            BIN="$TEST_BIN/Contents/MacOS/MoonSwiftPackageTests"
-            [ -f "$BIN" ] || BIN=$(find "$TEST_BIN" -type f -perm +111 | head -1)
+            # SPM bundles the binary directly inside .xctest on macOS
+            BIN=$(find "$TEST_BIN" -maxdepth 3 -type f -perm -u+x 2>/dev/null | head -1)
             echo "Binary: $BIN"
-            otool -L "$BIN" 2>/dev/null | head -20
-            echo "--- TLS sections in test binary ---"
-            otool -l "$BIN" 2>/dev/null | grep -A2 "sectname" | grep -B1 "__thread" | head -30
+            if [ -n "$BIN" ]; then
+              echo "--- Linked dylibs ---"
+              otool -L "$BIN" 2>/dev/null | head -30
+              echo "--- TLS sections in test binary ---"
+              otool -l "$BIN" 2>/dev/null | grep -B1 "sectname.*__thread" | head -40 || true
+            fi
           else
             echo "(test binary not found in .build/)"
             find .build -name "*.xctest" -type d 2>/dev/null | head -5
