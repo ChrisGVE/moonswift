@@ -1,6 +1,6 @@
 # MoonSwift — Requirements
 
-Status: post-audit round 1 (req-collection, 2026-06-07)
+Status: post-audit round 2 (req-collection, 2026-06-07)
 
 ## Overview
 
@@ -52,7 +52,7 @@ Delivery is phased. P1 is the MVP; each phase is independently shippable.
 | ----- | -------- |
 | P1 | TUI shell (3 panes), load `.lua` + structured-file fields, syntax highlighting, one-shot run, lint, project file |
 | P2 | Sharing-area mocking (runtime), full debugger — **gated on the LuaSwift release shipping #19/#20/#21** |
-| P3 | Completions: native catalog first, optional lua-language-server integration |
+| P3 | Completions: native catalog first, optional lua-language-server integration (static-catalog scope independent of P2; live-mock completions need #21) |
 | P4 | Editing: suspend+`$EDITOR` with write-back, then embedded Neovim (ext_linegrid) |
 
 ### Core Features
@@ -67,6 +67,12 @@ Delivery is phased. P1 is the MVP; each phase is independently shippable.
   picker** in the TUI browses a structured file's tree and lets the user mark
   fields, persisting the generated JSONPath to the project file. Expressions
   matching multiple nodes designate multiple fragments.
+  - Analogous-application contract: JSONPath operates on the decoded tree;
+    YAML anchors/aliases are resolved before traversal; multi-document YAML
+    selects the first document unless a document index is designated; TOML
+    dotted keys and arrays-of-tables traverse as nested maps/arrays. Full
+    edge-case contract (and the conformance level of the chosen/built
+    implementation) is fixed at PRD time.
 - A loaded fragment retains provenance (file, path expression, byte span) —
   required later for write-back (F8) and for correct lint/error line mapping
   (fragment line 1 ≠ file line 1).
@@ -90,9 +96,12 @@ Delivery is phased. P1 is the MVP; each phase is independently shippable.
 - Human-editable, diff-friendly, committed to the user's repo.
 - `moonswift` launched without a project file offers to create one;
   `moonswift <file.lua>` works without a project for quick one-offs.
+- Unsupported-version UX: the project still loads (non-blocking) — sources
+  are browsable, but run and lint actions are disabled with a clear
+  diagnostic in the bottom pane naming the supported version(s).
 - Acceptance: round-trip — picker-made designations persist and reload;
-  a project file selecting an unsupported Lua version produces the guidance
-  error.
+  a project file selecting an unsupported Lua version loads read-only with
+  the documented diagnostic and disabled run/lint.
 
 #### F3. One-shot run (P1)
 
@@ -125,6 +134,11 @@ Delivery is phased. P1 is the MVP; each phase is independently shippable.
      with the LuaSwift module catalog (and, once P2 exists, the project's
      mocked functions/namespaces) injected as known globals — eliminating
      false "undefined global" warnings that generic Lua tooling produces.
+  - The catalog feeding luacheck in P1 is **catalog v0**: a hand-maintained
+    static description of the `luaswift.*` modules shipped inside MoonSwift
+    (names for lint; signatures added for F7a). It is the same artifact F7
+    later reuses; LuaSwift#21 augments it with *live* entries (user mocks)
+    from P2 on. See Open Questions for its long-term source format.
   - Known gap, accepted: luacheck's Lua 5.5 grammar is still maturing
     upstream (e.g. the 5.5 `global` declaration, lunarmodules/luacheck#134);
     affected constructs may mis-lint until upstream lands them. The syntax
@@ -183,10 +197,12 @@ Full interactive debugging in the TUI:
 
 #### F7. Completions & hover (P3)
 
-- **Phase 3a — native catalog**: in-process completions and hover docs for the
-  LuaSwift module catalog (the ~31 `luaswift.*` modules) plus the project's
-  mocked functions/namespaces — derived live from the engine/module registry
-  (#21), so user-registered mocks complete instantly. Keyboard-triggered in
+- **Phase 3a — native catalog**: in-process completions and hover docs from
+  **catalog v0** (the hand-maintained static module catalog shipped since P1,
+  enriched with signatures), plus — where the LuaSwift release shipping #21
+  is available — live entries for the project's mocked functions/namespaces,
+  so user-registered mocks complete instantly. Static-catalog completions do
+  NOT depend on #21; only the live-mock layer does. Keyboard-triggered in
   the main pane (read-only context: signature/hover lookup; full completion
   matters most once editing exists).
 - **Phase 3b — optional LuaLS**: if `lua-language-server` is installed
@@ -262,6 +278,15 @@ Color: truecolor themes with capability detection and 256-color degradation.
 Screen-reader/accessibility support is explicitly deferred (TUI; revisit
 post-P2).
 
+CLI basics (public-tool table stakes, P1): `--version`, `--help`, documented
+exit codes (0 success; distinct non-zero codes for usage error, project-file
+error, internal error). Shell completions deferred to distribution phase.
+
+File locations: per-project config is `moonswift.toml` (F2); user-level
+config (theme, keybindings, defaults) and caches follow macOS conventions
+(`~/Library/Application Support/moonswift/`, `~/Library/Caches/moonswift/`)
+— exact layout fixed at PRD time.
+
 "Magic moment": point MoonSwift at a config file with an embedded script,
 mock the two functions the app provides, hit run, see it work — without
 launching the host app.
@@ -270,23 +295,48 @@ launching the host app.
 
 - **Language/runtime**: Swift (Swift 6 mode), macOS only. SPM executable
   package; binary `moonswift`.
-- **TUI stack**: **ratatui via an own Rust cdylib shim**. A Rust crate in the
-  MoonSwift repo wraps ratatui + crossterm behind a C ABI (cbindgen), consumed
-  by a Swift overlay target — the same Rust→C-ABI→Swift pattern as the mmdr
-  fork (MarkdownExtendedView precedent). Requirements on the shim:
-  - expose the stock widgets/layout actually used (split layout, list/tree,
+- **TUI stack**: **ratatui via a Rust cdylib shim, forked/vendored from
+  [`holo-q/ratatui-ffi`](https://github.com/holo-q/ratatui-ffi)** (v0.2.x,
+  `MIT OR Apache-2.0` per its Cargo.toml — repo lacks LICENSE text files;
+  vendoring includes the license texts and attribution). The fork lives in
+  the MoonSwift repo and exposes ratatui + crossterm behind a C ABI
+  (cbindgen), consumed by a Swift overlay target — the same
+  Rust→C-ABI→Swift pattern as the mmdr fork (MarkdownExtendedView
+  precedent). ratatui-ffi already provides most of the required surface
+  (stock widgets, `FfiCellInfo` cell access, terminal lifecycle,
+  `FfiKeyEvent`/`FfiEvent` input incl. mouse); the fork trims to what
+  MoonSwift uses and adds what's missing. Requirements on the shim:
+  - stock widgets/layout actually used (split layout, list/tree,
     paragraph/scroll, status bar) with C-friendly setter APIs;
-  - expose **cell-level buffer access for a region** (write cells with rune +
+  - **cell-level buffer access for a region** (write cells with rune +
     RGB attrs into a rect) — first-class, because the code pane (highlight
     spans, gutter marks) and the P4b nvim grid blit are custom-drawn;
-  - own the terminal session: raw mode, alternate screen, resize events, and
-    crossterm's input decoding surfaced as a C event stream (keys with
-    modifiers, mouse, paste).
+  - terminal session ownership: raw mode, alternate screen, resize events,
+    and crossterm's input decoding surfaced as a C event stream (keys with
+    modifiers, mouse, paste);
+  - **panic safety**: `panic = "unwind"` with `catch_unwind` at every
+    `extern "C"` entry point (unwinding across the C ABI is UB; this is the
+    mermaid-ffi precedent's mandated pattern);
+  - **error protocol**: integer status codes from every FFI call, with a
+    thread-local last-error string retrievable via a dedicated call
+    (mermaid-ffi pattern);
+  - **threading contract**: shim terminal/render functions are called
+    exclusively from one Swift-owned UI thread; engine output and other
+    background events are marshaled to that thread via a queue/channel on
+    the Swift side;
+  - the shim's crossterm version is aligned with the one its ratatui release
+    uses internally (no dual-crossterm linking), documented in the fork's
+    Cargo.toml; ratatui is pinned to a specific minor version and upgraded
+    deliberately (tracking ratatui's ~biweekly release cadence is an
+    accepted, planned maintenance cost of this choice).
   - Build integration: cargo invoked from the build (plugin/Makefile) for
-    dev; prebuilt artifacts (xcframework or static lib) attached to releases
-    so end users and plain `swift build` consumers don't need a Rust
-    toolchain — exact mechanism decided at PRD/architecture time.
-  - The shim starts as an internal component; extraction as a standalone
+    dev; prebuilt artifacts (universal arm64+x86_64 static lib or
+    xcframework, with sha256 checksums and provenance notes — mmdr
+    `Artifacts/` precedent) attached to releases so end users and plain
+    `swift build` consumers don't need a Rust toolchain — exact mechanism
+    decided at PRD/architecture time. The static lib links into the signed
+    `moonswift` binary (no separate dylib signature needed).
+  - The fork starts as an internal component; extraction as a standalone
     open-source package is a deferred idea.
 - **Syntax highlighting** (P1): SwiftTreeSitter + tree-sitter-lua (both
   active, SPM-ready); capture names map to theme attributes rendered through
@@ -360,11 +410,12 @@ launching the host app.
    debugger commands (channel/semaphore) vs. coroutine-based. Belongs to the
    LuaSwift#20 API design; not blocking P1. Impact: shape of the upstream
    API.
-3. **Shim API granularity** — how much of ratatui's widget set the C ABI
-   exposes in v1 vs. driving more through the cell-level API. Current
-   thinking: minimal widget surface (layout splits, list, paragraph, status
-   bar) + cells for everything custom; grow on demand. Impact: shim scope,
-   PRD task sizing. Decide in PRD/architecture.
+3. **Shim fork scope** — how much of the vendored ratatui-ffi surface to
+   keep vs. trim in v1 (it exposes more widgets than MoonSwift uses), and
+   what to add (any gaps found against the requirements above). Current
+   thinking: trim to layout splits, list, paragraph, status bar + the
+   cell-level API; grow on demand. Impact: fork maintenance surface, PRD
+   task sizing. Decide in PRD/architecture.
 4. **Bottom pane structure** — tabs (Output | Diagnostics | Debug) vs. merged
    annotated stream. Current thinking: tabs. Decide in PRD (UX detail).
 5. **Module catalog source format** — hand-maintained Swift description of the
@@ -374,8 +425,10 @@ launching the host app.
    machine-readable catalog upstream later (#21 covers names, not
    signatures). Impact: F4/F7 fidelity, upstream scope. Decide in PRD.
 6. **JSONPath implementation** — RFC 9535 conformance level and library
-   (existing Swift implementation vs. own parser for the subset YAML/TOML
-   trees need). Impact: F1/F2 effort. Decide in PRD.
+   (candidates: `bare-swift/swift-jsonpath` targets RFC 9535 but is v0.1 and
+   JSON-typed; SwiftPath/Sextant are older and pre-RFC; own parser for the
+   subset YAML/TOML trees need is plausible). Impact: F1/F2 effort. Decide
+   in PRD.
 
 ## Deferred Ideas
 
