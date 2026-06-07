@@ -1,0 +1,6 @@
+# stylua configuration for MoonSwift
+# https://github.com/JohnnyMorganz/StyLua
+
+column_width = 120
+indent_type = "Spaces"
+indent_width = 4

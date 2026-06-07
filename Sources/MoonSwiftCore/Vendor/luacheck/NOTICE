@@ -1,0 +1,106 @@
+# Vendored: luacheck (pure-Lua subset)
+
+## Origin
+
+Upstream repository: https://github.com/lunarmodules/luacheck
+Pinned commit:       f47ad699b5aab8eba5494a2b63e26c24dbf486ce
+Branch:              master (as of 2026-06-07)
+Upstream version:    1.2.0 (luacheck._VERSION in init.lua)
+License:             MIT (see LICENSE below)
+
+## Subset manifest
+
+This directory contains ONLY the pure-Lua module tree reachable from
+`luacheck.check_strings` and `luacheck.get_report`. Files that depend on
+`luafilesystem` (lfs), CLI infrastructure, the config-file loader, the
+caching layer, the rockspec expander, or the profiler have been excluded.
+
+### Included (38 files)
+
+Core path (luacheck/):
+  init.lua              — luacheck public API: check_strings, get_report,
+                          process_reports, get_message
+  check.lua             — per-source check driver (calls stages pipeline)
+  check_state.lua       — mutable state threaded through stages
+  core_utils.lua        — sort_by_location and shared helpers
+  decoder.lua           — UTF-8 / encoding helpers used by lexer
+  filter.lua            — apply options to raw reports
+  format.lua            — get_message (issue → human text)
+  lexer.lua             — Lua lexer
+  options.lua           — option validation / merging
+  parser.lua            — Lua parser (produces AST)
+  standards.lua         — globals-table and std-table validation
+  unicode.lua           — unicode classification
+  unicode_printability_boundaries.lua — printability boundary tables
+  utils.lua             — shared utilities (array helpers, try/catch wrapper,
+                          etc.; io/lfs functions present but unreachable via
+                          check_strings — see analysis in docs/internals/lint.md)
+
+Stages (luacheck/stages/):
+  init.lua              — stage registry and pipeline runner
+  parse.lua             — AST entry point
+  unwrap_parens.lua     — parenthesis-unwrap pass
+  linearize.lua         — control-flow linearization
+  parse_inline_options.lua — inline --luacheck: comment parsing
+  name_functions.lua    — function-name inference
+  resolve_locals.lua    — local-variable scope resolution
+  detect_bad_whitespace.lua
+  detect_compound_operators.lua
+  detect_cyclomatic_complexity.lua
+  detect_empty_blocks.lua
+  detect_empty_statements.lua
+  detect_globals.lua    — undefined/unused globals (W1xx codes)
+  detect_reversed_fornum_loops.lua
+  detect_unbalanced_assignments.lua
+  detect_uninit_accesses.lua
+  detect_unreachable_code.lua
+  detect_unused_fields.lua
+  detect_unused_locals.lua  — unused locals (W2xx codes)
+
+Builtin standards (luacheck/builtin_standards/):
+  init.lua              — built-in globals catalog (lua51…lua54, love, ngx…)
+  love.lua, luanti.lua, ngx.lua, playdate.lua  — framework std tables
+
+### Excluded (lfs / CLI / file I/O / threading)
+
+  fs.lua                — requires luafilesystem
+  cache.lua             — file-based cache (requires fs)
+  config.lua            — config-file loader (requires fs, cache, globbing)
+  expand_rockspec.lua   — rockspec reader (requires fs)
+  globbing.lua          — glob expansion (requires fs)
+  main.lua              — CLI entry point (requires config, runner, version)
+  runner.lua            — multi-file runner (requires fs, config, cache)
+  version.lua           — version reporter (requires lfs, argparse, lanes)
+  multithreading.lua    — LuaLanes threading (not applicable in-engine)
+  serializer.lua        — binary serializer for cache (not needed)
+  profiler.lua          — performance profiler
+  vendor/sha1/          — used only by cache.lua and profiler.lua
+
+## Upgrade policy
+
+To upgrade: pin a new commit, re-run the subset copy, update this NOTICE,
+re-run the spike test. Do not add lfs-dependent files to the subset.
+
+## License
+
+MIT License
+
+Copyright (c) 2014-2023 Peter Melnichenko and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
