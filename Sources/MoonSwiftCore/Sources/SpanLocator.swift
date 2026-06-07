@@ -31,11 +31,11 @@
 //          pair    → (bare_key | quoted_key) = value
 //          string  → includes surrounding quotes; content between them
 
+import CTreeSitterTOML
 import Foundation
 import SwiftTreeSitter
 import TreeSitterJSON
 import TreeSitterYAML
-import CTreeSitterTOML
 
 // MARK: - StructuredFileFormat
 
@@ -50,10 +50,10 @@ extension StructuredFileFormat {
     /// Derive the format from a file extension (case-insensitive).
     static func from(extension ext: String) -> StructuredFileFormat? {
         switch ext.lowercased() {
-        case "json":        return .json
+        case "json": return .json
         case "yaml", "yml": return .yaml
-        case "toml":        return .toml
-        default:            return nil
+        case "toml": return .toml
+        default: return nil
         }
     }
 }
@@ -100,22 +100,27 @@ public enum SpanLocator {
 
     /// Locate the UTF-8 byte span and line offset of the value at `path` in `data`.
     ///
+    /// For YAML multi-document streams, `document` selects which document
+    /// (0-based) the span is located in. Ignored for JSON and TOML (always 0).
+    ///
     /// - Parameters:
-    ///   - data:   Raw UTF-8 file bytes (used for key-text extraction and R7 check).
-    ///   - format: The on-disk format of the file.
-    ///   - path:   The concrete resolved path produced by `JSONPathEvaluator`.
+    ///   - data:     Raw UTF-8 file bytes (used for key-text extraction and R7 check).
+    ///   - format:   The on-disk format of the file.
+    ///   - path:     The concrete resolved path produced by `JSONPathEvaluator`.
+    ///   - document: 0-based document index for YAML multi-doc streams (default: 0).
     /// - Returns: A `SpanLocation` with the UTF-8 byte range of value content
     ///   (quotes excluded) and the 0-based line offset.
     /// - Throws: `SpanLocatorError` on parse failure, alias node, or missing path.
     public static func locateSpan(
         in data: Data,
         format: StructuredFileFormat,
-        path: [ResolvedStep]
+        path: [ResolvedStep],
+        document: Int = 0
     ) throws -> SpanLocation {
         guard let text = String(data: data, encoding: .utf8) else {
             throw SpanLocatorError.parseFailed
         }
-        return try locateSpan(data: data, text: text, format: format, path: path)
+        return try locateSpan(data: data, text: text, format: format, path: path, document: document)
     }
 
     // MARK: - Internal implementation
@@ -125,7 +130,8 @@ public enum SpanLocator {
         data: Data,
         text: String,
         format: StructuredFileFormat,
-        path: [ResolvedStep]
+        path: [ResolvedStep],
+        document: Int = 0
     ) throws -> SpanLocation {
         let parser = Parser()
         try parser.setLanguage(language(for: format))
@@ -141,10 +147,11 @@ public enum SpanLocator {
             format: format,
             path: path,
             data: data,
-            offsetMap: offsetMap
+            offsetMap: offsetMap,
+            document: document
         )
 
-        let utf8Range  = offsetMap.utf8Range(for: node.byteRange)
+        let utf8Range = offsetMap.utf8Range(for: node.byteRange)
         let contentRange = stripDelimiters(
             utf8Range: utf8Range,
             nodeType: node.nodeType ?? ""
@@ -158,9 +165,9 @@ public enum SpanLocator {
 
     private static func language(for format: StructuredFileFormat) -> Language {
         switch format {
-        case .json:  return Language(language: tree_sitter_json())
-        case .yaml:  return Language(language: tree_sitter_yaml())
-        case .toml:  return Language(language: tree_sitter_toml())
+        case .json: return Language(language: tree_sitter_json())
+        case .yaml: return Language(language: tree_sitter_yaml())
+        case .toml: return Language(language: tree_sitter_toml())
         }
     }
 
@@ -171,13 +178,37 @@ public enum SpanLocator {
         format: StructuredFileFormat,
         path: [ResolvedStep],
         data: Data,
-        offsetMap: UTF16ToUTF8OffsetMap
+        offsetMap: UTF16ToUTF8OffsetMap,
+        document: Int = 0
     ) throws -> Node {
         switch format {
-        case .json:  return try walkJSON(node: root, path: path, idx: 0, data: data, offsetMap: offsetMap)
-        case .yaml:  return try walkYAML(node: root, path: path, idx: 0, data: data, offsetMap: offsetMap)
-        case .toml:  return try walkTOML(node: root, path: path, idx: 0, data: data, offsetMap: offsetMap)
+        case .json:
+            return try walkJSON(node: root, path: path, idx: 0, data: data, offsetMap: offsetMap)
+        case .yaml:
+            // For multi-doc YAML, select the correct document before walking.
+            let docRoot = try yamlSelectDocument(root: root, at: document)
+            return try walkYAML(node: docRoot, path: path, idx: 0, data: data, offsetMap: offsetMap)
+        case .toml:
+            return try walkTOML(node: root, path: path, idx: 0, data: data, offsetMap: offsetMap)
         }
+    }
+
+    /// Return the `document` child of a YAML `stream` node at the given index.
+    ///
+    /// The YAML grammar wraps each document in a `document` node inside the
+    /// top-level `stream`. Document markers (`---`, `...`) are anonymous; only
+    /// the named `document` children are counted.
+    private static func yamlSelectDocument(root: Node, at index: Int) throws -> Node {
+        // If the root is already inside a document (no stream wrapper), return it.
+        if root.nodeType != "stream" { return root }
+        var count = 0
+        for i in 0..<root.childCount {
+            guard let child = root.child(at: i), child.isNamed else { continue }
+            guard child.nodeType == "document" else { continue }
+            if count == index { return child }
+            count += 1
+        }
+        throw SpanLocatorError.nodeNotFound
     }
 
     // MARK: - JSON walk
@@ -253,15 +284,18 @@ public enum SpanLocator {
     ) -> Node? {
         for i in 0..<objectNode.childCount {
             guard let child = objectNode.child(at: i),
-                  child.nodeType == "pair" else { continue }
+                child.nodeType == "pair"
+            else { continue }
             guard let keyNode = child.child(byFieldName: "key"),
-                  keyNode.nodeType == "string" else { continue }
+                keyNode.nodeType == "string"
+            else { continue }
             // Key content = bytes between the surrounding double quotes.
             let fullRange = offsetMap.utf8Range(for: keyNode.byteRange)
             let contentStart = fullRange.lowerBound + 1
-            let contentEnd   = fullRange.upperBound - 1
+            let contentEnd = fullRange.upperBound - 1
             guard contentEnd > contentStart,
-                  let keyText = String(data: data[contentStart..<contentEnd], encoding: .utf8) else {
+                let keyText = String(data: data[contentStart..<contentEnd], encoding: .utf8)
+            else {
                 continue
             }
             if keyText == key { return child }
@@ -306,9 +340,11 @@ public enum SpanLocator {
         switch path[idx] {
         case .key(let name):
             guard yamlIsMapping(current) else { throw SpanLocatorError.nodeNotFound }
-            guard let pair = yamlFindPair(
-                in: current, key: name, data: data, offsetMap: offsetMap
-            ) else {
+            guard
+                let pair = yamlFindPair(
+                    in: current, key: name, data: data, offsetMap: offsetMap
+                )
+            else {
                 throw SpanLocatorError.nodeNotFound
             }
             guard let value = pair.child(byFieldName: "value") else {
@@ -616,9 +652,9 @@ public enum SpanLocator {
         nodeType: String
     ) -> Range<Int> {
         let quoted: Set<String> = [
-            "string",                // JSON (safety net) + TOML
-            "double_quote_scalar",   // YAML double-quoted
-            "single_quote_scalar",   // YAML single-quoted
+            "string",  // JSON (safety net) + TOML
+            "double_quote_scalar",  // YAML double-quoted
+            "single_quote_scalar",  // YAML single-quoted
         ]
         guard quoted.contains(nodeType) else { return utf8Range }
         let s = utf8Range.lowerBound
@@ -690,9 +726,9 @@ struct UTF16ToUTF8OffsetMap: Sendable {
     ///   (i.e. divide by 2 to get the UTF-16 code-unit index).
     func utf8Range(for utf16Range: Range<UInt32>) -> Range<Int> {
         let startCU = Int(utf16Range.lowerBound) / 2
-        let endCU   = Int(utf16Range.upperBound) / 2
-        let start   = startCU < offsets.count ? offsets[startCU] : totalUTF8
-        let end     = endCU   < offsets.count ? offsets[endCU]   : totalUTF8
+        let endCU = Int(utf16Range.upperBound) / 2
+        let start = startCU < offsets.count ? offsets[startCU] : totalUTF8
+        let end = endCU < offsets.count ? offsets[endCU] : totalUTF8
         return start..<end
     }
 }

@@ -172,10 +172,10 @@ public final class SourceStore: Sendable {
         // --- Build provenance ---
         let provenance = FragmentProvenance(
             file: fileURL,
-            jsonpath: nil,             // whole .lua file — no JSONPath
-            document: 0,               // not a multi-document format
-            byteRange: 0..<data.count, // span = entire file
-            lineOffset: 0,             // fragment line 1 = file line 1
+            jsonpath: nil,  // whole .lua file — no JSONPath
+            document: 0,  // not a multi-document format
+            byteRange: 0..<data.count,  // span = entire file
+            lineOffset: 0,  // fragment line 1 = file line 1
             contentHash: contentHash
         )
 
@@ -302,7 +302,7 @@ public final class SourceStore: Sendable {
         filename: String
     ) -> [SourceLoadEvent] {
         let jsonpathStr = field.jsonpath
-        let docIndex    = field.document
+        let docIndex = field.document
 
         // --- Parse the JSONPath expression ---
         let expression: JSONPathExpression
@@ -370,7 +370,8 @@ public final class SourceStore: Sendable {
                 let typeName = treeValueTypeName(value)
                 let diag = Diagnostic(
                     severity: .warning,
-                    message: "⚠ \(filename): JSONPath \"\(normalizedJSONPath)\" resolves to \(typeName), expected string",
+                    message:
+                        "⚠ \(filename): JSONPath \"\(normalizedJSONPath)\" resolves to \(typeName), expected string",
                     source: .sourceLoad
                 )
                 events.append(.failed(id: id, state: .failed(diag)))
@@ -384,7 +385,8 @@ public final class SourceStore: Sendable {
                     data: data,
                     text: text,
                     format: format,
-                    path: normalizedPath.steps
+                    path: normalizedPath.steps,
+                    document: docIndex
                 )
             } catch SpanLocatorError.yamlAliasAtDesignatedPath {
                 let diag = Diagnostic(
@@ -410,13 +412,15 @@ public final class SourceStore: Sendable {
 
             // --- R7 cross-check: span text must match decoded value ---
             let spanStart = spanLocation.byteRange.lowerBound
-            let spanEnd   = spanLocation.byteRange.upperBound
+            let spanEnd = spanLocation.byteRange.upperBound
             if spanStart < data.count && spanEnd <= data.count {
                 if let spanText = String(data: data[spanStart..<spanEnd], encoding: .utf8),
-                   spanText != code {
+                    spanText != code
+                {
                     let diag = Diagnostic(
                         severity: .error,
-                        message: "✖ \(filename): span-mismatch at \"\(normalizedJSONPath)\" (span text ≠ decoded value)",
+                        message:
+                            "✖ \(filename): span-mismatch at \"\(normalizedJSONPath)\" (span text ≠ decoded value)",
                         source: .sourceLoad
                     )
                     events.append(.failed(id: id, state: .failed(diag)))
@@ -444,14 +448,13 @@ public final class SourceStore: Sendable {
     /// Human-readable type name for `TreeValue` cases (used in diagnostics).
     private static func treeValueTypeName(_ value: TreeValue) -> String {
         switch value {
-        case .string:  return "string"
-        case .int:     return "integer"
-        case .double:  return "float"
-        case .bool:    return "boolean"
-        case .array:   return "array"
-        case .map:     return "object"
-        case .null:    return "null"
+        case .string: return "string"
+        case .int: return "integer"
+        case .double: return "float"
+        case .bool: return "boolean"
+        case .array: return "array"
+        case .map: return "object"
+        case .null: return "null"
         }
     }
 }
-
