@@ -1,0 +1,178 @@
+# ci.yml — MoonSwift
+#
+# Location: .github/workflows/ci.yml
+# Role: Continuous integration gate for every push and pull request on main.
+#       Two sequential jobs mirror the two-phase build in the Makefile:
+#       (1) shim — formats, lints, and tests the Rust shim; (2) swift —
+#       builds and tests the Swift package in source mode with the freshly
+#       built shim artifact from job (1).
+#
+# Runner: macos-14 (Apple Silicon, macOS Sequoia 14 — stable GitHub-hosted
+#         runner for macOS + Xcode 16 workloads as of 2026).
+#
+# Environment variables propagated to every Swift step (mirrors the Makefile):
+#   MOONSWIFT_SHIM_SOURCE=1    — source-build mode: CRatatuiFFI is the stub
+#                                C target linked against the Rust static lib
+#   LUASWIFT_INCLUDE_TOMLKIT=1 — include the luaswift.toml module (LuaSwift
+#                                reads this at manifest-evaluation time)
+#
+# Caches:
+#   • Cargo registry + build artefacts — keyed on rust/ratatui-ffi/Cargo.lock
+#   • SPM build artefacts            — keyed on Package.resolved
+#     (Note: the swift job always runs `swift package reset` before building,
+#      which clears the manifest-evaluation cache but leaves the package download
+#      cache intact.  The SPM cache key therefore still speeds up dependency
+#      fetches between runs.)
+#
+# Concurrency: one run per ref at a time; in-progress runs are cancelled when
+#              a newer push arrives on the same branch or PR.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel any in-progress run for the same ref so pushes during a long
+# build do not queue up and waste runner time.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── job 1: shim ─────────────────────────────────────────────────────────────
+  # Validate and test the Rust shim (rust/ratatui-ffi/).
+  # Steps mirror `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
+  # run manually in that directory (Makefile `test` target: cargo test).
+  shim:
+    name: Shim (Rust)
+    runs-on: macos-14
+
+    defaults:
+      run:
+        # All cargo commands run from the shim directory.
+        working-directory: rust/ratatui-ffi
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install the stable Rust toolchain (includes cargo fmt + clippy).
+      # dtolnay/rust-toolchain is the canonical action for this — it reads the
+      # channel from the `toolchain` input and sets up rustup without requiring
+      # a rust-toolchain.toml file.
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Cache Cargo registry downloads and compiled dependencies.
+      # Keyed on Cargo.lock so a lockfile change invalidates the cache.
+      - name: Cache Cargo registry and build artefacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/ratatui-ffi/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust/ratatui-ffi/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      # Formatting check — equivalent to `cargo fmt --check`.
+      # A diff fails the job; contributors run `cargo fmt` locally to fix.
+      - name: Check Rust formatting (cargo fmt)
+        run: cargo fmt --check
+
+      # Lint check — clippy in deny-warnings mode.
+      # Mirrors the CONTRIBUTING gate: all clippy warnings are errors in CI.
+      - name: Lint Rust sources (cargo clippy -D warnings)
+        run: cargo clippy -- -D warnings
+
+      # Rust unit tests.
+      # The shim has no Swift dependency, so this step needs no shim build
+      # artefact — cargo test compiles and links the test harness itself.
+      - name: Run Rust tests (cargo test)
+        run: cargo test
+
+  # ── job 2: swift ────────────────────────────────────────────────────────────
+  # Build and test the Swift package in source mode.
+  # Depends on `shim` so the static lib (target/release/libratatui_ffi.a) and
+  # the cbindgen header are available before SPM resolves linker settings.
+  swift:
+    name: Swift package
+    runs-on: macos-14
+    needs: shim
+
+    env:
+      # Source mode: CRatatuiFFI is declared as a stub C target linked against
+      # the Rust static lib (ARCHITECTURE.md §5.4 bootstrap rule).
+      MOONSWIFT_SHIM_SOURCE: "1"
+      # Include the luaswift.toml module — LuaSwift reads this env var at
+      # manifest-evaluation time (ARCHITECTURE.md §5.4 toml propagation).
+      LUASWIFT_INCLUDE_TOMLKIT: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Install the same stable Rust toolchain so we can build the shim.
+      # The shim job already ran, but this job needs cargo to produce the
+      # static lib that the Swift linker flags point at.
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Restore the Cargo cache — the shim job already populated it.
+      # The same key means this restore will typically hit without re-downloading.
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/ratatui-ffi/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust/ratatui-ffi/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      # Build the Rust static lib that SPM's linker flags (-L/-l) reference.
+      # We skip cbindgen here; the committed header in Sources/CRatatuiFFI/include/
+      # is the source-of-record ABI (Makefile shim target: best-effort regeneration
+      # is only needed when the Rust ABI changes, not on every CI run).
+      - name: Build Rust shim (cargo build --release)
+        working-directory: rust/ratatui-ffi
+        run: cargo build --release
+
+      # Cache SPM resolved packages.
+      # swift package reset (run in the build step below) clears the manifest-
+      # evaluation cache (.build) but does NOT clear the package download cache
+      # (~/.swiftpm). The cache action covers the download cache, speeding up
+      # dependency resolution between runs without interfering with reset.
+      - name: Cache SPM packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.swiftpm
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
+
+      # Reset SPM's manifest-evaluation cache before building.
+      # Required when MOONSWIFT_SHIM_SOURCE is toggled: SPM caches the manifest
+      # result in .build; without a reset it can silently reuse a stale shim
+      # topology from a previous run (ARCHITECTURE.md §5.4 manifest-cache rule).
+      - name: Reset SPM manifest cache (swift package reset)
+        run: swift package reset
+
+      # Full Swift package build in source mode.
+      # MOONSWIFT_SHIM_SOURCE=1 and LUASWIFT_INCLUDE_TOMLKIT=1 are already set
+      # via the job-level `env` block above.
+      - name: Build Swift package (swift build)
+        run: swift build
+
+      # Full Swift test suite, including the luacheck spike (LuacheckSpikeTests).
+      # The spike test is a required CI check per PRD F4.0 — it runs inside this
+      # step; there is no separate job for it.
+      - name: Run Swift tests (swift test)
+        run: swift test

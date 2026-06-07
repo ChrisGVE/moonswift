@@ -1,5 +1,7 @@
 # MoonSwift
 
+[![CI](https://github.com/ChrisGVE/moonswift/actions/workflows/ci.yml/badge.svg)](https://github.com/ChrisGVE/moonswift/actions/workflows/ci.yml)
+
 A terminal (TUI) workbench for testing Lua code written against
 [LuaSwift](https://github.com/ChrisGVE/LuaSwift).
 
