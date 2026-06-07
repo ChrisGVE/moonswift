@@ -165,17 +165,19 @@ jobs:
       - name: Strip std TLS objects from static lib (arm64e SIGBUS workaround)
         working-directory: rust/ratatui-ffi
         run: |
-          ALIB="target/release/libratatui_ffi.a"
-          echo "Before strip: $(ar -t $ALIB | grep 'std-.*cgu.0.rcgu.o' | wc -l) std TLS objects"
+          ALIB_REL="target/release/libratatui_ffi.a"
+          ALIB_ABS="$(pwd)/$ALIB_REL"
+          echo "Before strip: $(ar -t $ALIB_ABS | grep 'std-.*cgu.0.rcgu.o' | wc -l) std TLS objects"
           mkdir -p /tmp/strip_tls
-          (cd /tmp/strip_tls && ar -x "$OLDPWD/$ALIB")
+          (cd /tmp/strip_tls && ar -x "$ALIB_ABS")
           TLS_OBJS=$(ls /tmp/strip_tls/std-*.cgu.0.rcgu.o 2>/dev/null)
           if [ -n "$TLS_OBJS" ]; then
             for obj in $TLS_OBJS; do
-              echo "Removing TLS object: $(basename $obj)"
-              ar -d "$ALIB" "$(basename $obj)"
+              name="$(basename $obj)"
+              echo "Removing TLS object: $name"
+              ar -d "$ALIB_ABS" "$name"
             done
-            echo "After strip: $(ar -t $ALIB | grep 'std-.*cgu.0.rcgu.o' | wc -l) std TLS objects remain"
+            echo "After strip: $(ar -t $ALIB_ABS | grep 'std-.*cgu.0.rcgu.o' | wc -l) std TLS objects remain"
           else
             echo "No std TLS objects found — nothing to strip"
           fi
