@@ -7,5 +7,15 @@ xcuserdata/
 DerivedData/
 *.xcodeproj
 
+# Rust shim
+rust/ratatui-ffi/target/
+
+# Build artifacts (release pipeline)
+*.xcframework
+*.xcframework.zip
+
 # macOS
 .DS_Store
+
+# IDE
+*.xcworkspace
