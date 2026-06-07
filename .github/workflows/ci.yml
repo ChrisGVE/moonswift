@@ -139,14 +139,14 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
 
-      # Build the Rust static lib that SPM's linker flags reference.
-      # --features swift_ffi disables catch_unwind in ffi_guard! so that
-      # LOCAL_PANIC_COUNT (and other std TLS vars) are never referenced from
-      # the compiled objects.  On arm64e, those TLS descriptors carry
-      # PAC-unsigned tlv_bootstrap pointers that trigger SIGBUS on first access.
-      # With swift_ffi, the TLS stubs are unreachable; -dead_strip in
-      # Package.swift's unsafeFlags eliminates any survivors from precompiled
-      # std objects.  (ARCHITECTURE.md §5.4 arm64-TLS)
+      # Build the Rust shim (cdylib + staticlib).  cargo produces both
+      # libratatui_ffi.dylib and libratatui_ffi.a; Package.swift links against
+      # the dylib so the Swift test binary (arm64e) never merges Rust std TLS
+      # sections — they stay inside the arm64 dylib image where dyld can
+      # initialise them correctly.  (ARCHITECTURE.md §5.4 arm64-TLS dylib strategy)
+      #
+      # --features swift_ffi disables catch_unwind in ffi_guard! (no change to
+      # TLS elimination with the dylib approach, but keeps the release build clean).
       #
       # We skip cbindgen here; the committed header in Sources/CRatatuiFFI/include/
       # is the source-of-record ABI (Makefile shim target: best-effort regeneration
@@ -154,6 +154,16 @@ jobs:
       - name: Build Rust shim (cargo build --release --features swift_ffi)
         working-directory: rust/ratatui-ffi
         run: cargo build --release --features swift_ffi
+
+      # Set the dylib install name to its absolute path so the runtime loader
+      # finds it when the Swift test binary is executed.  cargo embeds a relative
+      # or @rpath-relative install name by default; on CI the build tree is
+      # stable, so an absolute install name is the simplest approach.
+      - name: Fix dylib install name (install_name_tool)
+        working-directory: rust/ratatui-ffi
+        run: |
+          DYLIB="$PWD/target/release/libratatui_ffi.dylib"
+          install_name_tool -id "$DYLIB" "$DYLIB"
 
       # Cache SPM resolved packages.
       # swift package reset (run in the build step below) clears the manifest-
@@ -191,7 +201,7 @@ jobs:
       - name: Test MoonSwiftCoreTests
         run: swift test --filter MoonSwiftCoreTests
 
-      # RatatuiKitTests: FFI bindings — links the Rust static lib.
+      # RatatuiKitTests: FFI bindings — links the Rust dylib.
       # Run with continue-on-error so the crash-report step runs even on signal.
       - name: Test RatatuiKitTests
         id: ratatui_tests
@@ -199,9 +209,8 @@ jobs:
         run: swift test --filter RatatuiKitTests
 
       # Capture diagnostics if RatatuiKitTests fails.
-      # Captures crash report (ips file) and symbolicates it to identify the
-      # exact faulting instruction and call chain.  Also dumps TLS sections
-      # remaining in the linked test binary.
+      # Captures crash report (ips file), dylib install name, and TLS sections
+      # to diagnose any remaining dylib-linkage or SIGBUS issues.
       - name: Capture RatatuiKitTests failure diagnostics
         if: steps.ratatui_tests.outcome == 'failure'
         shell: bash
@@ -209,12 +218,22 @@ jobs:
           set +e   # Do not exit on individual step failures in this diagnostic.
           echo "=== RatatuiKitTests failed ==="
 
+          echo "=== Rust dylib install name ==="
+          RUST_DYLIB="rust/ratatui-ffi/target/release/libratatui_ffi.dylib"
+          if [ -f "$RUST_DYLIB" ]; then
+            otool -D "$RUST_DYLIB" 2>/dev/null || echo "(otool -D failed)"
+            echo "--- dylib TLS sections ---"
+            otool -l "$RUST_DYLIB" 2>/dev/null | grep -B1 "sectname.*__thread" | head -20 || echo "(none)"
+          else
+            echo "(dylib not found at $RUST_DYLIB)"
+          fi
+
           echo "=== macOS Diagnostic Reports ==="
           for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
             if [ -d "$dir" ]; then
               echo "--- $dir ---"
               ls -lt "$dir" | head -10
-              # Print latest crash report if any
+              # Print latest crash report produced since the test run started.
               LATEST=$(ls -t "$dir"/*.ips "$dir"/*.crash 2>/dev/null | head -1)
               if [ -n "$LATEST" ]; then
                 echo "=== Crash report: $LATEST ==="
@@ -223,18 +242,16 @@ jobs:
             fi
           done
 
-          echo "=== Test binary TLS sections ==="
+          echo "=== Test binary analysis ==="
           TEST_BIN=$(find .build -name "MoonSwiftPackageTests.xctest" -type d 2>/dev/null | head -1)
           if [ -n "$TEST_BIN" ]; then
             BIN=$(find "$TEST_BIN" -maxdepth 3 -type f -perm -u+x 2>/dev/null | head -1)
             echo "Binary: ${BIN:-(not found)}"
             if [ -n "$BIN" ]; then
-              echo "--- TLS sections ---"
+              echo "--- TLS sections in test binary (should be none after dylib switch) ---"
               otool -l "$BIN" 2>/dev/null | grep -B1 "sectname.*__thread" | head -40 || echo "(none)"
-              echo "--- Linked dylibs ---"
-              otool -L "$BIN" 2>/dev/null | head -20
-              echo "--- __thread_vars relocations (show which TLS vars are in the binary) ---"
-              otool -rv "$BIN" 2>/dev/null | grep -A60 "__thread_vars" | head -30 || echo "(none)"
+              echo "--- Linked dylibs (libratatui_ffi.dylib should appear) ---"
+              otool -L "$BIN" 2>/dev/null | head -30
             fi
           else
             echo "(test binary not found in .build/)"
