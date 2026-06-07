@@ -1,0 +1,31 @@
+NOTICE — ratatui-ffi vendored fork
+===================================
+
+This directory contains a vendored fork of holo-q/ratatui-ffi.
+
+Upstream origin : https://github.com/holo-q/ratatui-ffi
+Upstream tag    : v0.2.6
+Pinned commit   : 56858ea9dfe0d6ea2a6aa37f024921e01e07b956
+Vendored on     : 2026-06-07
+License declared in upstream Cargo.toml: MIT OR Apache-2.0
+License texts   : LICENSE-MIT, LICENSE-APACHE (added by this fork; absent upstream)
+
+Modifications from upstream
+---------------------------
+This fork diverges from upstream. Modifications are tracked in git history
+relative to the vendor commit. Current changes applied on top of v0.2.6:
+
+  - cargo fmt applied to satisfy project pre-commit hooks (no logic change)
+  - [lib] crate-type extended to include "staticlib" alongside "cdylib"
+  - crossterm dependency aligned to 0.28.1 (the version ratatui 0.29 uses
+    internally) to ensure a single crossterm in the link graph
+
+Future modifications (task 8 and beyond) will add panic guards, the
+integer-status error protocol, rffi_* naming, and surface trimming per
+ARCHITECTURE.md §5.2 and PRD §4.5.
+
+Upgrade policy
+--------------
+Upgrades are deliberate, dedicated tasks. Upstream tracking is by re-applying
+intent against upstream changes, not mechanical diffs (PRD §4.5, R2).
+The pinned commit above is the reference point for the next upgrade diff.
