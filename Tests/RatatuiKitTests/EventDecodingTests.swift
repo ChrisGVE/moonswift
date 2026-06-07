@@ -2,8 +2,15 @@
 // Role: Verifies that RffiEvent structs are decoded correctly into Swift Event
 //       values by Events.swift. Uses constructed RffiEvent structs — no real
 //       terminal or FFI call is made.
-// Upstream: RatatuiKit/Events.swift (Event.init?(from:), KeyCode, KeyModifiers)
+// Upstream: RatatuiKit/Events.swift (Event.init?(reading:), KeyCode, KeyModifiers)
 // Downstream: (test target — nothing imports this)
+//
+// Stack discipline: RffiEvent is ~4 KB (inline paste buffer). Tests construct
+// events through EventBox, a heap-allocating helper, and decode them via the
+// pointer-based Event(reading:) — never holding an RffiEvent on the stack.
+// By-value RffiEvent locals multiplied into 13–20 KB debug-build frames, which
+// overflowed the small stacks swift-testing runs tests on in CI (SIGBUS in
+// __chkstk_darwin on Apple Silicon runners).
 
 import Testing
 import CRatatuiFFI
@@ -11,11 +18,40 @@ import CRatatuiFFI
 
 // MARK: - Helpers
 
-/// Constructs a zeroed RffiEvent with the given kind discriminant.
-private func makeEvent(kind: UInt32) -> RffiEvent {
-    var ev = RffiEvent()
-    ev.kind = kind
-    return ev
+/// Heap-boxed RffiEvent for test construction.
+///
+/// Owns a heap allocation and zero-fills it with memset-style initialization —
+/// no RffiEvent value ever materialises on a stack frame (a debug-build
+/// `RffiEvent()` temporary alone is ~4 KB).  Tests mutate fields through the
+/// `ev` pointee accessor and decode in place via `decode()`.
+private final class EventBox {
+    let ptr: UnsafeMutablePointer<RffiEvent>
+
+    /// Direct field access to the boxed event (pointee mutation — field-sized
+    /// loads/stores only, never a whole-struct copy).
+    var ev: RffiEvent {
+        get { ptr.pointee }
+        _modify { yield &ptr.pointee }
+    }
+
+    /// Creates a zeroed RffiEvent with the given kind discriminant.
+    init(kind: UInt32) {
+        ptr = .allocate(capacity: 1)
+        // Zero-fill in place; RffiEvent is a trivial C struct, so byte-zeroing
+        // is a valid initialization and avoids a 4 KB stack temporary.
+        UnsafeMutableRawPointer(ptr)
+            .initializeMemory(as: UInt8.self, repeating: 0, count: MemoryLayout<RffiEvent>.size)
+        ptr.pointee.kind = kind
+    }
+
+    deinit {
+        ptr.deallocate()
+    }
+
+    /// Decodes the boxed event in place (no stack copy of RffiEvent).
+    func decode() -> Event? {
+        Event(reading: ptr)
+    }
 }
 
 // MARK: - Key event decoding
@@ -25,12 +61,12 @@ struct KeyEventDecodingTests {
 
     @Test("char key: scalar 'a' (code 26, char 97)")
     func charKeyA() {
-        var ev = makeEvent(kind: 0) // RffiEventKind.key
-        ev.key_code = 26            // RffiKeyCode.char
-        ev.key_char = 97            // Unicode scalar for 'a'
-        ev.key_mods = 0
+        let box = EventBox(kind: 0) // RffiEventKind.key
+        box.ev.key_code = 26        // RffiKeyCode.char
+        box.ev.key_char = 97        // Unicode scalar for 'a'
+        box.ev.key_mods = 0
 
-        let event = Event(from: ev)
+        let event = box.decode()
         guard case let .key(code, mods) = event else {
             Issue.record("Expected .key, got \(String(describing: event))")
             return
@@ -45,12 +81,12 @@ struct KeyEventDecodingTests {
 
     @Test("char key with Ctrl modifier (code 26, char 99, mods 4)")
     func charKeyCtrlC() {
-        var ev = makeEvent(kind: 0)
-        ev.key_code = 26
-        ev.key_char = 99   // 'c'
-        ev.key_mods = 4    // CTRL
+        let box = EventBox(kind: 0)
+        box.ev.key_code = 26
+        box.ev.key_char = 99   // 'c'
+        box.ev.key_mods = 4    // CTRL
 
-        let event = Event(from: ev)
+        let event = box.decode()
         guard case let .key(code, mods) = event else {
             Issue.record("Expected .key"); return
         }
@@ -64,9 +100,9 @@ struct KeyEventDecodingTests {
 
     @Test("backspace key (code 0)")
     func backspaceKey() {
-        var ev = makeEvent(kind: 0)
-        ev.key_code = 0
-        let event = Event(from: ev)
+        let box = EventBox(kind: 0)
+        box.ev.key_code = 0
+        let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key"); return
         }
@@ -75,9 +111,9 @@ struct KeyEventDecodingTests {
 
     @Test("enter key (code 1)")
     func enterKey() {
-        var ev = makeEvent(kind: 0)
-        ev.key_code = 1
-        let event = Event(from: ev)
+        let box = EventBox(kind: 0)
+        box.ev.key_code = 1
+        let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key"); return
         }
@@ -86,9 +122,9 @@ struct KeyEventDecodingTests {
 
     @Test("escape key (code 27)")
     func escapeKey() {
-        var ev = makeEvent(kind: 0)
-        ev.key_code = 27
-        let event = Event(from: ev)
+        let box = EventBox(kind: 0)
+        box.ev.key_code = 27
+        let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key"); return
         }
@@ -97,9 +133,9 @@ struct KeyEventDecodingTests {
 
     @Test("F5 key (code 18)")
     func f5Key() {
-        var ev = makeEvent(kind: 0)
-        ev.key_code = 18
-        let event = Event(from: ev)
+        let box = EventBox(kind: 0)
+        box.ev.key_code = 18
+        let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key"); return
         }
@@ -108,9 +144,9 @@ struct KeyEventDecodingTests {
 
     @Test("unknown key code falls back to .unknown")
     func unknownKeyCode() {
-        var ev = makeEvent(kind: 0)
-        ev.key_code = 9999
-        let event = Event(from: ev)
+        let box = EventBox(kind: 0)
+        box.ev.key_code = 9999
+        let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key"); return
         }
@@ -122,10 +158,10 @@ struct KeyEventDecodingTests {
 
     @Test("Shift+Alt modifier combination (mods = 3)")
     func shiftAltModifiers() {
-        var ev = makeEvent(kind: 0)
-        ev.key_code = 1   // enter
-        ev.key_mods = 3   // SHIFT | ALT
-        let event = Event(from: ev)
+        let box = EventBox(kind: 0)
+        box.ev.key_code = 1   // enter
+        box.ev.key_mods = 3   // SHIFT | ALT
+        let event = box.decode()
         guard case let .key(_, mods) = event else {
             Issue.record("Expected .key"); return
         }
@@ -141,9 +177,9 @@ struct KeyEventDecodingTests {
             (2, .left), (3, .right), (4, .up), (5, .down)
         ]
         for (code, expected) in cases {
-            var ev = makeEvent(kind: 0)
-            ev.key_code = code
-            let event = Event(from: ev)
+            let box = EventBox(kind: 0)
+            box.ev.key_code = code
+            let event = box.decode()
             guard case let .key(kc, _) = event else {
                 Issue.record("Expected .key for code \(code)"); continue
             }
@@ -159,10 +195,10 @@ struct ResizeEventDecodingTests {
 
     @Test("resize event carries cols and rows")
     func resizeEvent() {
-        var ev = makeEvent(kind: 1) // RffiEventKind.resize
-        ev.resize_cols = 200
-        ev.resize_rows = 60
-        let event = Event(from: ev)
+        let box = EventBox(kind: 1) // RffiEventKind.resize
+        box.ev.resize_cols = 200
+        box.ev.resize_rows = 60
+        let event = box.decode()
         guard case let .resize(cols, rows) = event else {
             Issue.record("Expected .resize, got \(String(describing: event))")
             return
@@ -179,14 +215,14 @@ struct MouseEventDecodingTests {
 
     @Test("mouse down event carries position and button")
     func mouseDown() {
-        var ev = makeEvent(kind: 2) // RffiEventKind.mouse
-        ev.mouse_kind = 0           // MouseKind.down
-        ev.mouse_button = 0         // MouseButton.left
-        ev.mouse_col = 10
-        ev.mouse_row = 5
-        ev.mouse_mods = 0
+        let box = EventBox(kind: 2) // RffiEventKind.mouse
+        box.ev.mouse_kind = 0       // MouseKind.down
+        box.ev.mouse_button = 0     // MouseButton.left
+        box.ev.mouse_col = 10
+        box.ev.mouse_row = 5
+        box.ev.mouse_mods = 0
 
-        let event = Event(from: ev)
+        let event = box.decode()
         guard case let .mouse(kind, button, col, row, mods) = event else {
             Issue.record("Expected .mouse, got \(String(describing: event))")
             return
@@ -200,10 +236,10 @@ struct MouseEventDecodingTests {
 
     @Test("unknown mouse kind falls back to .moved")
     func unknownMouseKind() {
-        var ev = makeEvent(kind: 2)
-        ev.mouse_kind = 9999  // unknown
-        ev.mouse_button = 0
-        let event = Event(from: ev)
+        let box = EventBox(kind: 2)
+        box.ev.mouse_kind = 9999  // unknown
+        box.ev.mouse_button = 0
+        let event = box.decode()
         guard case let .mouse(kind, _, _, _, _) = event else {
             Issue.record("Expected .mouse"); return
         }
@@ -219,18 +255,18 @@ struct PasteEventDecodingTests {
 
     @Test("paste event carries text content")
     func pasteText() {
-        var ev = makeEvent(kind: 3) // RffiEventKind.paste
+        let box = EventBox(kind: 3) // RffiEventKind.paste
         let text = "hello world"
         let bytes = Array(text.utf8)
-        ev.paste_len = UInt32(bytes.count)
+        box.ev.paste_len = UInt32(bytes.count)
         // Copy bytes into the fixed paste_buf tuple via withUnsafeMutableBytes.
-        withUnsafeMutableBytes(of: &ev.paste_buf) { buf in
+        withUnsafeMutableBytes(of: &box.ev.paste_buf) { buf in
             for (i, b) in bytes.enumerated() {
                 buf[i] = b
             }
         }
 
-        let event = Event(from: ev)
+        let event = box.decode()
         guard case let .paste(str) = event else {
             Issue.record("Expected .paste, got \(String(describing: event))")
             return
@@ -240,9 +276,22 @@ struct PasteEventDecodingTests {
 
     @Test("empty paste event gives empty string")
     func emptyPaste() {
-        var ev = makeEvent(kind: 3)
-        ev.paste_len = 0
-        let event = Event(from: ev)
+        let box = EventBox(kind: 3)
+        box.ev.paste_len = 0
+        let event = box.decode()
+        guard case let .paste(str) = event else {
+            Issue.record("Expected .paste"); return
+        }
+        #expect(str.isEmpty)
+    }
+
+    @Test("by-value decode path (Event.init?(from:)) still works")
+    func byValueDecode() {
+        // Covers the by-value convenience initializer. One deliberate stack
+        // copy — the only such copy in the suite.
+        let box = EventBox(kind: 3)
+        box.ev.paste_len = 0
+        let event = Event(from: box.ev)
         guard case let .paste(str) = event else {
             Issue.record("Expected .paste"); return
         }
@@ -257,8 +306,8 @@ struct UnknownEventKindTests {
 
     @Test("unknown event kind returns nil (forward compat)")
     func unknownKind() {
-        var ev = makeEvent(kind: 9999)
-        let event = Event(from: ev)
+        let box = EventBox(kind: 9999)
+        let event = box.decode()
         #expect(event == nil)
     }
 }

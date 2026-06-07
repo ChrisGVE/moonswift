@@ -171,34 +171,48 @@ extension Event {
     /// the caller should treat an unknown event kind as a no-op rather than
     /// crashing, preserving forward compatibility with new shim versions.
     ///
-    /// This initializer is the single place in RatatuiKit that reads raw
-    /// `RffiEvent` fields; tests construct `RffiEvent` values directly and
-    /// pass them here to verify decoding without a real terminal.
+    /// Convenience wrapper over `init?(reading:)` for callers that hold the
+    /// event by value. Prefer `init?(reading:)` where the event is already
+    /// addressable: `RffiEvent` is ~4 KB (inline paste buffer), and by-value
+    /// passing multiplies 4 KB stack copies in unoptimized builds — enough to
+    /// overflow the small stacks swift-testing runs tests on (CI SIGBUS in
+    /// `__chkstk_darwin`).
     public init?(from raw: RffiEvent) {
-        switch raw.kind {
+        let decoded = withUnsafePointer(to: raw) { Event(reading: $0) }
+        guard let decoded else { return nil }
+        self = decoded
+    }
+
+    /// Decodes the `RffiEvent` at `raw` into a Swift `Event` without copying
+    /// the ~4 KB struct.
+    ///
+    /// This is the single place in RatatuiKit that reads raw `RffiEvent`
+    /// fields; tests construct `RffiEvent` values (heap-boxed) and pass them
+    /// here to verify decoding without a real terminal.
+    public init?(reading raw: UnsafePointer<RffiEvent>) {
+        switch raw.pointee.kind {
         case RffiEventKind.key.rawValue:
-            let code = KeyCode(rawKeyCode: raw.key_code, charScalar: raw.key_char)
-            let mods = KeyModifiers(rawValue: raw.key_mods)
+            let code = KeyCode(rawKeyCode: raw.pointee.key_code, charScalar: raw.pointee.key_char)
+            let mods = KeyModifiers(rawValue: raw.pointee.key_mods)
             self = .key(code, modifiers: mods)
 
         case RffiEventKind.resize.rawValue:
-            self = .resize(cols: raw.resize_cols, rows: raw.resize_rows)
+            self = .resize(cols: raw.pointee.resize_cols, rows: raw.pointee.resize_rows)
 
         case RffiEventKind.mouse.rawValue:
-            let kind = MouseKind(rawValue: raw.mouse_kind) ?? .moved
-            let button = MouseButton(rawValue: raw.mouse_button) ?? .none
-            let mods = KeyModifiers(rawValue: raw.mouse_mods)
+            let kind = MouseKind(rawValue: raw.pointee.mouse_kind) ?? .moved
+            let button = MouseButton(rawValue: raw.pointee.mouse_button) ?? .none
+            let mods = KeyModifiers(rawValue: raw.pointee.mouse_mods)
             self = .mouse(
                 kind: kind,
                 button: button,
-                col: raw.mouse_col,
-                row: raw.mouse_row,
+                col: raw.pointee.mouse_col,
+                row: raw.pointee.mouse_row,
                 modifiers: mods
             )
 
         case RffiEventKind.paste.rawValue:
-            let text = pasteText(from: raw)
-            self = .paste(text)
+            self = .paste(pasteText(reading: raw))
 
         default:
             return nil
@@ -268,13 +282,20 @@ private extension KeyCode {
 /// excluding the NUL. We use `paste_len` for the slice bound to avoid reading
 /// past the real content, then decode as UTF-8 with lossy fallback for any
 /// malformed sequences the terminal might have injected.
-private func pasteText(from raw: RffiEvent) -> String {
-    let byteCount = Int(raw.paste_len)
-    // Access the fixed-size tuple as a byte buffer via withUnsafeBytes.
-    return withUnsafeBytes(of: raw.paste_buf) { buf in
-        let slice = buf.prefix(byteCount)
-        return String(decoding: slice, as: UTF8.self)
+///
+/// Pointer-based to avoid materialising the ~4 KB `paste_buf` tuple on the
+/// stack (see `Event.init?(reading:)` rationale).
+private func pasteText(reading raw: UnsafePointer<RffiEvent>) -> String {
+    let byteCount = Int(raw.pointee.paste_len)
+    guard let bufOffset = MemoryLayout<RffiEvent>.offset(of: \.paste_buf) else {
+        return ""
     }
+    let base = UnsafeRawPointer(raw) + bufOffset
+    let bytes = UnsafeRawBufferPointer(
+        start: base,
+        count: min(byteCount, Int(PASTE_BUF_BYTES))
+    )
+    return String(decoding: bytes, as: UTF8.self)
 }
 
 // MARK: - EventSource (poll entry point)
@@ -307,8 +328,13 @@ public func pollEvent(
                 + Int64(timeout.components.attoseconds / 1_000_000_000_000_000)
     )
 
-    var raw = RffiEvent()
-    let status = rffi_poll_event(&raw, ms)
+    // Heap-allocate the ~4 KB RffiEvent rather than placing it on the stack:
+    // decode then reads it in place via Event(reading:) with zero copies.
+    let raw = UnsafeMutablePointer<RffiEvent>.allocate(capacity: 1)
+    defer { raw.deallocate() }
+    raw.initialize(to: RffiEvent())
+
+    let status = rffi_poll_event(raw, ms)
 
     if status == RFFI_TIMEOUT {
         return nil
@@ -317,5 +343,5 @@ public func pollEvent(
         throw FFIError(code: status, message: FFIError.lastErrorMessage())
     }
     // `nil` means an unknown event kind — treat as no-op (forward compat).
-    return Event(from: raw)
+    return Event(reading: raw)
 }
