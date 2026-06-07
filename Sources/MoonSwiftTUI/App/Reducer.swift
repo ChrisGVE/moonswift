@@ -287,6 +287,32 @@ private func reduceGlobalKey(
         s.focus = .pane(.bottomPane)
         return (s, [])
 
+    // < / > — narrow / widen navigator (ux-spec.md §1.3)
+    case (.char("<"), []):
+        s.paneLayout.navigatorWidth = max(
+            PaneLayout.navigatorMin,
+            s.paneLayout.navigatorWidth - 2
+        )
+        return (s, [])
+
+    case (.char(">"), []):
+        s.paneLayout.navigatorWidth = min(
+            PaneLayout.navigatorMax,
+            s.paneLayout.navigatorWidth + 2
+        )
+        return (s, [])
+
+    // { / } — shrink / grow bottom pane (ux-spec.md §1.3)
+    case (.char("{"), []):
+        let current = s.paneLayout.bottomPaneHeight ?? PaneLayout.defaultBottomRows
+        s.paneLayout.bottomPaneHeight = max(PaneLayout.bottomPaneMin, current - 1)
+        return (s, [])
+
+    case (.char("}"), []):
+        let current = s.paneLayout.bottomPaneHeight ?? PaneLayout.defaultBottomRows
+        s.paneLayout.bottomPaneHeight = min(PaneLayout.bottomPaneMaxRatio, current + 1)
+        return (s, [])
+
     default:
         return nil
     }
