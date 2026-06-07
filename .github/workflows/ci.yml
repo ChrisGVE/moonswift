@@ -199,11 +199,9 @@ jobs:
         run: swift test --filter RatatuiKitTests
 
       # Capture diagnostics if RatatuiKitTests fails.
-      # Dumps TLS sections remaining in the linked test binary to diagnose any
-      # arm64e SIGBUS regression (PAC-unsigned tlv_bootstrap in __thread_vars).
-      # Package.swift passes -Wl,-dead_strip so unreachable Rust TLS vars
-      # (LOCAL_PANIC_COUNT etc., only reachable via catch_unwind which is
-      # #[cfg(debug_assertions)]-gated) are eliminated from the final binary.
+      # Captures crash report (ips file) and symbolicates it to identify the
+      # exact faulting instruction and call chain.  Also dumps TLS sections
+      # remaining in the linked test binary.
       - name: Capture RatatuiKitTests failure diagnostics
         if: steps.ratatui_tests.outcome == 'failure'
         shell: bash
@@ -211,25 +209,36 @@ jobs:
           set +e   # Do not exit on individual step failures in this diagnostic.
           echo "=== RatatuiKitTests failed ==="
 
-          echo "=== Test binary TLS sections (should be empty after -dead_strip) ==="
+          echo "=== macOS Diagnostic Reports ==="
+          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
+            if [ -d "$dir" ]; then
+              echo "--- $dir ---"
+              ls -lt "$dir" | head -10
+              # Print latest crash report if any
+              LATEST=$(ls -t "$dir"/*.ips "$dir"/*.crash 2>/dev/null | head -1)
+              if [ -n "$LATEST" ]; then
+                echo "=== Crash report: $LATEST ==="
+                cat "$LATEST" 2>/dev/null | head -100
+              fi
+            fi
+          done
+
+          echo "=== Test binary TLS sections ==="
           TEST_BIN=$(find .build -name "MoonSwiftPackageTests.xctest" -type d 2>/dev/null | head -1)
           if [ -n "$TEST_BIN" ]; then
             BIN=$(find "$TEST_BIN" -maxdepth 3 -type f -perm -u+x 2>/dev/null | head -1)
             echo "Binary: ${BIN:-(not found)}"
             if [ -n "$BIN" ]; then
-              echo "--- TLS sections in test binary (expect none from Rust) ---"
+              echo "--- TLS sections ---"
               otool -l "$BIN" 2>/dev/null | grep -B1 "sectname.*__thread" | head -40 || echo "(none)"
               echo "--- Linked dylibs ---"
               otool -L "$BIN" 2>/dev/null | head -20
+              echo "--- __thread_vars relocations (show which TLS vars are in the binary) ---"
+              otool -rv "$BIN" 2>/dev/null | grep -A60 "__thread_vars" | head -30 || echo "(none)"
             fi
           else
             echo "(test binary not found in .build/)"
           fi
-
-          echo "=== macOS Diagnostic Reports ==="
-          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
-            [ -d "$dir" ] && ls -la "$dir" | tail -5
-          done
 
           # Propagate failure.
           exit 1
