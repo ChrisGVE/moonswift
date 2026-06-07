@@ -169,6 +169,32 @@ struct HighlighterLuaTests {
         #expect(!funcSpans.isEmpty, "Expected .functionName span for 'greet'")
     }
 
+    @Test("non-ASCII source: span columns are character counts, not UTF-16 units or bytes")
+    func nonASCIIColumnConversion() async {
+        // Three discriminating lines (comment column differs per interpretation):
+        //   line 0: é   — 1 char, 1 UTF-16 unit, 2 UTF-8 bytes
+        //           comment at char col 18 (UTF-8 bytes would claim 19)
+        //   line 1: 🌙  — 1 char, 2 UTF-16 units (non-BMP), 4 UTF-8 bytes
+        //           comment at char col 15 (UTF-16 units would claim 16, bytes 18)
+        //   line 2: 你好 — 2 chars, 2 UTF-16 units, 6 UTF-8 bytes
+        //           comment at char col 15 (UTF-8 bytes would claim 19)
+        let source = """
+            local s = "héllo" -- a
+            local m = "🌙x" -- b
+            local t = "你好" -- c
+            """
+        let spans = await highlight(text: source)
+        #expect(spans != nil, "Highlight must complete")
+        guard let spans else { return }
+
+        func commentColumn(line: Int) -> Int? {
+            spans.first { $0.tokenKind == .comment && $0.line == line }?.column
+        }
+        #expect(commentColumn(line: 0) == 18, "é line: comment at char col 18")
+        #expect(commentColumn(line: 1) == 15, "🌙 line: comment at char col 15 (non-BMP discriminator)")
+        #expect(commentColumn(line: 2) == 15, "CJK line: comment at char col 15")
+    }
+
     @Test("nil / true / false produce .keyword spans")
     func builtinConstantSpans() async {
         let spans = await highlight(text: "local a = nil\nlocal b = true\nlocal c = false")
