@@ -61,7 +61,13 @@ rustdoc-args = ["--cfg", "docsrs"]
 panic = "unwind"
 
 [profile.release]
-panic = "unwind"
+# panic = "abort" eliminates Rust std's unwind-related TLS sections from the
+# static lib. ffi_guard! still compiles with catch_unwind present, but panics
+# will abort the process rather than being caught. For the static-lib FFI
+# use case this is acceptable: a Rust panic in a terminal library is a bug,
+# not a recoverable condition, and aborting surfaces it clearly.
+# (ARCHITECTURE.md §5.4 arm64-TLS caveat)
+panic = "abort"
 
 [package.metadata.ffi_introspect]
 # Where to emit generated FFI Rust code (symbols/palettes, etc.)
