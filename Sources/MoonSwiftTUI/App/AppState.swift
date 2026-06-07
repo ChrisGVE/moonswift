@@ -274,12 +274,29 @@ public enum TerminalColor: Sendable, Equatable {
 public struct PaneLayout: Sendable, Equatable {
     /// Navigator column width in cells. Clamped to [18, 30].
     public var navigatorWidth: Int
-    /// Bottom pane height in rows. Clamped to [5, upperZoneMinusThree].
-    public var bottomPaneHeight: Int?  // nil = compute from 35% rule
+    /// Bottom pane height in rows. `nil` = derive from the 35% rule at render time.
+    /// When set, clamped to [5, upperZoneMinusThree] by the layout engine.
+    public var bottomPaneHeight: Int?
 
+    // MARK: Navigator constants (ux-spec.md §1.3)
+
+    /// Default navigator width in columns.
     public static let navigatorDefault = 18
+    /// Minimum navigator width (hard lower bound).
     public static let navigatorMin = 18
+    /// Maximum navigator width (hard upper cap).
     public static let navigatorMax = 30
+
+    // MARK: Bottom pane constants (ux-spec.md §1.2, §1.3)
+
+    /// Minimum bottom pane height in rows.
+    public static let bottomPaneMin = 5
+    /// Fallback bottom pane height when no override is set (used by the reducer
+    /// when the user first presses `{`/`}` before a terminal size is known).
+    public static let defaultBottomRows = 8
+    /// Soft upper cap for `{`/`}` key adjustment stored in the reducer.
+    /// The layout engine applies a tighter bound (usable − 3) at render time.
+    public static let bottomPaneMaxRatio = 40
 
     public init(navigatorWidth: Int = navigatorDefault, bottomPaneHeight: Int? = nil) {
         self.navigatorWidth = navigatorWidth
