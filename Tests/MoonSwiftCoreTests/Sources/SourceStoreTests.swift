@@ -3,7 +3,9 @@
 // Role: Unit tests for SourceStore, FragmentProvenance, LuaSourceFragment,
 //       SourceState, and SourceID. Covers the happy path, all error cases
 //       (missing file, unreadable file), hash stability, and displayName
-//       computation. Uses Swift Testing (@Test / #expect).
+//       computation. Also covers structured-file source loading (task 16):
+//       JSON/YAML/TOML happy paths, multi-document YAML, wildcard matches,
+//       missing/non-string/malformed/alias error cases.
 //       Filesystem access is real (via Bundle.module fixtures) per the
 //       project's test strategy for source-load tests; no mocking is used
 //       because the tested I/O path is the implementation under test.
@@ -423,11 +425,11 @@ struct SourceStoreIntegrationTests {
         #expect(id.path == "hello.lua")
     }
 
-    @Test("loadAll skips structured-file entries (non-empty fields)")
-    func loadAllSkipsStructuredFiles() async {
+    @Test("loadAll dispatches callback for structured-file entry")
+    func loadAllDispatchesStructuredFile() async {
         let entries = [
-            SourceEntry(path: "config.yaml", fields: [
-                FieldDesignation(jsonpath: "$.script", document: 0),
+            SourceEntry(path: "scripts.json", fields: [
+                FieldDesignation(jsonpath: "$.scripts.init", document: 0),
             ]),
         ]
 
@@ -437,16 +439,397 @@ struct SourceStoreIntegrationTests {
         }
 
         let collector = EventCollector()
+        let expectation = AsyncStream<Void>.makeStream()
+
         let store = SourceStore(callback: { event in
-            Task { await collector.record(event) }
+            Task {
+                await collector.record(event)
+                expectation.continuation.yield(())
+            }
         })
 
         store.loadAll(entries: entries, projectRoot: fixturesRoot)
 
-        // Give a moment for any spurious callback (there should be none).
-        try? await Task.sleep(for: .milliseconds(50))
+        var receivedCount = 0
+        for await _ in expectation.stream {
+            receivedCount += 1
+            if receivedCount >= 1 { break }
+        }
 
         let events = await collector.events
-        #expect(events.isEmpty)
+        #expect(events.count == 1)
+
+        guard case .loaded(let id, _) = events[0] else {
+            Issue.record("Expected .loaded, got \(events[0])")
+            return
+        }
+        #expect(id.path == "scripts.json")
+        #expect(id.jsonpath == "$.scripts.init")
+    }
+}
+
+// MARK: - SourceStore.loadStructuredFile tests
+
+/// Tests for the structured-file source loading path (task 16).
+/// Uses real fixture files in `Fixtures/Sources/`: scripts.json, scripts.yaml,
+/// scripts.toml, multi.yaml, wildcard.json, malformed.json, alias.yaml.
+@Suite("SourceStore.loadStructuredFile")
+struct SourceStoreLoadStructuredFileTests {
+
+    private var fixturesRoot: URL {
+        Bundle.module.url(forResource: "Fixtures/Sources", withExtension: nil)!
+    }
+
+    // MARK: - Helper
+
+    /// Loads a structured file with one field and returns the first event.
+    private func load(
+        file: String,
+        jsonpath: String,
+        document: Int = 0
+    ) async -> SourceLoadEvent {
+        let events = await SourceStore.loadStructuredFile(
+            at: file,
+            projectRoot: fixturesRoot,
+            fields: [FieldDesignation(jsonpath: jsonpath, document: document)]
+        )
+        guard let first = events.first else {
+            Issue.record("No events returned for \(file) \(jsonpath)")
+            return .failed(
+                id: SourceID(path: file, jsonpath: jsonpath, document: document),
+                state: .missing
+            )
+        }
+        return first
+    }
+
+    // MARK: - JSON happy path
+
+    @Test("JSON — $.scripts.init loads correct Lua fragment")
+    func jsonHappyPath() async {
+        let event = await load(file: "scripts.json", jsonpath: "$.scripts.init")
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        #expect(id.path == "scripts.json")
+        #expect(id.jsonpath == "$.scripts.init")
+        #expect(id.document == 0)
+        #expect(fragment.code == "print('hello')")
+    }
+
+    @Test("JSON — byteRange content equals decoded value (R7 cross-check)")
+    func jsonByteRangeMatchesValue() async {
+        let event = await load(file: "scripts.json", jsonpath: "$.scripts.init")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        let fileURL = fixturesRoot.appendingPathComponent("scripts.json")
+        let data = try! Data(contentsOf: fileURL)
+        let spanStart = fragment.provenance.byteRange.lowerBound
+        let spanEnd   = fragment.provenance.byteRange.upperBound
+        let spanText  = String(data: data[spanStart..<spanEnd], encoding: .utf8)
+
+        #expect(spanText == fragment.code)
+    }
+
+    @Test("JSON — lineOffset is 0-based line index of value in file")
+    func jsonLineOffset() async {
+        let event = await load(file: "scripts.json", jsonpath: "$.scripts.init")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        // "print('hello')" is on line index 2 (0-based) in scripts.json:
+        // line 0: {
+        // line 1:   "scripts": {
+        // line 2:     "init": "print('hello')",
+        #expect(fragment.provenance.lineOffset == 2)
+    }
+
+    @Test("JSON — contentHash matches SHA-256 of whole file bytes")
+    func jsonContentHash() async {
+        let event = await load(file: "scripts.json", jsonpath: "$.scripts.init")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded")
+            return
+        }
+
+        let fileURL = fixturesRoot.appendingPathComponent("scripts.json")
+        let data = try! Data(contentsOf: fileURL)
+        let expected = SHA256.hash(data: data)
+
+        #expect(fragment.provenance.contentHash == expected)
+    }
+
+    @Test("JSON — displayName is filename:jsonpath")
+    func jsonDisplayName() async {
+        let event = await load(file: "scripts.json", jsonpath: "$.scripts.init")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded")
+            return
+        }
+
+        #expect(fragment.provenance.displayName == "scripts.json:$.scripts.init")
+    }
+
+    @Test("JSON — $.scripts.run loads second fragment correctly")
+    func jsonSecondFragment() async {
+        let event = await load(file: "scripts.json", jsonpath: "$.scripts.run")
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        #expect(id.jsonpath == "$.scripts.run")
+        #expect(fragment.code == "return 42")
+    }
+
+    // MARK: - YAML happy path
+
+    @Test("YAML — $.scripts.init loads correct Lua fragment")
+    func yamlHappyPath() async {
+        let event = await load(file: "scripts.yaml", jsonpath: "$.scripts.init")
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        #expect(id.path == "scripts.yaml")
+        #expect(id.jsonpath == "$.scripts.init")
+        #expect(fragment.code == "print('hello')")
+    }
+
+    @Test("YAML — byteRange content equals decoded value (R7 cross-check)")
+    func yamlByteRangeMatchesValue() async {
+        let event = await load(file: "scripts.yaml", jsonpath: "$.scripts.init")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        let fileURL = fixturesRoot.appendingPathComponent("scripts.yaml")
+        let data = try! Data(contentsOf: fileURL)
+        let spanStart = fragment.provenance.byteRange.lowerBound
+        let spanEnd   = fragment.provenance.byteRange.upperBound
+        let spanText  = String(data: data[spanStart..<spanEnd], encoding: .utf8)
+
+        #expect(spanText == fragment.code)
+    }
+
+    @Test("YAML — lineOffset is 0-based line index of value in file")
+    func yamlLineOffset() async {
+        let event = await load(file: "scripts.yaml", jsonpath: "$.scripts.init")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        // scripts.yaml:
+        // line 0: scripts:
+        // line 1:   init: "print('hello')"
+        #expect(fragment.provenance.lineOffset == 1)
+    }
+
+    // MARK: - TOML happy path
+
+    @Test("TOML — $.scripts.init loads correct Lua fragment")
+    func tomlHappyPath() async {
+        let event = await load(file: "scripts.toml", jsonpath: "$.scripts.init")
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        #expect(id.path == "scripts.toml")
+        #expect(id.jsonpath == "$.scripts.init")
+        #expect(fragment.code == "print('hello')")
+    }
+
+    @Test("TOML — byteRange content equals decoded value (R7 cross-check)")
+    func tomlByteRangeMatchesValue() async {
+        let event = await load(file: "scripts.toml", jsonpath: "$.scripts.init")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        let fileURL = fixturesRoot.appendingPathComponent("scripts.toml")
+        let data = try! Data(contentsOf: fileURL)
+        let spanStart = fragment.provenance.byteRange.lowerBound
+        let spanEnd   = fragment.provenance.byteRange.upperBound
+        let spanText  = String(data: data[spanStart..<spanEnd], encoding: .utf8)
+
+        #expect(spanText == fragment.code)
+    }
+
+    @Test("TOML — lineOffset is 0-based line index of value in file")
+    func tomlLineOffset() async {
+        let event = await load(file: "scripts.toml", jsonpath: "$.scripts.init")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        // scripts.toml:
+        // line 0: [scripts]
+        // line 1: init = "print('hello')"
+        #expect(fragment.provenance.lineOffset == 1)
+    }
+
+    // MARK: - Multi-document YAML
+
+    @Test("YAML multi-doc — document 0 loads first document's field")
+    func yamlMultiDoc0() async {
+        let event = await load(file: "multi.yaml", jsonpath: "$.scripts.init", document: 0)
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        #expect(id.document == 0)
+        #expect(fragment.code == "print('doc0')")
+    }
+
+    @Test("YAML multi-doc — document 1 loads second document's field")
+    func yamlMultiDoc1() async {
+        let event = await load(file: "multi.yaml", jsonpath: "$.scripts.init", document: 1)
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        #expect(id.document == 1)
+        #expect(fragment.code == "print('doc1')")
+    }
+
+    // MARK: - Wildcard (multiple matches)
+
+    @Test("JSON wildcard — $.handlers.* yields two fragments")
+    func jsonWildcard() async {
+        let events = await SourceStore.loadStructuredFile(
+            at: "wildcard.json",
+            projectRoot: fixturesRoot,
+            fields: [FieldDesignation(jsonpath: "$.handlers.*", document: 0)]
+        )
+
+        #expect(events.count == 2)
+
+        let codes = events.compactMap { event -> String? in
+            guard case .loaded(_, let fragment) = event else { return nil }
+            return fragment.code
+        }
+        #expect(codes.contains("print('created')"))
+        #expect(codes.contains("print('deleted')"))
+    }
+
+    // MARK: - Error cases
+
+    @Test("missing file — returns .failed with .missing state")
+    func missingFile() async {
+        let event = await load(file: "nonexistent.json", jsonpath: "$.scripts.init")
+
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed, got \(event)")
+            return
+        }
+        guard case .missing = state else {
+            Issue.record("Expected .missing, got \(state)")
+            return
+        }
+    }
+
+    @Test("malformed file — returns .failed with error diagnostic")
+    func malformedFile() async {
+        let event = await load(file: "malformed.json", jsonpath: "$.key")
+
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed, got \(event)")
+            return
+        }
+        guard case .failed(let diag) = state else {
+            Issue.record("Expected .failed(diagnostic), got \(state)")
+            return
+        }
+
+        #expect(diag.severity == .error)
+        #expect(diag.source == .sourceLoad)
+        // UX spec: malformed file message starts with ✖
+        #expect(diag.message.hasPrefix("✖"))
+    }
+
+    @Test("unresolved path — returns .failed with warning diagnostic")
+    func unresolvedPath() async {
+        let event = await load(file: "scripts.json", jsonpath: "$.nonexistent.path")
+
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed, got \(event)")
+            return
+        }
+        guard case .failed(let diag) = state else {
+            Issue.record("Expected .failed(diagnostic), got \(state)")
+            return
+        }
+
+        #expect(diag.severity == .warning)
+        #expect(diag.source == .sourceLoad)
+        // UX spec: unresolved path message starts with ⚠
+        #expect(diag.message.hasPrefix("⚠"))
+    }
+
+    @Test("non-string value — returns .failed with 'expected string' warning")
+    func nonStringValue() async {
+        // $.version resolves to integer 1 in scripts.json
+        let event = await load(file: "scripts.json", jsonpath: "$.version")
+
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed, got \(event)")
+            return
+        }
+        guard case .failed(let diag) = state else {
+            Issue.record("Expected .failed(diagnostic), got \(state)")
+            return
+        }
+
+        #expect(diag.severity == .warning)
+        #expect(diag.source == .sourceLoad)
+        #expect(diag.message.contains("expected string"))
+    }
+
+    @Test("YAML alias at designated path — returns .failed with 'designate the anchor'")
+    func yamlAliasAtPath() async {
+        // alias.yaml: scripts.init = *base (an alias)
+        let event = await load(file: "alias.yaml", jsonpath: "$.scripts.init")
+
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed, got \(event)")
+            return
+        }
+        guard case .failed(let diag) = state else {
+            Issue.record("Expected .failed(diagnostic), got \(state)")
+            return
+        }
+
+        #expect(diag.severity == .error)
+        #expect(diag.source == .sourceLoad)
+        #expect(diag.message.contains("designate the anchor"))
     }
 }

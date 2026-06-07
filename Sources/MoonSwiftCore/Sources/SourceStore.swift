@@ -4,14 +4,15 @@
 //       with full FragmentProvenance. Communicates results back to the AppDriver
 //       exclusively through an injected @Sendable callback — it never touches
 //       the EventChannel, AppState, or any MoonSwiftTUI type (ARCHITECTURE.md
-//       §5.1). All loads are asynchronous; structured-file loading (task 16)
-//       plugs in via the same callback shape.
-// Upstream: ProjectFile (SourceEntry), CryptoKit (SHA-256)
+//       §5.1). All loads are asynchronous; both `.lua` files and structured files
+//       (JSON/YAML/TOML) funnel through the same callback shape.
+// Upstream: ProjectFile (SourceEntry), CryptoKit (SHA-256), SpanLocator (task 16)
 // Downstream: AppDriver (consumes the callback), RunService, LintService
 //             (receive LuaSourceFragment from AppState after it is loaded)
 
 import CryptoKit
 import Foundation
+import Yams
 
 // MARK: - SourceStore
 
@@ -56,31 +57,45 @@ public final class SourceStore: Sendable {
 
     // MARK: Load all sources
 
-    /// Dispatches a background load task for every `.lua` entry in `entries`.
+    /// Dispatches background load tasks for every entry in `entries`.
     ///
-    /// Non-`.lua` entries are silently skipped here; task 16 handles structured
-    /// files. Each entry produces exactly one `callback` invocation on a
-    /// background `Task` (loads are independent and run concurrently).
+    /// - Whole `.lua` entries (empty `fields`): dispatched to `loadLuaFile`.
+    /// - Structured-file entries (non-empty `fields`): dispatched to
+    ///   `loadStructuredFile`. Each field designation produces one callback
+    ///   invocation per match (wildcards may yield multiple fragments) or one
+    ///   failure event.
     ///
     /// - Parameters:
     ///   - entries: The `[[source]]` entries from the decoded `ProjectFile`.
-    ///   - projectRoot: Absolute URL of the project root directory. Used to
-    ///     resolve project-relative source paths.
+    ///   - projectRoot: Absolute URL of the project root directory.
     public func loadAll(entries: [SourceEntry], projectRoot: URL) {
         for entry in entries {
-            guard entry.fields.isEmpty else {
-                // Structured-file entries are handled by task 16; skip here.
-                continue
-            }
-            let path = entry.path
-            let id = SourceID(path: path, jsonpath: nil, document: 0)
-            Task {
-                let event = await Self.loadLuaFile(
-                    at: path,
-                    projectRoot: projectRoot,
-                    id: id
-                )
-                self.callback(event)
+            if entry.fields.isEmpty {
+                // Whole .lua file.
+                let path = entry.path
+                let id = SourceID(path: path, jsonpath: nil, document: 0)
+                Task {
+                    let event = await Self.loadLuaFile(
+                        at: path,
+                        projectRoot: projectRoot,
+                        id: id
+                    )
+                    self.callback(event)
+                }
+            } else {
+                // Structured file with field designations.
+                let path = entry.path
+                let fields = entry.fields
+                Task {
+                    let events = await Self.loadStructuredFile(
+                        at: path,
+                        projectRoot: projectRoot,
+                        fields: fields
+                    )
+                    for event in events {
+                        self.callback(event)
+                    }
+                }
             }
         }
     }
@@ -166,6 +181,277 @@ public final class SourceStore: Sendable {
 
         let fragment = LuaSourceFragment(code: code, provenance: provenance)
         return .loaded(id: id, fragment: fragment)
+    }
+
+    // MARK: - Structured file load (task 16)
+
+    /// Loads one structured file (JSON/YAML/TOML) and returns one `SourceLoadEvent`
+    /// per field designation.
+    ///
+    /// For each `FieldDesignation` in `fields`:
+    /// 1. Reads file bytes + SHA-256 hash.
+    /// 2. Decodes to `TreeValue` using the format-appropriate decoder.
+    /// 3. Evaluates the JSONPath designation.
+    /// 4. For each match:
+    ///    a. Verifies the value is `.string` (else `⚠ expected string` warning).
+    ///    b. Locates the byte span via tree-sitter (`SpanLocator`).
+    ///    c. Checks for YAML aliases at the designated path (error).
+    ///    d. Cross-checks span text against decoded value (R7).
+    ///    e. Posts `.loaded` with a `FragmentProvenance` carrying all location data.
+    ///
+    /// Error/warning cases (UX spec §4.2, exact message strings):
+    /// - Malformed file: `.failed` with `.failed(Diagnostic)` severity `.error`.
+    /// - Unresolved path: `.failed` with `.failed(Diagnostic)` severity `.warning`.
+    /// - Non-string value: `.failed` with `.failed(Diagnostic)` "expected string".
+    /// - YAML alias at path: `.failed` with `.failed(Diagnostic)` "designate the anchor".
+    /// - Span mismatch (R7): `.failed` with `.failed(Diagnostic)` span-mismatch message.
+    ///
+    /// - Parameters:
+    ///   - path: Project-relative path to the structured file.
+    ///   - projectRoot: Absolute URL of the project root.
+    ///   - fields: The field designations from the `SourceEntry`.
+    /// - Returns: An array of `SourceLoadEvent` values — one per match or one
+    ///   failure per unresolved/error designation.
+    static func loadStructuredFile(
+        at path: String,
+        projectRoot: URL,
+        fields: [FieldDesignation]
+    ) async -> [SourceLoadEvent] {
+        let fileURL = projectRoot.appendingPathComponent(path)
+        let filename = fileURL.lastPathComponent
+
+        // --- Existence check ---
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            // One .missing event for the whole file (not per field).
+            let id = SourceID(path: path, jsonpath: nil, document: 0)
+            return [.failed(id: id, state: .missing)]
+        }
+
+        // --- Read raw bytes ---
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            let id = SourceID(path: path, jsonpath: nil, document: 0)
+            let diag = Diagnostic(
+                severity: .error,
+                message: "✖ Cannot parse \(filename): \(error.localizedDescription)",
+                source: .sourceLoad
+            )
+            return [.failed(id: id, state: .failed(diag))]
+        }
+
+        // --- SHA-256 hash (over raw bytes, whole file) ---
+        let contentHash = SHA256.hash(data: data)
+
+        // --- Determine format from extension ---
+        let ext = fileURL.pathExtension
+        guard let format = StructuredFileFormat.from(extension: ext) else {
+            let id = SourceID(path: path, jsonpath: nil, document: 0)
+            let diag = Diagnostic(
+                severity: .error,
+                message: "✖ Cannot parse \(filename): unsupported format .\(ext)",
+                source: .sourceLoad
+            )
+            return [.failed(id: id, state: .failed(diag))]
+        }
+
+        // --- UTF-8 decode ---
+        guard let text = String(data: data, encoding: .utf8) else {
+            let id = SourceID(path: path, jsonpath: nil, document: 0)
+            let diag = Diagnostic(
+                severity: .error,
+                message: "✖ Cannot parse \(filename): file is not valid UTF-8",
+                source: .sourceLoad
+            )
+            return [.failed(id: id, state: .failed(diag))]
+        }
+
+        // --- Process each field designation ---
+        var events: [SourceLoadEvent] = []
+        for field in fields {
+            let fieldEvents = processField(
+                field: field,
+                path: path,
+                fileURL: fileURL,
+                text: text,
+                data: data,
+                format: format,
+                contentHash: contentHash,
+                filename: filename
+            )
+            events.append(contentsOf: fieldEvents)
+        }
+        return events
+    }
+
+    // MARK: - Per-field processing
+
+    /// Process a single `FieldDesignation` and return the resulting events.
+    ///
+    /// This is broken out of `loadStructuredFile` so each field is self-contained
+    /// and the parent function stays readable.
+    private static func processField(
+        field: FieldDesignation,
+        path: String,
+        fileURL: URL,
+        text: String,
+        data: Data,
+        format: StructuredFileFormat,
+        contentHash: CryptoKit.SHA256Digest,
+        filename: String
+    ) -> [SourceLoadEvent] {
+        let jsonpathStr = field.jsonpath
+        let docIndex    = field.document
+
+        // --- Parse the JSONPath expression ---
+        let expression: JSONPathExpression
+        do {
+            expression = try JSONPathExpression(parsing: jsonpathStr)
+        } catch {
+            let id = SourceID(path: path, jsonpath: jsonpathStr, document: docIndex)
+            let diag = Diagnostic(
+                severity: .error,
+                message: "✖ Cannot parse \(filename): invalid JSONPath \"\(jsonpathStr)\"",
+                source: .sourceLoad
+            )
+            return [.failed(id: id, state: .failed(diag))]
+        }
+
+        // --- Decode the file to TreeValue ---
+        let tree: TreeValue
+        do {
+            switch format {
+            case .json:
+                tree = try decodeJSON(text)
+            case .yaml:
+                tree = try decodeYAML(text, document: docIndex)
+            case .toml:
+                tree = try decodeTOML(text)
+            }
+        } catch {
+            let id = SourceID(path: path, jsonpath: jsonpathStr, document: docIndex)
+            let diag = Diagnostic(
+                severity: .error,
+                message: "✖ Cannot parse \(filename): \(error.localizedDescription)",
+                source: .sourceLoad
+            )
+            return [.failed(id: id, state: .failed(diag))]
+        }
+
+        // --- Evaluate the JSONPath designation ---
+        let matches = expression.evaluate(on: tree)
+
+        if matches.isEmpty {
+            let id = SourceID(
+                path: path,
+                jsonpath: expression.normalized,
+                document: docIndex
+            )
+            let diag = Diagnostic(
+                severity: .warning,
+                message: "⚠ \(filename): JSONPath \"\(expression.normalized)\" matched no fields",
+                source: .sourceLoad
+            )
+            return [.failed(id: id, state: .failed(diag))]
+        }
+
+        // --- Process each match ---
+        var events: [SourceLoadEvent] = []
+        for (normalizedPath, value) in matches {
+            let normalizedJSONPath = normalizedPath.description
+            let id = SourceID(
+                path: path,
+                jsonpath: normalizedJSONPath,
+                document: docIndex
+            )
+            // Verify the value is a string.
+            guard case .string(let code) = value else {
+                let typeName = treeValueTypeName(value)
+                let diag = Diagnostic(
+                    severity: .warning,
+                    message: "⚠ \(filename): JSONPath \"\(normalizedJSONPath)\" resolves to \(typeName), expected string",
+                    source: .sourceLoad
+                )
+                events.append(.failed(id: id, state: .failed(diag)))
+                continue
+            }
+
+            // --- Locate byte span via tree-sitter ---
+            let spanLocation: SpanLocation
+            do {
+                spanLocation = try SpanLocator.locateSpan(
+                    data: data,
+                    text: text,
+                    format: format,
+                    path: normalizedPath.steps
+                )
+            } catch SpanLocatorError.yamlAliasAtDesignatedPath {
+                let diag = Diagnostic(
+                    severity: .error,
+                    message: "✖ \(filename): \"\(normalizedJSONPath)\" is a YAML alias — designate the anchor",
+                    source: .sourceLoad
+                )
+                events.append(.failed(id: id, state: .failed(diag)))
+                continue
+            } catch {
+                // Span location failed; post a degraded loaded event with the
+                // whole-file span as a fallback (byteRange = 0..<data.count,
+                // lineOffset = 0). This is sub-optimal but keeps the fragment
+                // usable. An error diagnostic is posted to signal the problem.
+                let diag = Diagnostic(
+                    severity: .error,
+                    message: "✖ \(filename): span location failed for \"\(normalizedJSONPath)\": \(error)",
+                    source: .sourceLoad
+                )
+                events.append(.failed(id: id, state: .failed(diag)))
+                continue
+            }
+
+            // --- R7 cross-check: span text must match decoded value ---
+            let spanStart = spanLocation.byteRange.lowerBound
+            let spanEnd   = spanLocation.byteRange.upperBound
+            if spanStart < data.count && spanEnd <= data.count {
+                if let spanText = String(data: data[spanStart..<spanEnd], encoding: .utf8),
+                   spanText != code {
+                    let diag = Diagnostic(
+                        severity: .error,
+                        message: "✖ \(filename): span-mismatch at \"\(normalizedJSONPath)\" (span text ≠ decoded value)",
+                        source: .sourceLoad
+                    )
+                    events.append(.failed(id: id, state: .failed(diag)))
+                    continue
+                }
+            }
+
+            // --- Build provenance and fragment ---
+            let provenance = FragmentProvenance(
+                file: fileURL,
+                jsonpath: normalizedJSONPath,
+                document: docIndex,
+                byteRange: spanLocation.byteRange,
+                lineOffset: spanLocation.lineOffset,
+                contentHash: contentHash
+            )
+            let fragment = LuaSourceFragment(code: code, provenance: provenance)
+            events.append(.loaded(id: id, fragment: fragment))
+        }
+        return events
+    }
+
+    // MARK: - Helpers
+
+    /// Human-readable type name for `TreeValue` cases (used in diagnostics).
+    private static func treeValueTypeName(_ value: TreeValue) -> String {
+        switch value {
+        case .string:  return "string"
+        case .int:     return "integer"
+        case .double:  return "float"
+        case .bool:    return "boolean"
+        case .array:   return "array"
+        case .map:     return "object"
+        case .null:    return "null"
+        }
     }
 }
 

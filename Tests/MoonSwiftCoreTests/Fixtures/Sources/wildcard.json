@@ -1,0 +1,6 @@
+{
+  "handlers": {
+    "onCreate": "print('created')",
+    "onDelete": "print('deleted')"
+  }
+}

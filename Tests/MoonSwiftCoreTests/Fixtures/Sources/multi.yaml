@@ -1,0 +1,5 @@
+scripts:
+  init: "print('doc0')"
+---
+scripts:
+  init: "print('doc1')"

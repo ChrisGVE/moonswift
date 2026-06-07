@@ -1,0 +1,6 @@
+[scripts]
+init = "print('hello')"
+run = "return 42"
+
+version = 1
+enabled = true
