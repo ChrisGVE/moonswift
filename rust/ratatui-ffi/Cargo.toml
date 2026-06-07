@@ -47,6 +47,9 @@ bitflags = "2"
 anstyle = "1"
 anstream = "0.6"
 indicatif = { version = "0.17", default-features = false, features = ["improved_unicode"] }
+# libc: required by terminal.rs for async-signal-safe emergency restore
+# (write(2), tcsetattr, termios) on Unix platforms.
+libc = "0.2"
 
 [package.metadata.docs.rs]
 # Build docs with all features so optional APIs are visible.

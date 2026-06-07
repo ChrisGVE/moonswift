@@ -467,6 +467,7 @@ dependencies = [
  "bitflags",
  "crossterm",
  "indicatif",
+ "libc",
  "ratatui",
 ]
 
