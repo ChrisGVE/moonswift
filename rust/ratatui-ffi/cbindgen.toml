@@ -22,7 +22,6 @@ include = [
 ]
 
 [parse]
-expand = false
 parse_deps = false
 
 [fn]
