@@ -96,8 +96,11 @@ jobs:
       # Rust unit tests.
       # The shim has no Swift dependency, so this step needs no shim build
       # artefact — cargo test compiles and links the test harness itself.
+      # Single-threaded: the last-error slot is process-global by design
+      # (single-UI-thread library; avoids TLS for arm64e — guard.rs §note),
+      # so concurrent test threads race on set/clear of the shared slot.
       - name: Run Rust tests (cargo test)
-        run: cargo test
+        run: cargo test -- --test-threads=1
 
   # ── job 2: swift ────────────────────────────────────────────────────────────
   # Build and test the Swift package in source mode.

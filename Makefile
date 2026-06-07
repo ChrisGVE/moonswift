@@ -79,9 +79,12 @@ build: shim reset
 # `swift package reset` is included here for the same manifest-cache reason as
 # `make build`; contributors switching between build modes invoke `make test`
 # without a prior `make build`, so the reset guard belongs in both targets.
+# cargo test runs single-threaded: the shim's last-error slot is process-global
+# by design (single-UI-thread library; avoids TLS for arm64e — guard.rs §note),
+# so concurrent test threads race on set/clear of the shared slot.
 test:
 	@echo "==> Running Rust unit tests (cargo test)"
-	cd $(SHIM_DIR) && cargo test
+	cd $(SHIM_DIR) && cargo test -- --test-threads=1
 	@echo "==> Resetting SPM manifest cache"
 	swift package reset
 	@echo "==> Running Swift tests (source mode, toml enabled)"

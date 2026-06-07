@@ -241,11 +241,26 @@ mod tests {
 
     // Guard tests share the process-global LAST_ERROR; serialise them so
     // concurrent cargo test threads don't interleave set/read sequences.
+    //
+    // NOTE: this lock only serialises the guard tests against EACH OTHER.
+    // Tests in other modules call ffi_guard!-wrapped entry points, whose
+    // clear_last_error() also touches the shared slot — the full suite must
+    // therefore run with `--test-threads=1` (Makefile / CI carry the flag).
+    //
+    // lock_guard_test() is poison-tolerant: if an earlier guard test failed
+    // its assertion while holding the lock, later tests still run and report
+    // their own results instead of cascading PoisonError noise.
     static GUARD_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_guard_test() -> std::sync::MutexGuard<'static, ()> {
+        GUARD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn last_error_round_trip() {
-        let _guard = GUARD_TEST_LOCK.lock().unwrap();
+        let _guard = lock_guard_test();
         // Store a message and retrieve it through rffi_last_error.
         set_last_error("hello error");
         let mut buf = [0u8; 64];
@@ -264,7 +279,7 @@ mod tests {
 
     #[test]
     fn last_error_zero_cap_returns_minus_one() {
-        let _guard = GUARD_TEST_LOCK.lock().unwrap();
+        let _guard = lock_guard_test();
         set_last_error("x");
         let mut buf = [0u8; 1];
         let n = rffi_last_error(buf.as_mut_ptr() as *mut c_char, 0);
@@ -273,7 +288,7 @@ mod tests {
 
     #[test]
     fn last_error_truncates_to_cap_minus_one() {
-        let _guard = GUARD_TEST_LOCK.lock().unwrap();
+        let _guard = lock_guard_test();
         set_last_error("abcde");
         let mut buf = [0u8; 4]; // cap = 4 → max 3 bytes + NUL
         let n = rffi_last_error(buf.as_mut_ptr() as *mut c_char, buf.len());
@@ -285,7 +300,7 @@ mod tests {
     #[cfg(not(feature = "swift_ffi"))]
     #[test]
     fn ffi_guard_catches_panic_and_returns_error_code() {
-        let _guard = GUARD_TEST_LOCK.lock().unwrap();
+        let _guard = lock_guard_test();
         // A deliberately-panicking closure must return RFFI_ERR_PANIC and
         // populate the last-error slot — not unwind across the test.
         let code = ffi_guard!("test_entry", { panic!("deliberate panic") });
@@ -302,7 +317,7 @@ mod tests {
 
     #[test]
     fn ffi_guard_clears_last_error_on_success() {
-        let _guard = GUARD_TEST_LOCK.lock().unwrap();
+        let _guard = lock_guard_test();
         // Leave a stale error from a previous call.
         set_last_error("stale");
         let code = ffi_guard!("ok_entry", { 0 });
