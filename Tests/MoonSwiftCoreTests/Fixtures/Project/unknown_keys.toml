@@ -1,0 +1,5 @@
+lua_version = "5.4"
+
+# This key is unknown in P1 — used to test warn-once forward-compat behaviour.
+[mock.value]
+namespace = "myapp"

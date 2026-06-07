@@ -1,0 +1,23 @@
+# Full moonswift.toml fixture for round-trip and validation tests.
+lua_version = "5.4"
+
+[[source]]
+path = "scripts/init.lua"
+
+[[source]]
+path = "config.yaml"
+
+  [[source.field]]
+  jsonpath = "$.scripts.init"
+  document = 0
+
+[run]
+config = "sandboxed"
+instruction_limit = 1000
+wall_clock_limit_ms = 0
+
+[lint]
+extra_modules = ["iox"]
+
+[settings]
+theme = "default"

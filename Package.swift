@@ -239,6 +239,12 @@ let package = Package(
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ],
             path: "Sources/MoonSwiftCore",
+            resources: [
+                // Vendored luacheck pure-Lua subset (F4.0 spike; F4.2 production).
+                // Loaded at runtime by LintService via Bundle.module.
+                // See Sources/MoonSwiftCore/Vendor/luacheck/NOTICE for provenance.
+                .copy("Vendor/luacheck"),
+            ],
             swiftSettings: swiftTargetSettings
         ),
 
@@ -284,6 +290,10 @@ let package = Package(
                 "MoonSwiftCore",
             ],
             path: "Tests/MoonSwiftCoreTests",
+            resources: [
+                // Fixture TOML files for ProjectStore / ProjectFileCodec tests.
+                .copy("Fixtures"),
+            ],
             swiftSettings: swiftTargetSettings
         ),
 
