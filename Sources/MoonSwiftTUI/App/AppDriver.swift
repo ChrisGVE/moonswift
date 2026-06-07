@@ -5,9 +5,9 @@
 //       Effects, and triggers renders. Constructs all service callbacks so
 //       that MoonSwiftCore services never see TUI types. Owns the TickSource
 //       and coordinates with the EventPump for $EDITOR suspension.
-//       (ARCHITECTURE.md §5.1, §3b)
+//       (ARCHITECTURE.md §5.1, §3b, §5.2)
 // Upstream: EventChannel, TickSource, EventPump, Reducer, Renderer (stub),
-//           MoonSwiftCore service protocols
+//           TerminalSuspender, MoonSwiftCore service protocols
 // Downstream: Services (via callbacks), Terminal (render), process exit
 
 import Foundation
@@ -42,6 +42,7 @@ public final class AppDriver: @unchecked Sendable {
     private let pump: EventPump
     private let tickSource: TickSource
     private let highlighter: Highlighter
+    private let suspender: (any TerminalSuspender)?
 
     // MARK: State
 
@@ -67,18 +68,23 @@ public final class AppDriver: @unchecked Sendable {
     ///   - pump: The terminal event pump (already running on its thread).
     ///   - tickSource: The armed/disarmed tick poster (already running).
     ///   - highlighter: The tree-sitter highlighter (serial parse executor).
+    ///   - suspender: The terminal suspend/resume adapter for $EDITOR handoff.
+    ///     `nil` in skeleton mode (no terminal); inject `LiveTerminalSuspender`
+    ///     in production and `RecordingTerminalSuspender` in tests.
     ///   - seed: The initial `AppState` built from the decoded project file.
     public init(
         channel: EventChannel,
         pump: EventPump,
         tickSource: TickSource,
         highlighter: Highlighter = Highlighter(),
+        suspender: (any TerminalSuspender)? = nil,
         seed: AppState
     ) {
         self.channel = channel
         self.pump = pump
         self.tickSource = tickSource
         self.highlighter = highlighter
+        self.suspender = suspender
         self.state = seed
     }
 
@@ -201,11 +207,95 @@ public final class AppDriver: @unchecked Sendable {
             // ProjectStore.saveDesignations() — no-op in skeleton.
             channel.post(.designationsSaved)
 
-        case .spawnEditor:
-            // Pump-park + terminal suspend + editor spawn + resume (ARCH §5.2).
-            // Skeleton: no-op in this task (implemented in task F8a).
-            break
+        case .spawnEditor(let url):
+            // Full pump-park + terminal suspend + editor spawn + resume sequence.
+            // See ARCHITECTURE.md §5.2 and docs/internals/ffi-boundary.md for the
+            // handshake diagram and thread-class invariants.
+            spawnEditorAndWait(url: url)
         }
+    }
+
+    // MARK: Editor spawn
+
+    /// Execute the full $EDITOR handshake for the given file URL.
+    ///
+    /// Sequence (ARCHITECTURE.md §5.2, ffi-boundary.md §EDITOR suspend/resume):
+    /// 1. Park the pump — blocks until the pump acknowledges (≤ 50 ms).
+    ///    No input-class shim call is in flight after this returns.
+    /// 2. Suspend the terminal (leave alt screen, restore termios).
+    /// 3. Spawn `$EDITOR <path>` — direct exec, no shell interpretation.
+    /// 4. Wait for the editor process to exit (any exit code is accepted).
+    /// 5. Resume the terminal (raw mode, alt screen).
+    /// 6. Unpark the pump.
+    ///
+    /// If `$EDITOR` is not set: posts a transient and returns immediately
+    /// without touching the pump or the terminal.
+    ///
+    /// If terminal suspend/resume is unavailable (no `suspender` injected):
+    /// the pump is still parked/unparked around the spawn so the handshake
+    /// contract is upheld even in skeleton/test mode.
+    ///
+    /// Must be called from the UI thread (render/terminal-class).
+    private func spawnEditorAndWait(url: URL) {
+        // Guard: $EDITOR must be set. The exact transient string is normative
+        // (ux-spec.md §6.4 — "No $EDITOR" entry).
+        guard let editor = ProcessInfo.processInfo.environment["EDITOR"],
+            !editor.isEmpty
+        else {
+            let msg = "$EDITOR is not set. Set it to open the project file."
+            // Set the transient directly on state (AppDriver owns state mutation)
+            // and arm the tick source so the transient expiry is processed.
+            state.transient = TransientMessage(text: msg)
+            tickSource.arm(interval: TickInterval.transientExpiry)
+            return
+        }
+
+        // 1. Park the pump — guaranteed no input-class call in flight after this.
+        pump.parkAndWait()
+
+        // 2. Suspend the terminal (TTY-gated: only when a suspender is injected).
+        if let suspender {
+            do {
+                try suspender.suspend()
+            } catch {
+                // Terminal suspend failed — unpark and continue; the UI loop is
+                // still healthy. A render after unpark will restore the view.
+                pump.unparkAfterResume()
+                return
+            }
+        }
+
+        // 3 + 4. Spawn the editor with the file path as a direct argument vector
+        //         (no shell — no word splitting, no glob expansion, no injection).
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: editor)
+        process.arguments = [url.path]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            // Non-zero exit is accepted: the editor may exit with an error code
+            // (e.g. nvim exits 1 on :cquit) but we continue regardless
+            // (ARCHITECTURE.md §5.2 "non-zero editor exit → continue anyway").
+        } catch {
+            // Editor could not be launched (executable not found, permission
+            // denied, etc.). Fall through to resume — the terminal must always
+            // be restored.
+        }
+
+        // 5. Resume the terminal (TTY-gated).
+        if let suspender {
+            do {
+                try suspender.resume()
+            } catch {
+                // Resume failure is serious but unrecoverable without crashing;
+                // log and continue — the loop will render over whatever state
+                // the terminal is in. Emergency restore is the crash-handler
+                // path (ARCHITECTURE.md §3f); this is not a crash path.
+            }
+        }
+
+        // 6. Unpark the pump — resumes normal input polling.
+        pump.unparkAfterResume()
     }
 
     // MARK: Render
