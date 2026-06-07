@@ -195,6 +195,14 @@ private func reduceKey(
         break
     }
 
+    // Colon command interception: when the code pane is actively collecting a
+    // `:N<Enter>` sequence, ALL keys go to the colon handler — including ones
+    // that would normally be global (e.g. `q`, which would otherwise quit).
+    // This mirrors how Vim intercepts command-line input before normal bindings.
+    if case .pane(.codePane) = s.focus, s.codePane.colonCommand != nil {
+        return reduceColonCommand(s, code: code, modifiers: modifiers)
+    }
+
     // Global keys — active in all panes when no modal is open.
     if let result = reduceGlobalKey(s, code: code, modifiers: modifiers) {
         return result
@@ -381,12 +389,6 @@ private func reduceCodePaneKey(
     modifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
     var s = s
-
-    // When a colon command is being entered, only digits, Enter, Esc, and the
-    // special `:q` sequence are meaningful (ux-spec §2.3).
-    if s.codePane.colonCommand != nil {
-        return reduceColonCommand(s, code: code, modifiers: modifiers)
-    }
 
     switch (code, modifiers) {
 
