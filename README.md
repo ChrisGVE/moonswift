@@ -27,32 +27,36 @@ services, and terminal rendering.
 
 - macOS 13 or later
 - Xcode 16 or later (provides the Swift 6 toolchain)
-- Rust toolchain (for building the ratatui-ffi shim; required for the full
-  TUI — not yet needed for the skeleton build)
+- Rust toolchain (`rustup`; required for the Rust shim build)
+- `cbindgen` for header regeneration: `cargo install cbindgen` (optional —
+  only needed when the Rust ABI changes; the committed header works otherwise)
 
-### Quick build (skeleton — no shim required yet)
-
-The default build mode references a prebuilt shim XCFramework. During
-bootstrap (before the first shim release), set `MOONSWIFT_SHIM_SOURCE=1`
-to use the stub C target instead:
+### Standard build
 
 ```sh
-MOONSWIFT_SHIM_SOURCE=1 swift build
-MOONSWIFT_SHIM_SOURCE=1 swift test
+make build   # cargo build --release in rust/ratatui-ffi, then swift build
+make test    # cargo test + swift test
+make clean   # remove Rust and Swift build artifacts
+make reset   # swift package reset (use after toggling MOONSWIFT_SHIM_SOURCE)
 ```
 
-### Full build (after F0.2 and F0.3 land)
+`make build` and `make test` both export `MOONSWIFT_SHIM_SOURCE=1` (source
+mode, the contributor default during bootstrap) and `LUASWIFT_INCLUDE_TOMLKIT=1`
+(so the binary always includes the `luaswift.toml` module). A plain
+`swift build` without these variables still produces a working binary — see
+ARCHITECTURE.md §5.4.
+
+### Manual build (without Make)
 
 ```sh
-make build   # builds the Rust shim + swift build
-make test    # runs cargo test + swift test
+cd rust/ratatui-ffi && cargo build --release
+MOONSWIFT_SHIM_SOURCE=1 LUASWIFT_INCLUDE_TOMLKIT=1 swift build
+MOONSWIFT_SHIM_SOURCE=1 LUASWIFT_INCLUDE_TOMLKIT=1 swift test
 ```
 
-The Makefile is added in task F0.3. Until then, use the env-variable form
-above. Every `make` invocation also exports `LUASWIFT_INCLUDE_TOMLKIT=1`
-so the release binary always includes the `luaswift.toml` module; a plain
-`swift build` without the variable still produces a working binary
-(see ARCHITECTURE.md §5.4).
+Run `swift package reset` first if you previously built without
+`MOONSWIFT_SHIM_SOURCE=1` — SPM caches manifest evaluation and can silently
+reuse a stale shim topology (see ARCHITECTURE.md §5.4).
 
 ## License
 
