@@ -11,28 +11,28 @@
 
 // MARK: - ux-spec §8.1 token → ThemeToken mapping
 //
-// The ux-spec uses descriptive names for its 18 tokens. The ThemeToken enum
-// in AppEvent.swift uses Swift-idiomatic names. The mapping is:
+// The ux-spec uses snake_case names; ThemeToken uses Swift camelCase.
+// The mapping is 1:1 except for `operator` (reserved Swift keyword):
 //
 //   ux-spec name     ThemeToken case    Notes
 //   keyword          .keyword           Lua keywords
 //   string           .string            String literals
 //   comment          .comment           Line/block comments
 //   number           .number            Numeric literals
-//   function_name    .function          Function/method declaration names
-//   identifier       .variable          Local vars, parameters, field access
-//   operator         .operatorToken     Arithmetic, relational, concat ops
+//   function_name    .functionName      Function/method declaration names
+//   identifier       .identifier        Local vars, parameters, field access
+//   operator         .operatorToken     Operators (operator is a reserved word)
 //   error            .error             Error diagnostics, ✖ prefixes
 //   warning          .warning           Warning diagnostics, ⚠ prefixes
 //   added            .added             Picker marks (●), new items
 //   focus_border     .focusBorder       Focused pane border, active tab underline
-//   focus_bg         .activeTab         Cursor-line background (§6.6), active tab bg
-//   highlight_bg     .type              Jump-target line background (persistent)
+//   focus_bg         .focusBg           Cursor-line background; cursor-row ▶ gutter mark
+//   highlight_bg     .highlightBg       Jump-target line background (persistent)
 //   highlight_pulse  .highlightPulse    500 ms pulse animation start color
 //   dim              .dim               Secondary labels, non-markable fields
-//   running          .border            [running…] status indicator, spinner color
-//   gutter_bg        .punctuation       Gutter column background (line numbers)
-//   pane_bg          .normal            Default pane content background + text
+//   running          .running           [running…] status indicator, spinner color
+//   gutter_bg        .gutterBg          Gutter column background (line numbers)
+//   pane_bg          .paneBg            Default pane content background + text
 
 // MARK: - Accessibility contract (ux-spec §8.5)
 //
@@ -86,22 +86,22 @@ private let truecolorTable: [ThemeToken: TokenStyle] = [
     .string:        TokenStyle(fg: .rgb(0xF1, 0xFA, 0x8C)),          // #F1FA8C Dracula yellow
     .comment:       TokenStyle(fg: .rgb(0x62, 0x72, 0xA4), italic: true), // #6272A4 Dracula comment
     .number:        TokenStyle(fg: .rgb(0xBD, 0x93, 0xF9)),          // #BD93F9 Dracula purple
-    .function:      TokenStyle(fg: .rgb(0x50, 0xFA, 0x7B)),          // #50FA7B Dracula green
-    .variable:      TokenStyle(fg: .rgb(0xF8, 0xF8, 0xF2)),          // #F8F8F2 Dracula foreground
+    .functionName:  TokenStyle(fg: .rgb(0x50, 0xFA, 0x7B)),          // #50FA7B Dracula green
+    .identifier:    TokenStyle(fg: .rgb(0xF8, 0xF8, 0xF2)),          // #F8F8F2 Dracula foreground
     .operatorToken: TokenStyle(fg: .rgb(0xFF, 0x79, 0xC6)),          // #FF79C6 same as keyword
     // Diagnostic / status tokens
     .error:         TokenStyle(fg: .rgb(0xFF, 0x55, 0x55)),          // #FF5555 Dracula red
     .warning:       TokenStyle(fg: .rgb(0xFF, 0xB8, 0x6C)),          // #FFB86C Dracula orange
-    .added:         TokenStyle(fg: .rgb(0x50, 0xFA, 0x7B)),          // #50FA7B Dracula green (same as function)
+    .added:         TokenStyle(fg: .rgb(0x50, 0xFA, 0x7B)),          // #50FA7B Dracula green (same as functionName)
     // UI chrome tokens
     .focusBorder:   TokenStyle(fg: .rgb(0xBD, 0x93, 0xF9)),          // #BD93F9 Dracula purple
-    .activeTab:     TokenStyle(bg: .rgb(0x44, 0x47, 0x5A)),          // #44475A Dracula selection (cursor-line bg)
-    .type:          TokenStyle(bg: .rgb(0x3D, 0x44, 0x55)),          // #3D4455 jump-target line bg
+    .focusBg:       TokenStyle(bg: .rgb(0x44, 0x47, 0x5A)),          // #44475A Dracula selection (cursor-line bg)
+    .highlightBg:   TokenStyle(bg: .rgb(0x3D, 0x44, 0x55)),          // #3D4455 jump-target line bg
     .highlightPulse: TokenStyle(bg: .rgb(0x62, 0x72, 0xA4)),         // #6272A4 Dracula comment blue (pulse start)
     .dim:           TokenStyle(fg: .rgb(0x62, 0x72, 0xA4)),          // #6272A4 Dracula comment
-    .border:        TokenStyle(fg: .rgb(0x8B, 0xE9, 0xFD)),          // #8BE9FD Dracula cyan (running indicator)
-    .punctuation:   TokenStyle(bg: .rgb(0x28, 0x2A, 0x36)),          // #282A36 Dracula bg (gutter column)
-    .normal:        TokenStyle(fg: .rgb(0xF8, 0xF8, 0xF2), bg: .rgb(0x28, 0x2A, 0x36)), // #F8F8F2 fg / #282A36 bg
+    .running:       TokenStyle(fg: .rgb(0x8B, 0xE9, 0xFD)),          // #8BE9FD Dracula cyan (running indicator)
+    .gutterBg:      TokenStyle(bg: .rgb(0x28, 0x2A, 0x36)),          // #282A36 Dracula bg (gutter column)
+    .paneBg:        TokenStyle(fg: .rgb(0xF8, 0xF8, 0xF2), bg: .rgb(0x28, 0x2A, 0x36)), // #F8F8F2 fg / #282A36 bg
 ]
 
 // MARK: - 256-color table (ux-spec §8.1 palette indices, exact)
@@ -117,22 +117,22 @@ private let color256Table: [ThemeToken: TokenStyle] = [
     .string:        TokenStyle(fg: .index(228)),    // light yellow
     .comment:       TokenStyle(fg: .index(61), italic: true),  // muted blue-purple
     .number:        TokenStyle(fg: .index(141)),    // soft purple
-    .function:      TokenStyle(fg: .index(84)),     // bright green
-    .variable:      TokenStyle(fg: .index(255)),    // near-white
+    .functionName:  TokenStyle(fg: .index(84)),     // bright green
+    .identifier:    TokenStyle(fg: .index(255)),    // near-white
     .operatorToken: TokenStyle(fg: .index(212)),    // medium pink (same as keyword)
     // Diagnostic / status tokens
     .error:         TokenStyle(fg: .index(203)),    // bright red
     .warning:       TokenStyle(fg: .index(215)),    // soft orange
-    .added:         TokenStyle(fg: .index(84)),     // bright green (same as function)
+    .added:         TokenStyle(fg: .index(84)),     // bright green (same as functionName)
     // UI chrome tokens
     .focusBorder:   TokenStyle(fg: .index(141)),    // soft purple
-    .activeTab:     TokenStyle(bg: .index(237)),    // dark gray (cursor-line bg)
-    .type:          TokenStyle(bg: .index(238)),    // slightly lighter gray (jump-target bg)
+    .focusBg:       TokenStyle(bg: .index(237)),    // dark gray (cursor-line bg)
+    .highlightBg:   TokenStyle(bg: .index(238)),    // slightly lighter gray (jump-target bg)
     .highlightPulse: TokenStyle(bg: .index(61)),   // muted blue-purple (pulse start)
     .dim:           TokenStyle(fg: .index(61)),     // muted blue-purple
-    .border:        TokenStyle(fg: .index(117)),    // light cyan (running indicator)
-    .punctuation:   TokenStyle(bg: .index(236)),    // very dark gray (gutter column)
-    .normal:        TokenStyle(fg: .index(255), bg: .index(235)), // near-white fg / dark gray bg
+    .running:       TokenStyle(fg: .index(117)),    // light cyan (running indicator)
+    .gutterBg:      TokenStyle(bg: .index(236)),    // very dark gray (gutter column)
+    .paneBg:        TokenStyle(fg: .index(255), bg: .index(235)), // near-white fg / dark gray bg
 ]
 
 // MARK: - NO_COLOR table (ux-spec §8.3, §4.3)
@@ -152,8 +152,8 @@ private let noColorTable: [ThemeToken: TokenStyle] = [
     .string:         TokenStyle(),
     .comment:        TokenStyle(),
     .number:         TokenStyle(),
-    .function:       TokenStyle(),
-    .variable:       TokenStyle(),
+    .functionName:   TokenStyle(),
+    .identifier:     TokenStyle(),
     .operatorToken:  TokenStyle(),
     // Diagnostic / status tokens: Bold on severity markers (E/W chars always present)
     .error:          TokenStyle(bold: true),    // E-prefix char is the primary marker
@@ -161,11 +161,11 @@ private let noColorTable: [ThemeToken: TokenStyle] = [
     .added:          TokenStyle(),              // ● char is the marker
     // UI chrome tokens: Bold for focus (the only focus indicator in NO_COLOR)
     .focusBorder:    TokenStyle(bold: true),    // Bold border signals focus (ux-spec §4.3)
-    .activeTab:      TokenStyle(underline: true), // Underline marks the active tab
-    .type:           TokenStyle(),
+    .focusBg:        TokenStyle(),              // Cursor-line bg: ▶ gutter mark is the indicator
+    .highlightBg:    TokenStyle(),
     .highlightPulse: TokenStyle(),
     .dim:            TokenStyle(),
-    .border:         TokenStyle(),              // Unfocused borders: terminal default
-    .punctuation:    TokenStyle(),
-    .normal:         TokenStyle(),
+    .running:        TokenStyle(),              // [running…] text is the marker
+    .gutterBg:       TokenStyle(),
+    .paneBg:         TokenStyle(),
 ]
