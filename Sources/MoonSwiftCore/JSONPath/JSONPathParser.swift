@@ -25,7 +25,7 @@ struct JSONPathParser {
     // MARK: State
 
     private let input: [Unicode.Scalar]  // full scalar sequence for random access
-    private var pos: Int                 // current cursor (scalar index)
+    private var pos: Int  // current cursor (scalar index)
 
     // MARK: Init
 
@@ -52,9 +52,9 @@ struct JSONPathParser {
             if ch == "." {
                 // Could be a dot-child segment (`.name`, `.*`) or a descendant
                 // segment (`..name`, `..*`, `..['name']`, `..[*]`).
-                advance()                               // consume first .
+                advance()  // consume first .
                 if pos < input.count && current() == "." {
-                    advance()                           // consume second .
+                    advance()  // consume second .
                     // Descendant: what follows is a selector.
                     let selector = try parseDescendantSelector()
                     segments.append(.descendant(selector))
@@ -219,33 +219,33 @@ struct JSONPathParser {
     /// closing quote.
     private mutating func parseQuotedString() throws(JSONPathError) -> String {
         let quotePos = pos
-        let quote = current()   // ' or "
-        advance()               // consume opening quote
+        let quote = current()  // ' or "
+        advance()  // consume opening quote
 
         var result = ""
         while pos < input.count {
             let ch = current()
             if ch == quote {
-                advance()       // consume closing quote
+                advance()  // consume closing quote
                 return result
             }
             if ch == "\\" {
                 let escStart = pos
-                advance()       // consume backslash
+                advance()  // consume backslash
                 guard pos < input.count else {
                     throw .unterminatedQuote(offset: quotePos)
                 }
                 let esc = current()
-                advance()       // consume escape character
+                advance()  // consume escape character
                 switch esc {
-                case "b":  result.append("\u{0008}")
-                case "f":  result.append("\u{000C}")
-                case "n":  result.append("\n")
-                case "r":  result.append("\r")
-                case "t":  result.append("\t")
+                case "b": result.append("\u{0008}")
+                case "f": result.append("\u{000C}")
+                case "n": result.append("\n")
+                case "r": result.append("\r")
+                case "t": result.append("\t")
                 case "\\": result.append("\\")
-                case "/":  result.append("/")
-                case "'":  result.append("'")
+                case "/": result.append("/")
+                case "'": result.append("'")
                 case "\"": result.append("\"")
                 case "u":
                     // \uXXXX — four hex digits.
@@ -278,7 +278,8 @@ struct JSONPathParser {
             advance()
         }
         guard let codePoint = UInt32(hexString, radix: 16),
-              let scalar = Unicode.Scalar(codePoint) else {
+            let scalar = Unicode.Scalar(codePoint)
+        else {
             throw .invalidEscapeSequence(offset: escapedAt)
         }
         return scalar

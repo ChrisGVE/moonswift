@@ -7,6 +7,7 @@
 // Downstream: (test target — nothing imports this)
 
 import Testing
+
 @testable import RatatuiKit
 
 // MARK: - Rect
@@ -41,29 +42,29 @@ struct ConstraintTests {
     @Test("Constraint.length kind and valueA")
     func lengthConstraint() {
         let c = Constraint.length(30)
-        #expect(c.kind == 0)   // LENGTH = 0 from ratatui_ffi.h
+        #expect(c.kind == 0)  // LENGTH = 0 from ratatui_ffi.h
         #expect(c.valueA == 30)
-        #expect(c.valueB == 1) // unused
+        #expect(c.valueB == 1)  // unused
     }
 
     @Test("Constraint.percentage kind and valueA")
     func percentageConstraint() {
         let c = Constraint.percentage(50)
-        #expect(c.kind == 1)   // PERCENTAGE = 1
+        #expect(c.kind == 1)  // PERCENTAGE = 1
         #expect(c.valueA == 50)
     }
 
     @Test("Constraint.fill default weight is 1")
     func fillDefaultWeight() {
         let c = Constraint.fill()
-        #expect(c.kind == 5)   // FILL = 5
+        #expect(c.kind == 5)  // FILL = 5
         #expect(c.valueA == 1)
     }
 
     @Test("Constraint.ratio carries numerator and denominator")
     func ratioConstraint() {
         let c = Constraint.ratio(1, 3)
-        #expect(c.kind == 4)   // RATIO = 4
+        #expect(c.kind == 4)  // RATIO = 4
         #expect(c.valueA == 1)
         #expect(c.valueB == 3)
     }
@@ -85,10 +86,10 @@ struct BorderBitsTests {
 
     @Test("BorderBits individual edges are distinct")
     func individualEdgesDistinct() {
-        let top    = BorderBits.top
-        let right  = BorderBits.right
+        let top = BorderBits.top
+        let right = BorderBits.right
         let bottom = BorderBits.bottom
-        let left   = BorderBits.left
+        let left = BorderBits.left
         #expect(!top.contains(.right))
         #expect(!right.contains(.bottom))
         #expect(!bottom.contains(.left))

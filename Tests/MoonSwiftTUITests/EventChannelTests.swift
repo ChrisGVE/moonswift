@@ -5,8 +5,9 @@
 // Upstream: EventChannel.swift
 // Downstream: (test target)
 
-import Testing
 import Dispatch
+import Testing
+
 @testable import MoonSwiftTUI
 
 // MARK: - Helpers
@@ -172,14 +173,16 @@ struct EventChannelTests {
         // Within A: .lintEngineReady must precede .catalogProbed.
         if aIndices.count == 2 {
             #expect(aIndices[0] < aIndices[1])
-            if case .lintEngineReady = events[aIndices[0]] {} else {
+            if case .lintEngineReady = events[aIndices[0]] {
+            } else {
                 Issue.record("Expected .lintEngineReady first in producer A's sequence")
             }
         }
         // Within B: .appStarted must precede .tick.
         if bIndices.count == 2 {
             #expect(bIndices[0] < bIndices[1])
-            if case .appStarted = events[bIndices[0]] {} else {
+            if case .appStarted = events[bIndices[0]] {
+            } else {
                 Issue.record("Expected .appStarted first in producer B's sequence")
             }
         }

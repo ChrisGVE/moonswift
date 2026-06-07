@@ -6,8 +6,9 @@
 // Upstream: MoonSwiftCore/Project/ProjectStore.swift
 // Downstream: (test target — nothing imports this)
 
-import Testing
 import Foundation
+import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - ProjectStore.loadFromString
@@ -80,21 +81,21 @@ struct ProjectStoreLoadFromStringTests {
     @Test("loaded result for valid full file — diagnostics may have warnings only")
     func loadFullFileReturnsLoaded() {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [[source]]
-        path = "scripts/init.lua"
+            [[source]]
+            path = "scripts/init.lua"
 
-        [run]
-        config = "sandboxed"
-        instruction_limit = 500
+            [run]
+            config = "sandboxed"
+            instruction_limit = 500
 
-        [lint]
-        extra_modules = ["iox"]
+            [lint]
+            extra_modules = ["iox"]
 
-        [settings]
-        theme = "default"
-        """
+            [settings]
+            theme = "default"
+            """
         let result = ProjectStore.loadFromString(toml)
         if case let .loaded(file, diags) = result {
             #expect(file.luaVersion == "5.4")
@@ -110,11 +111,11 @@ struct ProjectStoreLoadFromStringTests {
     @Test("unknown keys produce loaded result with one warning")
     func unknownKeysProduceLoadedWithWarning() {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [future_feature]
-        enabled = true
-        """
+            [future_feature]
+            enabled = true
+            """
         let result = ProjectStore.loadFromString(toml)
         if case let .loaded(_, diags) = result {
             #expect(diags.count == 1)
@@ -127,11 +128,11 @@ struct ProjectStoreLoadFromStringTests {
     @Test("invalid extra_module produces loaded result with error diagnostic")
     func invalidExtraModuleProducesError() {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [lint]
-        extra_modules = ["notvalid"]
-        """
+            [lint]
+            extra_modules = ["notvalid"]
+            """
         let result = ProjectStore.loadFromString(
             toml,
             extraModulesAllowList: { ["iox", "http", "ui"] }
@@ -146,11 +147,11 @@ struct ProjectStoreLoadFromStringTests {
     @Test("unrecognised run.config in TOML produces error diagnostic")
     func unrecognisedRunConfig() {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [run]
-        config = "turbo"
-        """
+            [run]
+            config = "turbo"
+            """
         let result = ProjectStore.loadFromString(toml)
         if case let .loaded(_, diags) = result {
             #expect(diags.contains { $0.severity == .error && $0.message.contains("turbo") })
@@ -203,7 +204,8 @@ struct ProjectStoreFixtureTests {
 
     @Test("fixture invalid_lua_version.toml returns unsupportedVersion")
     func fixtureInvalidLuaVersion() throws {
-        let url = try #require(Bundle.module.url(forResource: "Fixtures/Project/invalid_lua_version", withExtension: "toml"))
+        let url = try #require(
+            Bundle.module.url(forResource: "Fixtures/Project/invalid_lua_version", withExtension: "toml"))
         let content = try String(contentsOf: url, encoding: .utf8)
         let result = ProjectStore.loadFromString(content)
         if case .unsupportedVersion = result {

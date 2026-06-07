@@ -187,7 +187,7 @@ public enum ThemeToken: Sendable, Equatable, CaseIterable {
     case function
     case type
     case variable
-    case operator_
+    case operatorToken
     case punctuation
     // UI chrome tokens
     case border

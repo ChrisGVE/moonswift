@@ -13,6 +13,7 @@
 import CryptoKit
 import Foundation
 import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - SourceID tests
@@ -295,7 +296,8 @@ struct SourceStoreLoadLuaFileTests {
         let event2 = await SourceStore.loadLuaFile(at: "hello.lua", projectRoot: root, id: id)
 
         guard case .loaded(_, let f1) = event1,
-              case .loaded(_, let f2) = event2 else {
+            case .loaded(_, let f2) = event2
+        else {
             Issue.record("Expected both .loaded")
             return
         }
@@ -349,8 +351,8 @@ struct SourceStoreLoadLuaFileTests {
     func directoryAsFileFails() async {
         // Use the fixtures root itself as the "file" path — it exists but is a directory.
         // Data(contentsOf:) will fail with an I/O error.
-        let root = fixturesRoot.deletingLastPathComponent() // one level up
-        let dirName = fixturesRoot.lastPathComponent         // "Sources"
+        let root = fixturesRoot.deletingLastPathComponent()  // one level up
+        let dirName = fixturesRoot.lastPathComponent  // "Sources"
 
         let event = await SourceStore.loadLuaFile(
             at: dirName,
@@ -386,7 +388,7 @@ struct SourceStoreIntegrationTests {
     @Test("loadAll dispatches callback for each lua entry")
     func loadAllCallbackDispatched() async {
         let entries = [
-            SourceEntry(path: "hello.lua", fields: []),
+            SourceEntry(path: "hello.lua", fields: [])
         ]
 
         // Collect events via an actor to avoid data races.
@@ -428,9 +430,11 @@ struct SourceStoreIntegrationTests {
     @Test("loadAll dispatches callback for structured-file entry")
     func loadAllDispatchesStructuredFile() async {
         let entries = [
-            SourceEntry(path: "scripts.json", fields: [
-                FieldDesignation(jsonpath: "$.scripts.init", document: 0),
-            ]),
+            SourceEntry(
+                path: "scripts.json",
+                fields: [
+                    FieldDesignation(jsonpath: "$.scripts.init", document: 0)
+                ])
         ]
 
         actor EventCollector {
@@ -532,8 +536,8 @@ struct SourceStoreLoadStructuredFileTests {
         let fileURL = fixturesRoot.appendingPathComponent("scripts.json")
         let data = try! Data(contentsOf: fileURL)
         let spanStart = fragment.provenance.byteRange.lowerBound
-        let spanEnd   = fragment.provenance.byteRange.upperBound
-        let spanText  = String(data: data[spanStart..<spanEnd], encoding: .utf8)
+        let spanEnd = fragment.provenance.byteRange.upperBound
+        let spanText = String(data: data[spanStart..<spanEnd], encoding: .utf8)
 
         #expect(spanText == fragment.code)
     }
@@ -623,8 +627,8 @@ struct SourceStoreLoadStructuredFileTests {
         let fileURL = fixturesRoot.appendingPathComponent("scripts.yaml")
         let data = try! Data(contentsOf: fileURL)
         let spanStart = fragment.provenance.byteRange.lowerBound
-        let spanEnd   = fragment.provenance.byteRange.upperBound
-        let spanText  = String(data: data[spanStart..<spanEnd], encoding: .utf8)
+        let spanEnd = fragment.provenance.byteRange.upperBound
+        let spanText = String(data: data[spanStart..<spanEnd], encoding: .utf8)
 
         #expect(spanText == fragment.code)
     }
@@ -672,8 +676,8 @@ struct SourceStoreLoadStructuredFileTests {
         let fileURL = fixturesRoot.appendingPathComponent("scripts.toml")
         let data = try! Data(contentsOf: fileURL)
         let spanStart = fragment.provenance.byteRange.lowerBound
-        let spanEnd   = fragment.provenance.byteRange.upperBound
-        let spanText  = String(data: data[spanStart..<spanEnd], encoding: .utf8)
+        let spanEnd = fragment.provenance.byteRange.upperBound
+        let spanText = String(data: data[spanStart..<spanEnd], encoding: .utf8)
 
         #expect(spanText == fragment.code)
     }

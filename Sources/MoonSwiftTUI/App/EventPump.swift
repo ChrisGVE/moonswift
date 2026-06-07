@@ -185,13 +185,13 @@ public final class EventPump: @unchecked Sendable {
 
 // MARK: - AppEvent translation
 
-private extension AppEvent {
+extension AppEvent {
 
     /// Translates a decoded `RatatuiKit.Event` into an `AppEvent`.
     ///
     /// Returns `nil` for event kinds with no AppEvent counterpart (reserved for
     /// forward compatibility with new shim event kinds).
-    init?(from event: Event) {
+    fileprivate init?(from event: Event) {
         switch event {
         case .key(let code, let modifiers):
             self = .key(code, modifiers: modifiers)

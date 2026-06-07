@@ -83,9 +83,9 @@ public enum ProjectValidation {
         guard version == "5.4" else {
             diagnostics.append(
                 .projectError(
-                    "lua_version \"\(version)\" is not supported by this build — " +
-                    "MoonSwift P1 requires lua_version = \"5.4\"; " +
-                    "run and lint are disabled until the version is updated"
+                    "lua_version \"\(version)\" is not supported by this build — "
+                        + "MoonSwift P1 requires lua_version = \"5.4\"; "
+                        + "run and lint are disabled until the version is updated"
                 )
             )
             return
@@ -110,8 +110,8 @@ public enum ProjectValidation {
             if path.hasPrefix("/") {
                 diagnostics.append(
                     .projectError(
-                        "source[\(index)].path \"\(path)\" is an absolute path — " +
-                        "source paths must be relative to the project root"
+                        "source[\(index)].path \"\(path)\" is an absolute path — "
+                            + "source paths must be relative to the project root"
                     )
                 )
             }
@@ -120,8 +120,8 @@ public enum ProjectValidation {
             if escapesProjectRoot(path) {
                 diagnostics.append(
                     .projectError(
-                        "source[\(index)].path \"\(path)\" escapes the project root — " +
-                        "paths must not traverse above the project directory"
+                        "source[\(index)].path \"\(path)\" escapes the project root — "
+                            + "paths must not traverse above the project directory"
                     )
                 )
             }
@@ -130,8 +130,8 @@ public enum ProjectValidation {
             if let firstIndex = seenPaths[path] {
                 diagnostics.append(
                     .projectError(
-                        "source[\(index)].path \"\(path)\" is a duplicate of " +
-                        "source[\(firstIndex)].path — each source path must be unique"
+                        "source[\(index)].path \"\(path)\" is a duplicate of "
+                            + "source[\(firstIndex)].path — each source path must be unique"
                     )
                 )
             } else {
@@ -144,9 +144,9 @@ public enum ProjectValidation {
                 if ext == "json" || ext == "toml" {
                     diagnostics.append(
                         .projectError(
-                            "source[\(index)].field[\(fieldIndex)].document = \(field.document) " +
-                            "is not valid for \"\(path)\" — " +
-                            "the `document` key is only meaningful for YAML multi-document files"
+                            "source[\(index)].field[\(fieldIndex)].document = \(field.document) "
+                                + "is not valid for \"\(path)\" — "
+                                + "the `document` key is only meaningful for YAML multi-document files"
                         )
                     )
                 }
@@ -195,8 +195,8 @@ public enum ProjectValidation {
         guard valid.contains(rawConfigString) else {
             diagnostics.append(
                 .projectError(
-                    "run.config \"\(rawConfigString)\" is not valid — " +
-                    "accepted values: \(valid.map { "\"\($0)\"" }.joined(separator: ", "))"
+                    "run.config \"\(rawConfigString)\" is not valid — "
+                        + "accepted values: \(valid.map { "\"\($0)\"" }.joined(separator: ", "))"
                 )
             )
             return
@@ -225,8 +225,8 @@ public enum ProjectValidation {
         if run.instructionLimit < 0 {
             diagnostics.append(
                 .projectError(
-                    "run.instruction_limit \(run.instructionLimit) is negative — " +
-                    "use 0 for unlimited or a positive integer to set a limit"
+                    "run.instruction_limit \(run.instructionLimit) is negative — "
+                        + "use 0 for unlimited or a positive integer to set a limit"
                 )
             )
         }
@@ -235,8 +235,8 @@ public enum ProjectValidation {
         if run.wallClockLimitMs < 0 {
             diagnostics.append(
                 .projectError(
-                    "run.wall_clock_limit_ms \(run.wallClockLimitMs) is negative — " +
-                    "use 0 for unlimited or a positive integer to set a limit"
+                    "run.wall_clock_limit_ms \(run.wallClockLimitMs) is negative — "
+                        + "use 0 for unlimited or a positive integer to set a limit"
                 )
             )
         }
@@ -249,10 +249,10 @@ public enum ProjectValidation {
         if run.wallClockLimitMs > 0 && !ProjectValidation.hasLuaSwift22Support {
             diagnostics.append(
                 .projectWarning(
-                    "run.wall_clock_limit_ms is set but has no effect in this build — " +
-                    "wall-clock limits require LuaSwift cooperative-cancellation support " +
-                    "(LuaSwift#22), which is not yet available; " +
-                    "the run will continue to its natural end or instruction_limit"
+                    "run.wall_clock_limit_ms is set but has no effect in this build — "
+                        + "wall-clock limits require LuaSwift cooperative-cancellation support "
+                        + "(LuaSwift#22), which is not yet available; "
+                        + "the run will continue to its natural end or instruction_limit"
                 )
             )
         }
@@ -266,8 +266,7 @@ public enum ProjectValidation {
         guard validThemes.contains(settings.theme) else {
             diagnostics.append(
                 .projectError(
-                    "settings.theme \"\(settings.theme)\" is not recognised — " +
-                    "P1 supports only theme = \"default\""
+                    "settings.theme \"\(settings.theme)\" is not recognised — " + "P1 supports only theme = \"default\""
                 )
             )
             return
@@ -289,8 +288,8 @@ public enum ProjectValidation {
         for name in extraModules where !allowList.contains(name) {
             diagnostics.append(
                 .projectError(
-                    "lint.extra_modules contains unknown module \"\(name)\" — " +
-                    "valid opt-in modules: \(allowList.sorted().map { "\"\($0)\"" }.joined(separator: ", "))"
+                    "lint.extra_modules contains unknown module \"\(name)\" — "
+                        + "valid opt-in modules: \(allowList.sorted().map { "\"\($0)\"" }.joined(separator: ", "))"
                 )
             )
         }
@@ -314,8 +313,8 @@ public enum ProjectValidation {
         if jsonpath.isEmpty {
             diagnostics.append(
                 .projectError(
-                    "source[\(sourceIndex)].field[\(fieldIndex)].jsonpath is empty — " +
-                    "a valid RFC 9535 JSONPath expression is required (e.g. \"$.scripts.init\")"
+                    "source[\(sourceIndex)].field[\(fieldIndex)].jsonpath is empty — "
+                        + "a valid RFC 9535 JSONPath expression is required (e.g. \"$.scripts.init\")"
                 )
             )
         }
@@ -333,9 +332,9 @@ public enum ProjectValidation {
     /// shipped), `wall_clock_limit_ms > 0` emits a warning diagnostic.
     static var hasLuaSwift22Support: Bool {
         #if MOONSWIFT_HAS_LUASWIFT_22
-        return true
+            return true
         #else
-        return false
+            return false
         #endif
     }
 

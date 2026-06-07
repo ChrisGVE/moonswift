@@ -46,7 +46,8 @@ public struct NormalizedPath: Sendable, Equatable, CustomStringConvertible {
                     out += ".\(name)"
                 } else {
                     // Escape single quotes and backslashes inside the bracket name.
-                    let escaped = name
+                    let escaped =
+                        name
                         .replacingOccurrences(of: "\\", with: "\\\\")
                         .replacingOccurrences(of: "'", with: "\\'")
                     out += "['\(escaped)']"
@@ -67,8 +68,7 @@ public struct NormalizedPath: Sendable, Equatable, CustomStringConvertible {
     private func isDotNotationSafe(_ name: String) -> Bool {
         guard !name.isEmpty else { return false }
         return name.unicodeScalars.allSatisfy { ch in
-            (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") ||
-            (ch >= "0" && ch <= "9") || ch == "_"
+            (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch == "_"
         }
     }
 }
@@ -171,7 +171,8 @@ public struct JSONPathExpression: Sendable {
             if isDotSafe(key) {
                 return ".\(key)"
             } else {
-                let escaped = key
+                let escaped =
+                    key
                     .replacingOccurrences(of: "\\", with: "\\\\")
                     .replacingOccurrences(of: "'", with: "\\'")
                 return "['\(escaped)']"
@@ -190,7 +191,8 @@ public struct JSONPathExpression: Sendable {
             if isDotSafe(key) {
                 return key
             } else {
-                let escaped = key
+                let escaped =
+                    key
                     .replacingOccurrences(of: "\\", with: "\\\\")
                     .replacingOccurrences(of: "'", with: "\\'")
                 return "['\(escaped)']"
@@ -206,8 +208,7 @@ public struct JSONPathExpression: Sendable {
     private static func isDotSafe(_ key: String) -> Bool {
         guard !key.isEmpty else { return false }
         return key.unicodeScalars.allSatisfy { ch in
-            (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") ||
-            (ch >= "0" && ch <= "9") || ch == "_"
+            (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch == "_"
         }
     }
 }

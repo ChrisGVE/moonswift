@@ -185,9 +185,9 @@ public final class Terminal {
 @inline(__always)
 func assertRenderClass(owningThread: Thread) {
     #if DEBUG
-    let current = Thread.current
-    let isOwner = current === owningThread || current.isMainThread && owningThread.isMainThread
-    precondition(isOwner, "[\(renderClassLabel)] called from wrong thread — must be the UI thread")
+        let current = Thread.current
+        let isOwner = current === owningThread || current.isMainThread && owningThread.isMainThread
+        precondition(isOwner, "[\(renderClassLabel)] called from wrong thread — must be the UI thread")
     #endif
 }
 
@@ -200,9 +200,9 @@ func assertRenderClass(owningThread: Thread) {
 @inline(__always)
 func assertInputClass(pumpThread: Thread) {
     #if DEBUG
-    precondition(
-        Thread.current === pumpThread,
-        "[\(inputClassLabel)] called from wrong thread — must be the EventPump thread"
-    )
+        precondition(
+            Thread.current === pumpThread,
+            "[\(inputClassLabel)] called from wrong thread — must be the EventPump thread"
+        )
     #endif
 }

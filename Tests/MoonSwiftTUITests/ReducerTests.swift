@@ -6,12 +6,13 @@
 // Upstream: Reducer.swift, AppState.swift, AppEvent.swift, Effect.swift
 // Downstream: (test target)
 
-import Testing
-import Foundation
-@testable import MoonSwiftTUI
-import MoonSwiftCore
 import CryptoKit
+import Foundation
+import MoonSwiftCore
 import RatatuiKit
+import Testing
+
+@testable import MoonSwiftTUI
 
 // MARK: - Helpers
 
@@ -60,8 +61,14 @@ struct ReducerLifecycleTests {
         let state = AppState()
         let (_, effects) = reduce(state, .appStarted)
 
-        let hasLoadSources = effects.contains { if case .loadSources = $0 { return true }; return false }
-        let hasPrewarm = effects.contains { if case .prewarmLint = $0 { return true }; return false }
+        let hasLoadSources = effects.contains {
+            if case .loadSources = $0 { return true }
+            return false
+        }
+        let hasPrewarm = effects.contains {
+            if case .prewarmLint = $0 { return true }
+            return false
+        }
 
         #expect(hasLoadSources, "appStarted must return .loadSources")
         #expect(hasPrewarm, "appStarted must return .prewarmLint")
@@ -131,7 +138,10 @@ struct ReducerSourceLoadingTests {
         #expect(next.sources[id] != nil)
         #expect(next.navigatorOrder.contains(id))
 
-        let hasHighlight = effects.contains { if case .highlight(let eid) = $0 { return eid == id }; return false }
+        let hasHighlight = effects.contains {
+            if case .highlight(let eid) = $0 { return eid == id }
+            return false
+        }
         #expect(hasHighlight, "sourceLoaded must request a highlight effect")
     }
 
@@ -159,9 +169,10 @@ struct ReducerSourceLoadingTests {
         let url = URL(fileURLWithPath: "/init.lua")
         let data = Data("print()".utf8)
         let hash = SHA256.hash(data: data)
-        let prov = FragmentProvenance(file: url, jsonpath: nil, document: 0,
-                                       byteRange: 0..<data.count, lineOffset: 0,
-                                       contentHash: hash)
+        let prov = FragmentProvenance(
+            file: url, jsonpath: nil, document: 0,
+            byteRange: 0..<data.count, lineOffset: 0,
+            contentHash: hash)
         let fragment = LuaSourceFragment(code: "print()", provenance: prov)
 
         let (next, _) = reduce(state, .sourceLoaded(id: id, fragment: fragment))
@@ -180,10 +191,14 @@ struct ReducerRunFlowTests {
         let (state, _) = stateWithLoadedSource()
         let (next, effects) = reduce(state, .key(.char("r"), modifiers: []))
 
-        if case .running = next.runState {} else {
+        if case .running = next.runState {
+        } else {
             Issue.record("Expected runState .running after r key")
         }
-        let hasRun = effects.contains { if case .run = $0 { return true }; return false }
+        let hasRun = effects.contains {
+            if case .run = $0 { return true }
+            return false
+        }
         #expect(hasRun, "r key must produce .run effect")
         let hasStartTick = effects.contains {
             if case .startTick(let i) = $0 { return i == TickInterval.run }
@@ -200,11 +215,15 @@ struct ReducerRunFlowTests {
         let (next, effects) = reduce(state, .key(.char("r"), modifiers: []))
 
         // runState unchanged; a transient is set; no .run effect.
-        if case .running = next.runState {} else {
+        if case .running = next.runState {
+        } else {
             Issue.record("Expected runState to remain .running")
         }
         #expect(next.transient != nil, "Should set a transient when run is blocked")
-        let hasRun = effects.contains { if case .run = $0 { return true }; return false }
+        let hasRun = effects.contains {
+            if case .run = $0 { return true }
+            return false
+        }
         #expect(!hasRun, "r key during active run must not produce .run effect")
     }
 
@@ -244,11 +263,15 @@ struct ReducerRunFlowTests {
 
         let (next, effects) = reduce(state, .runFinished(.cancelled))
 
-        if case .completed(.cancelled) = next.runState {} else {
+        if case .completed(.cancelled) = next.runState {
+        } else {
             Issue.record("Expected .completed(.cancelled) state")
         }
         // No tick needed after run ends with no transient.
-        let hasStopTick = effects.contains { if case .stopTick = $0 { return true }; return false }
+        let hasStopTick = effects.contains {
+            if case .stopTick = $0 { return true }
+            return false
+        }
         #expect(hasStopTick, "runFinished with no active transient must stop the tick")
     }
 }
@@ -264,7 +287,10 @@ struct ReducerLintFlowTests {
         let (next, effects) = reduce(state, .key(.char("l"), modifiers: []))
 
         #expect(next.lintState == .running)
-        let hasLint = effects.contains { if case .lint = $0 { return true }; return false }
+        let hasLint = effects.contains {
+            if case .lint = $0 { return true }
+            return false
+        }
         #expect(hasLint, "l key must produce .lint effect")
     }
 
@@ -294,7 +320,8 @@ struct ReducerLintFlowTests {
     @Test("prePassResult clears previous pre-pass diagnostic on success")
     func prePassResultClears() {
         var state = AppState()
-        state.bottomPane.prePassDiagnostic = Diagnostic(severity: .error, line: 1, message: "syntax error", source: .syntaxPrePass)
+        state.bottomPane.prePassDiagnostic = Diagnostic(
+            severity: .error, line: 1, message: "syntax error", source: .syntaxPrePass)
 
         let (next, _) = reduce(state, .prePassResult(nil))
         #expect(next.bottomPane.prePassDiagnostic == nil)
@@ -444,7 +471,10 @@ struct ReducerTickTests {
 
         let (next, effects) = reduce(state, .tick)
         #expect(next.transient == nil, "Tick must clear an expired transient")
-        let hasStopTick = effects.contains { if case .stopTick = $0 { return true }; return false }
+        let hasStopTick = effects.contains {
+            if case .stopTick = $0 { return true }
+            return false
+        }
         #expect(hasStopTick, "After transient cleared with no other consumers, tick must stop")
     }
 

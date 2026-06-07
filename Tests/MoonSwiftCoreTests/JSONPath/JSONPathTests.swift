@@ -12,8 +12,9 @@
 // Upstream: JSONPathExpression, JSONPathError, NormalizedPath, ResolvedStep
 // Downstream: (test target)
 
-import Testing
 import Collections
+import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - Helpers
@@ -54,13 +55,19 @@ private func eval(
 ///       "expensive": 10
 ///     }
 private let sampleDoc: TreeValue = treeMap([
-    ("store", treeMap([
-        ("book", .array([
-            treeMap([("title", .string("A")), ("price", .int(8))]),
-            treeMap([("title", .string("B")), ("price", .int(12))]),
-        ])),
-        ("open", .bool(true)),
-    ])),
+    (
+        "store",
+        treeMap([
+            (
+                "book",
+                .array([
+                    treeMap([("title", .string("A")), ("price", .int(8))]),
+                    treeMap([("title", .string("B")), ("price", .int(12))]),
+                ])
+            ),
+            ("open", .bool(true)),
+        ])
+    ),
     ("expensive", .int(10)),
 ])
 
@@ -151,7 +158,7 @@ struct JSONPathBracketNameTests {
 
     @Test("bracket child matches dot child for simple names")
     func bracketEquivalentDot() throws {
-        let dotResults  = try eval("$.expensive", on: sampleDoc)
+        let dotResults = try eval("$.expensive", on: sampleDoc)
         let brktResults = try eval("$['expensive']", on: sampleDoc)
         #expect(dotResults.map(\.value) == brktResults.map(\.value))
     }
@@ -166,7 +173,7 @@ struct JSONPathBracketNameTests {
 
     @Test("escape: backslash-n becomes newline")
     func escapeNewline() throws {
-        let doc = treeMap([(  "line\nbreak", .string("nl"))])
+        let doc = treeMap([("line\nbreak", .string("nl"))])
         let results = try eval("$['line\\nbreak']", on: doc)
         #expect(results.count == 1)
         #expect(results[0].value == .string("nl"))
@@ -361,10 +368,13 @@ struct JSONPathDescendantTests {
     @Test("descendant index finds element at all array levels")
     func descendantIndex() throws {
         let doc = treeMap([
-            ("outer", .array([
-                .array([.string("deep"), .string("deeper")]),
-                .string("shallow"),
-            ])),
+            (
+                "outer",
+                .array([
+                    .array([.string("deep"), .string("deeper")]),
+                    .string("shallow"),
+                ])
+            )
         ])
         // $.outer..[0] → outer[0] (inner array), outer[0][0] ("deep")
         let results = try eval("$.outer..[0]", on: doc)
@@ -374,7 +384,7 @@ struct JSONPathDescendantTests {
     @Test("descendant bracket-quoted name")
     func descendantBracketQuoted() throws {
         let doc = treeMap([
-            ("x", treeMap([("a b", .string("found"))])),
+            ("x", treeMap([("a b", .string("found"))]))
         ])
         let results = try eval("$..[\"a b\"]", on: doc)
         #expect(results.count == 1)
@@ -582,8 +592,8 @@ struct JSONPathMalformedTests {
             _ = try JSONPathExpression(parsing: ".a.b")
             Issue.record("Expected parse error")
         } catch let error as JSONPathError {
-            if case .missingRoot = error { /* correct */ }
-            else { Issue.record("Expected missingRoot, got \(error)") }
+            // correct outcome
+            if case .missingRoot = error {} else { Issue.record("Expected missingRoot, got \(error)") }
         } catch { Issue.record("Unexpected error: \(error)") }
     }
 
@@ -593,8 +603,11 @@ struct JSONPathMalformedTests {
             _ = try JSONPathExpression(parsing: "$['unterminated")
             Issue.record("Expected parse error")
         } catch let error as JSONPathError {
-            if case .unterminatedQuote = error { /* correct */ }
-            else { Issue.record("Expected unterminatedQuote, got \(error)") }
+            // correct outcome
+            if case .unterminatedQuote = error {
+            } else {
+                Issue.record("Expected unterminatedQuote, got \(error)")
+            }
         } catch { Issue.record("Unexpected error: \(error)") }
     }
 
@@ -604,8 +617,11 @@ struct JSONPathMalformedTests {
             _ = try JSONPathExpression(parsing: "$[0")
             Issue.record("Expected parse error")
         } catch let error as JSONPathError {
-            if case .unterminatedBracket = error { /* correct */ }
-            else { Issue.record("Expected unterminatedBracket, got \(error)") }
+            // correct outcome
+            if case .unterminatedBracket = error {
+            } else {
+                Issue.record("Expected unterminatedBracket, got \(error)")
+            }
         } catch { Issue.record("Unexpected error: \(error)") }
     }
 
@@ -615,8 +631,11 @@ struct JSONPathMalformedTests {
             _ = try JSONPathExpression(parsing: "$['\\z']")
             Issue.record("Expected parse error")
         } catch let error as JSONPathError {
-            if case .invalidEscapeSequence = error { /* correct */ }
-            else { Issue.record("Expected invalidEscapeSequence, got \(error)") }
+            // correct outcome
+            if case .invalidEscapeSequence = error {
+            } else {
+                Issue.record("Expected invalidEscapeSequence, got \(error)")
+            }
         } catch { Issue.record("Unexpected error: \(error)") }
     }
 
@@ -629,7 +648,7 @@ struct JSONPathMalformedTests {
             // Could be unexpectedEnd or unexpectedCharacter depending on context
             switch error {
             case .unexpectedEnd, .unexpectedCharacter:
-                break // correct
+                break  // correct
             default:
                 Issue.record("Expected unexpectedEnd or unexpectedCharacter, got \(error)")
             }
@@ -658,7 +677,9 @@ struct JSONPathMultiMatchTests {
         ])
         let results = try eval("$.*", on: doc)
         #expect(results.count == 3)
-        #expect(Set(results.map { ($0.value == .string("X") || $0.value == .string("Y") || $0.value == .string("Z")) }).count == 1)
+        #expect(
+            Set(results.map { ($0.value == .string("X") || $0.value == .string("Y") || $0.value == .string("Z")) })
+                .count == 1)
     }
 
     @Test("descendant name matching at two depths")
@@ -674,9 +695,12 @@ struct JSONPathMultiMatchTests {
     func wildcardThreeNavigatorEntries() throws {
         // A wildcard designation matching 3 nodes in an array yields 3 entries.
         let doc = treeMap([
-            ("scripts", .array([
-                .string("s1"), .string("s2"), .string("s3"),
-            ])),
+            (
+                "scripts",
+                .array([
+                    .string("s1"), .string("s2"), .string("s3"),
+                ])
+            )
         ])
         let results = try eval("$.scripts[*]", on: doc)
         #expect(results.count == 3)

@@ -5,8 +5,9 @@
 // Upstream: MoonSwiftCore/Project/ProjectFileCodec.swift
 // Downstream: (test target — nothing imports this)
 
-import Testing
 import Foundation
+import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - Decode: happy paths
@@ -31,11 +32,11 @@ struct ProjectFileCodecDecodeTests {
     @Test("decodes standalone lua source entry")
     func decodesLuaSource() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [[source]]
-        path = "scripts/init.lua"
-        """
+            [[source]]
+            path = "scripts/init.lua"
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.sources.count == 1)
         #expect(file.sources[0].path == "scripts/init.lua")
@@ -45,15 +46,15 @@ struct ProjectFileCodecDecodeTests {
     @Test("decodes structured source with field designation")
     func decodesStructuredSource() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [[source]]
-        path = "config.yaml"
+            [[source]]
+            path = "config.yaml"
 
-          [[source.field]]
-          jsonpath = "$.scripts.init"
-          document = 0
-        """
+              [[source.field]]
+              jsonpath = "$.scripts.init"
+              document = 0
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.sources.count == 1)
         let entry = file.sources[0]
@@ -66,14 +67,14 @@ struct ProjectFileCodecDecodeTests {
     @Test("decodes multiple sources")
     func decodesMultipleSources() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [[source]]
-        path = "a.lua"
+            [[source]]
+            path = "a.lua"
 
-        [[source]]
-        path = "b.lua"
-        """
+            [[source]]
+            path = "b.lua"
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.sources.count == 2)
         #expect(file.sources[0].path == "a.lua")
@@ -83,13 +84,13 @@ struct ProjectFileCodecDecodeTests {
     @Test("decodes [run] table — sandboxed, limits")
     func decodesRunTable() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [run]
-        config = "sandboxed"
-        instruction_limit = 500
-        wall_clock_limit_ms = 0
-        """
+            [run]
+            config = "sandboxed"
+            instruction_limit = 500
+            wall_clock_limit_ms = 0
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.run.config == .sandboxed)
         #expect(file.run.instructionLimit == 500)
@@ -99,11 +100,11 @@ struct ProjectFileCodecDecodeTests {
     @Test("decodes [run] table — unrestricted config")
     func decodesRunUnrestricted() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [run]
-        config = "unrestricted"
-        """
+            [run]
+            config = "unrestricted"
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.run.config == .unrestricted)
     }
@@ -111,11 +112,11 @@ struct ProjectFileCodecDecodeTests {
     @Test("decodes [lint] table — extra_modules")
     func decodesLintTable() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [lint]
-        extra_modules = ["iox", "http"]
-        """
+            [lint]
+            extra_modules = ["iox", "http"]
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.lint.extraModules == ["iox", "http"])
     }
@@ -123,11 +124,11 @@ struct ProjectFileCodecDecodeTests {
     @Test("decodes [settings] table — theme")
     func decodesSettingsTable() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [settings]
-        theme = "default"
-        """
+            [settings]
+            theme = "default"
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.settings.theme == "default")
     }
@@ -146,11 +147,11 @@ struct ProjectFileCodecDecodeTests {
     @Test("absent run.config defaults to sandboxed")
     func absentRunConfigDefaultsSandboxed() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [run]
-        instruction_limit = 100
-        """
+            [run]
+            instruction_limit = 100
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.run.config == .sandboxed)
     }
@@ -158,14 +159,14 @@ struct ProjectFileCodecDecodeTests {
     @Test("document defaults to 0 when absent")
     func documentDefaultsToZero() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [[source]]
-        path = "config.yaml"
+            [[source]]
+            path = "config.yaml"
 
-          [[source.field]]
-          jsonpath = "$.foo"
-        """
+              [[source.field]]
+              jsonpath = "$.foo"
+            """
         let (file, _) = try ProjectFileCodec.decode(toml)
         #expect(file.sources[0].fields[0].document == 0)
     }
@@ -179,11 +180,11 @@ struct ProjectFileCodecUnknownKeyTests {
     @Test("unknown top-level key produces exactly one warning")
     func unknownKeyOneWarning() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [future_feature]
-        enabled = true
-        """
+            [future_feature]
+            enabled = true
+            """
         let (_, diags) = try ProjectFileCodec.decode(toml)
         #expect(diags.count == 1)
         #expect(diags[0].severity == .warning)
@@ -193,14 +194,14 @@ struct ProjectFileCodecUnknownKeyTests {
     @Test("multiple unknown keys produce exactly one warning (warn-once)")
     func multipleUnknownKeysOneWarning() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [alpha]
-        x = 1
+            [alpha]
+            x = 1
 
-        [beta]
-        y = 2
-        """
+            [beta]
+            y = 2
+            """
         let (_, diags) = try ProjectFileCodec.decode(toml)
         #expect(diags.count == 1)
     }
@@ -208,11 +209,11 @@ struct ProjectFileCodecUnknownKeyTests {
     @Test("no warning for all-known keys")
     func noWarningAllKnownKeys() throws {
         let toml = """
-        lua_version = "5.4"
+            lua_version = "5.4"
 
-        [run]
-        config = "sandboxed"
-        """
+            [run]
+            config = "sandboxed"
+            """
         let (_, diags) = try ProjectFileCodec.decode(toml)
         #expect(diags.isEmpty)
     }

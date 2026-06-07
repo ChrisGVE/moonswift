@@ -4,8 +4,9 @@
 // Upstream: MoonSwiftCore/Tree/TreeDecoderJSON.swift
 // Downstream: (test target)
 
-import Testing
 import Collections
+import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - Scalar types
@@ -162,7 +163,8 @@ struct JSONDecoderObjectTests {
         let json = #"{"beta": 2, "alpha": 1, "gamma": 3, "delta": 4}"#
         let result = try decodeJSON(json)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict.keys == ["beta", "alpha", "gamma", "delta"])
     }
@@ -172,8 +174,10 @@ struct JSONDecoderObjectTests {
         let json = #"{"outer": {"z": 1, "a": 2}}"#
         let result = try decodeJSON(json)
         guard case .map(let outer) = result,
-              case .map(let inner) = outer["outer"] else {
-            Issue.record("Unexpected shape"); return
+            case .map(let inner) = outer["outer"]
+        else {
+            Issue.record("Unexpected shape")
+            return
         }
         #expect(inner.keys == ["z", "a"])
     }
@@ -182,9 +186,11 @@ struct JSONDecoderObjectTests {
     func objectInArray() throws {
         let result = try decodeJSON(#"[{"x": 1}, {"y": 2}]"#)
         guard case .array(let arr) = result,
-              case .map(let first) = arr[0],
-              case .map(let second) = arr[1] else {
-            Issue.record("Unexpected shape"); return
+            case .map(let first) = arr[0],
+            case .map(let second) = arr[1]
+        else {
+            Issue.record("Unexpected shape")
+            return
         }
         #expect(first["x"] == .int(1))
         #expect(second["y"] == .int(2))
@@ -195,11 +201,13 @@ struct JSONDecoderObjectTests {
         let json = #"{"a": {"b": {"c": {"d": {"e": 42}}}}}"#
         let result = try decodeJSON(json)
         guard case .map(let a) = result,
-              case .map(let b) = a["a"],
-              case .map(let c) = b["b"],
-              case .map(let d) = c["c"],
-              case .map(let e) = d["d"] else {
-            Issue.record("Unexpected shape"); return
+            case .map(let b) = a["a"],
+            case .map(let c) = b["b"],
+            case .map(let d) = c["c"],
+            case .map(let e) = d["d"]
+        else {
+            Issue.record("Unexpected shape")
+            return
         }
         #expect(e["e"] == .int(42))
     }

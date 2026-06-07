@@ -215,6 +215,15 @@ jobs:
       - name: Reset SPM manifest cache (swift package reset)
         run: swift package reset
 
+      # Formatting gate — reject any unformatted Swift source.
+      # Uses the project's .swift-format JSON config (4-space indent, 120-col,
+      # UseLetInEveryBoundCaseVariable off). Deliberately aligned blocks are
+      # protected with // swift-format-ignore comments (see Events.swift,
+      # CellBuffer.swift). Runs before the build so formatting failures surface
+      # quickly without waiting for compilation.
+      - name: Lint Swift formatting (swift-format)
+        run: swift-format lint --strict --recursive Sources/ Tests/
+
       # Full Swift package build in source mode.
       # MOONSWIFT_SHIM_SOURCE=1 and LUASWIFT_INCLUDE_TOMLKIT=1 are already set
       # via the job-level `env` block above.

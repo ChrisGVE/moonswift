@@ -5,8 +5,9 @@
 // Upstream: RatatuiKit/FFIError.swift (FFIError, checkFFI)
 // Downstream: (test target — nothing imports this)
 
-import Testing
 import CRatatuiFFI
+import Testing
+
 @testable import RatatuiKit
 
 @Suite("FFIError mapping")

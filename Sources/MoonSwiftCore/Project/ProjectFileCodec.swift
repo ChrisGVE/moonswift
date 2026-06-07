@@ -19,8 +19,8 @@
 // Downstream: ProjectStore (the public entry point), ProjectValidation (receives
 //             decoded ProjectFile + unknown-key diagnostics)
 
-import TOMLKit
 import Foundation
+import TOMLKit
 
 // MARK: - ProjectFileCodec
 
@@ -148,8 +148,8 @@ public enum ProjectFileCodec {
         guard hasUnknown else { return [] }
         return [
             .projectWarning(
-                "moonswift.toml contains unrecognised key(s) — they are ignored " +
-                "by this build but will be preserved on programmatic writes"
+                "moonswift.toml contains unrecognised key(s) — they are ignored "
+                    + "by this build but will be preserved on programmatic writes"
             )
         ]
     }
@@ -157,7 +157,7 @@ public enum ProjectFileCodec {
     private static func decodeSources(from table: TOMLTable) -> [SourceEntry] {
         guard let sourceArray = table["source"]?.array else { return [] }
         var entries: [SourceEntry] = []
-        for index in 0 ..< sourceArray.count {
+        for index in 0..<sourceArray.count {
             guard let sourceTable = sourceArray[index]?.table else { continue }
             guard let path = sourceTable["path"]?.string else { continue }
             let fields = decodeFields(from: sourceTable)
@@ -169,7 +169,7 @@ public enum ProjectFileCodec {
     private static func decodeFields(from sourceTable: TOMLTable) -> [FieldDesignation] {
         guard let fieldArray = sourceTable["field"]?.array else { return [] }
         var fields: [FieldDesignation] = []
-        for index in 0 ..< fieldArray.count {
+        for index in 0..<fieldArray.count {
             guard let fieldTable = fieldArray[index]?.table else { continue }
             guard let jsonpath = fieldTable["jsonpath"]?.string else { continue }
             let document = fieldTable["document"]?.int ?? 0
@@ -197,7 +197,7 @@ public enum ProjectFileCodec {
             return LintConfig()
         }
         var modules: [String] = []
-        for index in 0 ..< extraArray.count {
+        for index in 0..<extraArray.count {
             if let name = extraArray[index]?.string {
                 modules.append(name)
             }

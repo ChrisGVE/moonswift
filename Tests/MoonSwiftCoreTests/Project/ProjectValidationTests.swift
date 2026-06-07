@@ -6,6 +6,7 @@
 // Downstream: (test target — nothing imports this)
 
 import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - Rule 1: lua_version
@@ -25,21 +26,20 @@ struct ProjectValidationLuaVersionTests {
     func unsupportedLuaVersion53() {
         let file = ProjectFile(luaVersion: "5.3")
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("5.3") &&
-            d.message.contains("5.4")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("5.3") && d.message.contains("5.4")
+            })
     }
 
     @Test("unsupported lua_version 5.1 produces error with guidance")
     func unsupportedLuaVersion51() {
         let file = ProjectFile(luaVersion: "5.1")
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("disabled")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("disabled")
+            })
     }
 
     @Test("empty lua_version produces error")
@@ -70,11 +70,11 @@ struct ProjectValidationSourcePathAbsoluteTests {
             sources: [SourceEntry(path: "/usr/local/scripts/init.lua")]
         )
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("absolute") &&
-            d.message.contains("/usr/local/scripts/init.lua")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("absolute")
+                    && d.message.contains("/usr/local/scripts/init.lua")
+            })
     }
 
     @Test("relative path does not produce absolute-path error")
@@ -100,10 +100,10 @@ struct ProjectValidationSourcePathEscapeTests {
             sources: [SourceEntry(path: "../secrets/credentials.lua")]
         )
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("escapes")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("escapes")
+            })
     }
 
     @Test("deeply nested path that escapes via .. produces error")
@@ -143,11 +143,10 @@ struct ProjectValidationDuplicateSourceTests {
             ]
         )
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("duplicate") &&
-            d.message.contains("a.lua")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("duplicate") && d.message.contains("a.lua")
+            })
     }
 
     @Test("unique paths produce no duplicate error")
@@ -196,11 +195,10 @@ struct ProjectValidationDocumentIndexTests {
             ]
         )
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("document") &&
-            d.message.contains("YAML")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("document") && d.message.contains("YAML")
+            })
     }
 
     @Test("document != 0 on .toml file produces error")
@@ -251,11 +249,10 @@ struct ProjectValidationJSONPathSyntaxTests {
             ]
         )
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("jsonpath") &&
-            d.message.contains("empty")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("jsonpath") && d.message.contains("empty")
+            })
     }
 
     @Test("non-empty jsonpath passes stub validation")
@@ -297,11 +294,10 @@ struct ProjectValidationRunConfigTests {
     func unknownRunConfig() {
         var diags: [Diagnostic] = []
         ProjectValidation.validateRunConfig(rawConfigString: "turbo", into: &diags)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("turbo") &&
-            d.message.contains("sandboxed")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("turbo") && d.message.contains("sandboxed")
+            })
     }
 
     @Test("run.config error source is projectConfig")
@@ -324,11 +320,10 @@ struct ProjectValidationRunLimitsTests {
             run: RunConfig(config: .sandboxed, instructionLimit: -1, wallClockLimitMs: 0)
         )
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("instruction_limit") &&
-            d.message.contains("-1")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("instruction_limit") && d.message.contains("-1")
+            })
     }
 
     @Test("zero instruction_limit is valid (unlimited)")
@@ -358,11 +353,10 @@ struct ProjectValidationRunLimitsTests {
             run: RunConfig(config: .sandboxed, instructionLimit: 0, wallClockLimitMs: -100)
         )
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("wall_clock_limit_ms") &&
-            d.message.contains("-100")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("wall_clock_limit_ms") && d.message.contains("-100")
+            })
     }
 
     @Test("positive wall_clock_limit_ms without #22 produces warning")
@@ -377,11 +371,11 @@ struct ProjectValidationRunLimitsTests {
         )
         let diags = ProjectValidation.validate(file)
         if !ProjectValidation.hasLuaSwift22Support {
-            #expect(diags.contains { d in
-                d.severity == .warning &&
-                d.message.contains("wall_clock_limit_ms") &&
-                d.message.contains("LuaSwift")
-            })
+            #expect(
+                diags.contains { d in
+                    d.severity == .warning && d.message.contains("wall_clock_limit_ms")
+                        && d.message.contains("LuaSwift")
+                })
         }
     }
 
@@ -418,11 +412,10 @@ struct ProjectValidationThemeTests {
             settings: SettingsConfig(theme: "dracula")
         )
         let diags = ProjectValidation.validate(file)
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("dracula") &&
-            d.message.contains("theme")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("dracula") && d.message.contains("theme")
+            })
     }
 
     @Test("theme error source is projectConfig")
@@ -461,10 +454,10 @@ struct ProjectValidationExtraModulesTests {
             lint: LintConfig(extraModules: ["unknownmod"])
         )
         let diags = ProjectValidation.validate(file, extraModulesAllowList: { stubAllowList })
-        #expect(diags.contains { d in
-            d.severity == .error &&
-            d.message.contains("unknownmod")
-        })
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("unknownmod")
+            })
     }
 
     @Test("multiple unknown modules each produce their own error")
@@ -474,7 +467,9 @@ struct ProjectValidationExtraModulesTests {
             lint: LintConfig(extraModules: ["bad1", "bad2"])
         )
         let diags = ProjectValidation.validate(file, extraModulesAllowList: { stubAllowList })
-        let modErrors = diags.filter { $0.severity == .error && ($0.message.contains("bad1") || $0.message.contains("bad2")) }
+        let modErrors = diags.filter {
+            $0.severity == .error && ($0.message.contains("bad1") || $0.message.contains("bad2"))
+        }
         #expect(modErrors.count == 2)
     }
 
@@ -540,15 +535,15 @@ struct ProjectValidationCollectAllTests {
     @Test("multiple rule violations all appear in one validation pass")
     func collectAllViolations() {
         let file = ProjectFile(
-            luaVersion: "5.3",                   // Rule 1 violation
+            luaVersion: "5.3",  // Rule 1 violation
             sources: [
-                SourceEntry(path: "/bad.lua"),    // Rule 2 violation
+                SourceEntry(path: "/bad.lua"),  // Rule 2 violation
                 SourceEntry(path: "a.lua"),
-                SourceEntry(path: "a.lua"),       // Rule 4 violation
+                SourceEntry(path: "a.lua"),  // Rule 4 violation
             ],
             run: RunConfig(config: .sandboxed, instructionLimit: -5, wallClockLimitMs: 0),  // Rule 6
             lint: LintConfig(extraModules: ["notamodule"]),  // Rule 9
-            settings: SettingsConfig(theme: "bad")           // Rule 8
+            settings: SettingsConfig(theme: "bad")  // Rule 8
         )
         let diags = ProjectValidation.validate(file, extraModulesAllowList: { ["iox"] })
         // Should have errors for: lua_version, absolute path, duplicate path,

@@ -11,6 +11,17 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `.swift-format` config at repo root: 4-space indent, 120-column line
+  length, `UseLetInEveryBoundCaseVariable` disabled. Applies consistently
+  across all Swift sources and tests.
+- CI lint gate in the Swift job (`swift-format lint --strict --recursive
+  Sources/ Tests/`) runs before the build step on both matrix legs
+  (x86_64 blocking, arm64 advisory). Any unformatted commit fails CI.
+- `// swift-format-ignore` annotations on deliberately column-aligned
+  blocks (`RffiKeyCode` enum, `KeyCode.init(rawKeyCode:charScalar:)` switch
+  table, `MouseKind` enum, `FFICellWriter.writeCells` bitfield extractions)
+  to preserve readability alignment while allowing mechanical formatting
+  everywhere else.
 - SPM package skeleton: targets `moonswift`, `MoonSwiftCore`, `MoonSwiftTUI`,
   `RatatuiKit`, `CRatatuiFFI`, `CTreeSitterTOML`; Swift 6 language mode;
   macOS 13 minimum.
@@ -29,5 +40,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Repository hygiene: `CONTRIBUTING.md`, `CHANGELOG.md`, `.github/ISSUE_TEMPLATE/`
   (bug report and feature request templates), `.gitignore` extended for
   Rust `target/` and build artifacts.
+
+### Changed
+
+- Reformatted all Swift sources and tests (`Sources/`, `Tests/`) with
+  `swift-format --in-place --recursive` under the new config. Changes are
+  purely whitespace and indentation — no semantic modifications.
+- Renamed `ThemeToken.operator_` to `ThemeToken.operatorToken` to satisfy
+  the `AlwaysUseLowerCamelCase` lint rule (trailing underscore was a
+  keyword-escape convention; the new name is more descriptive and
+  consistent with the other token cases).
 
 [Unreleased]: https://github.com/ChrisGVE/MoonSwift/compare/HEAD...HEAD

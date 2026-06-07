@@ -30,7 +30,7 @@ public struct CellStyle: Sendable, Equatable {
     /// Style modifier bitfield (BOLD, ITALIC, UNDERLINE, …).
     public let mods: UInt16
 
-    public init(fg: UInt32 = 0xFFFFFFFF, bg: UInt32 = 0xFFFFFFFF, mods: UInt16 = 0) {
+    public init(fg: UInt32 = 0xFFFF_FFFF, bg: UInt32 = 0xFFFF_FFFF, mods: UInt16 = 0) {
         self.fg = fg
         self.bg = bg
         self.mods = mods
@@ -75,6 +75,7 @@ final class FFICellWriter: CellWriter {
         self.handle = handle
     }
 
+    // swift-format-ignore
     func writeCells(
         col: UInt16,
         row: UInt16,
@@ -111,7 +112,7 @@ final class FFICellWriter: CellWriter {
 struct CellRun {
     let col: UInt16
     let row: UInt16
-    var text: String        // UTF-8 grapheme clusters appended in order
+    var text: String  // UTF-8 grapheme clusters appended in order
     let style: CellStyle
 
     init(col: UInt16, row: UInt16, firstChar: Character, style: CellStyle) {
@@ -172,7 +173,8 @@ public final class CellBuffer {
     ///   - char: The grapheme cluster to place at this cell.
     ///   - style: The cell's style attributes.
     public func write(col: UInt16, row: UInt16, char: Character, style: CellStyle) {
-        let contiguous = currentRun != nil
+        let contiguous =
+            currentRun != nil
             && row == lastRow
             && col == lastCol &+ 1
             && currentRun!.style == style
@@ -299,8 +301,8 @@ public final class CellGrid: CellWriter {
     /// Fills a rectangular region with blank cells at the default style.
     public func clearRect(col: UInt16, row: UInt16, width: UInt16, height: UInt16) throws {
         let blank = Cell()
-        for r in Int(row) ..< min(Int(row) + Int(height), rows) {
-            for c in Int(col) ..< min(Int(col) + Int(width), cols) {
+        for r in Int(row)..<min(Int(row) + Int(height), rows) {
+            for c in Int(col)..<min(Int(col) + Int(width), cols) {
                 cells[r][c] = blank
             }
         }

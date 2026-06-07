@@ -94,10 +94,10 @@ public struct Diagnostic: Sendable, Equatable {
 
 // MARK: - Convenience factory
 
-public extension Diagnostic {
+extension Diagnostic {
 
     /// Produces an error-level project-config diagnostic.
-    static func projectError(_ message: String, code: String? = nil) -> Diagnostic {
+    public static func projectError(_ message: String, code: String? = nil) -> Diagnostic {
         Diagnostic(
             severity: .error,
             line: 0,
@@ -109,7 +109,7 @@ public extension Diagnostic {
     }
 
     /// Produces a warning-level project-config diagnostic.
-    static func projectWarning(_ message: String, code: String? = nil) -> Diagnostic {
+    public static func projectWarning(_ message: String, code: String? = nil) -> Diagnostic {
         Diagnostic(
             severity: .warning,
             line: 0,

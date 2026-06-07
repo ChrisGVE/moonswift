@@ -7,9 +7,10 @@
 // Upstream: RatatuiKit/Terminal.swift (Terminal, TerminalSize)
 // Downstream: (test target — nothing imports this)
 
-import Testing
-@testable import RatatuiKit
 import Foundation
+import Testing
+
+@testable import RatatuiKit
 
 // MARK: - TTY detection
 

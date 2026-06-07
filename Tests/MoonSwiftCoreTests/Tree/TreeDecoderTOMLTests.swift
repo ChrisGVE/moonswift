@@ -4,8 +4,9 @@
 // Upstream: MoonSwiftCore/Tree/TreeDecoderTOML.swift
 // Downstream: (test target)
 
-import Testing
 import Collections
+import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - Scalar types
@@ -18,7 +19,8 @@ struct TOMLDecoderScalarsTests {
         let toml = #"name = "Alice""#
         let result = try decodeTOML(toml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["name"] == .string("Alice"))
     }
@@ -27,7 +29,8 @@ struct TOMLDecoderScalarsTests {
     func integerValue() throws {
         let result = try decodeTOML("count = 42")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["count"] == .int(42))
     }
@@ -36,7 +39,8 @@ struct TOMLDecoderScalarsTests {
     func negativeInteger() throws {
         let result = try decodeTOML("x = -7")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["x"] == .int(-7))
     }
@@ -45,7 +49,8 @@ struct TOMLDecoderScalarsTests {
     func floatValue() throws {
         let result = try decodeTOML("ratio = 3.14")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["ratio"] == .double(3.14))
     }
@@ -54,7 +59,8 @@ struct TOMLDecoderScalarsTests {
     func boolTrue() throws {
         let result = try decodeTOML("enabled = true")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["enabled"] == .bool(true))
     }
@@ -63,7 +69,8 @@ struct TOMLDecoderScalarsTests {
     func boolFalse() throws {
         let result = try decodeTOML("enabled = false")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["enabled"] == .bool(false))
     }
@@ -79,8 +86,10 @@ struct TOMLDecoderDottedKeyTests {
         let toml = "server.host = \"localhost\""
         let result = try decodeTOML(toml)
         guard case .map(let root) = result,
-              case .map(let server) = root["server"] else {
-            Issue.record("Expected nested .map for server"); return
+            case .map(let server) = root["server"]
+        else {
+            Issue.record("Expected nested .map for server")
+            return
         }
         #expect(server["host"] == .string("localhost"))
     }
@@ -90,9 +99,11 @@ struct TOMLDecoderDottedKeyTests {
         let toml = "a.b.c = 99"
         let result = try decodeTOML(toml)
         guard case .map(let a) = result,
-              case .map(let b) = a["a"],
-              case .map(let c) = b["b"] else {
-            Issue.record("Unexpected shape"); return
+            case .map(let b) = a["a"],
+            case .map(let c) = b["b"]
+        else {
+            Issue.record("Unexpected shape")
+            return
         }
         #expect(c["c"] == .int(99))
     }
@@ -100,13 +111,15 @@ struct TOMLDecoderDottedKeyTests {
     @Test("multiple dotted keys under same prefix")
     func multipleDottedKeys() throws {
         let toml = """
-        server.host = "localhost"
-        server.port = 8080
-        """
+            server.host = "localhost"
+            server.port = 8080
+            """
         let result = try decodeTOML(toml)
         guard case .map(let root) = result,
-              case .map(let server) = root["server"] else {
-            Issue.record("Expected nested .map"); return
+            case .map(let server) = root["server"]
+        else {
+            Issue.record("Expected nested .map")
+            return
         }
         #expect(server["host"] == .string("localhost"))
         #expect(server["port"] == .int(8080))
@@ -121,14 +134,16 @@ struct TOMLDecoderTableTests {
     @Test("standard [table] header")
     func tableHeader() throws {
         let toml = """
-        [database]
-        host = "db.local"
-        port = 5432
-        """
+            [database]
+            host = "db.local"
+            port = 5432
+            """
         let result = try decodeTOML(toml)
         guard case .map(let root) = result,
-              case .map(let db) = root["database"] else {
-            Issue.record("Expected nested .map"); return
+            case .map(let db) = root["database"]
+        else {
+            Issue.record("Expected nested .map")
+            return
         }
         #expect(db["host"] == .string("db.local"))
         #expect(db["port"] == .int(5432))
@@ -143,13 +158,14 @@ struct TOMLDecoderTableTests {
         // The resulting OrderedDictionary reflects alphabetical iteration, so
         // the picker tree view for TOML files shows keys sorted alphabetically.
         let toml = """
-        z = 1
-        a = 2
-        m = 3
-        """
+            z = 1
+            a = 2
+            m = 3
+            """
         let result = try decodeTOML(toml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         // All three keys are present.
         #expect(dict["z"] == .int(1))
@@ -168,23 +184,27 @@ struct TOMLDecoderArrayOfTablesTests {
     @Test("basic array-of-tables")
     func basicArrayOfTables() throws {
         let toml = """
-        [[product]]
-        name = "Widget"
-        price = 9.99
+            [[product]]
+            name = "Widget"
+            price = 9.99
 
-        [[product]]
-        name = "Gadget"
-        price = 24.99
-        """
+            [[product]]
+            name = "Gadget"
+            price = 24.99
+            """
         let result = try decodeTOML(toml)
         guard case .map(let root) = result,
-              case .array(let products) = root["product"] else {
-            Issue.record("Expected array of tables"); return
+            case .array(let products) = root["product"]
+        else {
+            Issue.record("Expected array of tables")
+            return
         }
         #expect(products.count == 2)
         guard case .map(let first) = products[0],
-              case .map(let second) = products[1] else {
-            Issue.record("Array elements should be maps"); return
+            case .map(let second) = products[1]
+        else {
+            Issue.record("Array elements should be maps")
+            return
         }
         #expect(first["name"] == .string("Widget"))
         #expect(second["name"] == .string("Gadget"))
@@ -193,28 +213,32 @@ struct TOMLDecoderArrayOfTablesTests {
     @Test("array-of-tables with nested table")
     func nestedArrayOfTables() throws {
         let toml = """
-        [[fruits]]
-        name = "apple"
+            [[fruits]]
+            name = "apple"
 
-        [fruits.physical]
-        color = "red"
-        shape = "round"
+            [fruits.physical]
+            color = "red"
+            shape = "round"
 
-        [[fruits]]
-        name = "banana"
-        """
+            [[fruits]]
+            name = "banana"
+            """
         let result = try decodeTOML(toml)
         guard case .map(let root) = result,
-              case .array(let fruits) = root["fruits"] else {
-            Issue.record("Expected array of tables"); return
+            case .array(let fruits) = root["fruits"]
+        else {
+            Issue.record("Expected array of tables")
+            return
         }
         #expect(fruits.count == 2)
         guard case .map(let apple) = fruits[0] else {
-            Issue.record("Expected first fruit to be map"); return
+            Issue.record("Expected first fruit to be map")
+            return
         }
         #expect(apple["name"] == .string("apple"))
         guard case .map(let physical) = apple["physical"] else {
-            Issue.record("Expected nested physical table"); return
+            Issue.record("Expected nested physical table")
+            return
         }
         #expect(physical["color"] == .string("red"))
     }
@@ -229,8 +253,10 @@ struct TOMLDecoderArrayTests {
     func integerArray() throws {
         let result = try decodeTOML("ports = [8080, 8443, 9000]")
         guard case .map(let dict) = result,
-              case .array(let arr) = dict["ports"] else {
-            Issue.record("Expected array"); return
+            case .array(let arr) = dict["ports"]
+        else {
+            Issue.record("Expected array")
+            return
         }
         #expect(arr == [.int(8080), .int(8443), .int(9000)])
     }
@@ -239,8 +265,10 @@ struct TOMLDecoderArrayTests {
     func stringArray() throws {
         let result = try decodeTOML(#"tags = ["a", "b", "c"]"#)
         guard case .map(let dict) = result,
-              case .array(let arr) = dict["tags"] else {
-            Issue.record("Expected array"); return
+            case .array(let arr) = dict["tags"]
+        else {
+            Issue.record("Expected array")
+            return
         }
         #expect(arr == [.string("a"), .string("b"), .string("c")])
     }
@@ -256,7 +284,8 @@ struct TOMLDecoderDatetimeTests {
         let toml = "ts = 1979-05-27T07:32:00Z"
         let result = try decodeTOML(toml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         // Datetime is non-designatable; must be .null.
         #expect(dict["ts"] == .null)
@@ -267,7 +296,8 @@ struct TOMLDecoderDatetimeTests {
         let toml = "d = 1979-05-27"
         let result = try decodeTOML(toml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["d"] == .null)
     }
@@ -277,7 +307,8 @@ struct TOMLDecoderDatetimeTests {
         let toml = "t = 07:32:00"
         let result = try decodeTOML(toml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["t"] == .null)
     }

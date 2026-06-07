@@ -100,7 +100,8 @@ public final class TickSource: @unchecked Sendable {
 
             case .armed(let interval):
                 // Convert Duration to a TimeInterval (seconds as Double).
-                let seconds = Double(interval.components.seconds)
+                let seconds =
+                    Double(interval.components.seconds)
                     + Double(interval.components.attoseconds) / 1e18
 
                 // Wait for the interval or until a state-change signal wakes us.
@@ -115,7 +116,7 @@ public final class TickSource: @unchecked Sendable {
                     channel.post(.tick)
                     condition.lock()
                 }
-                // If we woke due to a signal (arm/disarm/stop), loop and recheck.
+            // If we woke due to a signal (arm/disarm/stop), loop and recheck.
             }
         }
     }

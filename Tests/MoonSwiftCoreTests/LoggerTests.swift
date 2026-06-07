@@ -6,6 +6,7 @@
 // Downstream: (test target — nothing imports this)
 
 import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - LogLevel ordering

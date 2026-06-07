@@ -33,10 +33,10 @@ public struct Span: Sendable {
 
 /// The visual style of widget borders.
 public enum BorderType: UInt32, Sendable {
-    case plain   = 0
+    case plain = 0
     case rounded = 1
-    case double  = 2
-    case thick   = 3
+    case double = 2
+    case thick = 3
 }
 
 /// Selects which edges of a widget border are rendered.
@@ -48,13 +48,13 @@ public struct BorderBits: OptionSet, Sendable {
     public let rawValue: UInt8
     public init(rawValue: UInt8) { self.rawValue = rawValue }
 
-    public static let top    = BorderBits(rawValue: UInt8(TOP))
-    public static let right  = BorderBits(rawValue: UInt8(RIGHT))
+    public static let top = BorderBits(rawValue: UInt8(TOP))
+    public static let right = BorderBits(rawValue: UInt8(RIGHT))
     public static let bottom = BorderBits(rawValue: UInt8(BOTTOM))
-    public static let left   = BorderBits(rawValue: UInt8(LEFT))
+    public static let left = BorderBits(rawValue: UInt8(LEFT))
     /// All four borders. Computed because the `ALL` macro is a compound
     /// expression that the Swift importer cannot inline.
-    public static let all    = BorderBits([.top, .right, .bottom, .left])
+    public static let all = BorderBits([.top, .right, .bottom, .left])
 }
 
 // MARK: - BlockConfig
@@ -203,14 +203,15 @@ public final class ListWidget {
     public func setBlock(_ config: BlockConfig) throws {
         try withRffiSpans(config.titleSpans) { rffiSpans in
             try rffiSpans.withUnsafeBufferPointer { buf in
-                try checkFFI(rffi_list_set_block(
-                    ptr,
-                    config.borders.rawValue,
-                    config.borderType.rawValue,
-                    config.padLeft, config.padTop,
-                    config.padRight, config.padBottom,
-                    buf.baseAddress, rffiSpans.count
-                ))
+                try checkFFI(
+                    rffi_list_set_block(
+                        ptr,
+                        config.borders.rawValue,
+                        config.borderType.rawValue,
+                        config.padLeft, config.padTop,
+                        config.padRight, config.padBottom,
+                        buf.baseAddress, rffiSpans.count
+                    ))
             }
         }
     }
@@ -299,14 +300,15 @@ public final class ParagraphWidget {
     public func setBlock(_ config: BlockConfig) throws {
         try withRffiSpans(config.titleSpans) { rffiSpans in
             try rffiSpans.withUnsafeBufferPointer { buf in
-                try checkFFI(rffi_paragraph_set_block(
-                    ptr,
-                    config.borders.rawValue,
-                    config.borderType.rawValue,
-                    config.padLeft, config.padTop,
-                    config.padRight, config.padBottom,
-                    buf.baseAddress, rffiSpans.count
-                ))
+                try checkFFI(
+                    rffi_paragraph_set_block(
+                        ptr,
+                        config.borders.rawValue,
+                        config.borderType.rawValue,
+                        config.padLeft, config.padTop,
+                        config.padRight, config.padBottom,
+                        buf.baseAddress, rffiSpans.count
+                    ))
             }
         }
     }
@@ -373,14 +375,15 @@ public final class TabsWidget {
     public func setBlock(_ config: BlockConfig) throws {
         try withRffiSpans(config.titleSpans) { rffiSpans in
             try rffiSpans.withUnsafeBufferPointer { buf in
-                try checkFFI(rffi_tabs_set_block(
-                    ptr,
-                    config.borders.rawValue,
-                    config.borderType.rawValue,
-                    config.padLeft, config.padTop,
-                    config.padRight, config.padBottom,
-                    buf.baseAddress, rffiSpans.count
-                ))
+                try checkFFI(
+                    rffi_tabs_set_block(
+                        ptr,
+                        config.borders.rawValue,
+                        config.borderType.rawValue,
+                        config.padLeft, config.padTop,
+                        config.padRight, config.padBottom,
+                        buf.baseAddress, rffiSpans.count
+                    ))
             }
         }
     }

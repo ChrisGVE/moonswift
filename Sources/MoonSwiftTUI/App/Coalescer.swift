@@ -43,7 +43,7 @@ final class Coalescer {
     // MARK: Constants
 
     /// Minimum gap between consecutive flushes driven by line arrival.
-    private static let flushGate: TimeInterval = 0.016   // 16 ms
+    private static let flushGate: TimeInterval = 0.016  // 16 ms
 
     // MARK: Init
 

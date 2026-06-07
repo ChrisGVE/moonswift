@@ -12,8 +12,9 @@
 // overflowed the small stacks swift-testing runs tests on in CI (SIGBUS in
 // __chkstk_darwin on Apple Silicon runners).
 
-import Testing
 import CRatatuiFFI
+import Testing
+
 @testable import RatatuiKit
 
 // MARK: - Helpers
@@ -61,9 +62,9 @@ struct KeyEventDecodingTests {
 
     @Test("char key: scalar 'a' (code 26, char 97)")
     func charKeyA() {
-        let box = EventBox(kind: 0) // RffiEventKind.key
-        box.ev.key_code = 26        // RffiKeyCode.char
-        box.ev.key_char = 97        // Unicode scalar for 'a'
+        let box = EventBox(kind: 0)  // RffiEventKind.key
+        box.ev.key_code = 26  // RffiKeyCode.char
+        box.ev.key_char = 97  // Unicode scalar for 'a'
         box.ev.key_mods = 0
 
         let event = box.decode()
@@ -83,15 +84,17 @@ struct KeyEventDecodingTests {
     func charKeyCtrlC() {
         let box = EventBox(kind: 0)
         box.ev.key_code = 26
-        box.ev.key_char = 99   // 'c'
-        box.ev.key_mods = 4    // CTRL
+        box.ev.key_char = 99  // 'c'
+        box.ev.key_mods = 4  // CTRL
 
         let event = box.decode()
         guard case let .key(code, mods) = event else {
-            Issue.record("Expected .key"); return
+            Issue.record("Expected .key")
+            return
         }
         guard case .char = code else {
-            Issue.record("Expected .char"); return
+            Issue.record("Expected .char")
+            return
         }
         #expect(mods.contains(.ctrl))
         #expect(!mods.contains(.shift))
@@ -104,7 +107,8 @@ struct KeyEventDecodingTests {
         box.ev.key_code = 0
         let event = box.decode()
         guard case let .key(code, _) = event else {
-            Issue.record("Expected .key"); return
+            Issue.record("Expected .key")
+            return
         }
         #expect(code == .backspace)
     }
@@ -115,7 +119,8 @@ struct KeyEventDecodingTests {
         box.ev.key_code = 1
         let event = box.decode()
         guard case let .key(code, _) = event else {
-            Issue.record("Expected .key"); return
+            Issue.record("Expected .key")
+            return
         }
         #expect(code == .enter)
     }
@@ -126,7 +131,8 @@ struct KeyEventDecodingTests {
         box.ev.key_code = 27
         let event = box.decode()
         guard case let .key(code, _) = event else {
-            Issue.record("Expected .key"); return
+            Issue.record("Expected .key")
+            return
         }
         #expect(code == .escape)
     }
@@ -137,7 +143,8 @@ struct KeyEventDecodingTests {
         box.ev.key_code = 18
         let event = box.decode()
         guard case let .key(code, _) = event else {
-            Issue.record("Expected .key"); return
+            Issue.record("Expected .key")
+            return
         }
         #expect(code == .f(5))
     }
@@ -148,10 +155,12 @@ struct KeyEventDecodingTests {
         box.ev.key_code = 9999
         let event = box.decode()
         guard case let .key(code, _) = event else {
-            Issue.record("Expected .key"); return
+            Issue.record("Expected .key")
+            return
         }
         guard case .unknown(let raw) = code else {
-            Issue.record("Expected .unknown, got \(code)"); return
+            Issue.record("Expected .unknown, got \(code)")
+            return
         }
         #expect(raw == 9999)
     }
@@ -159,11 +168,12 @@ struct KeyEventDecodingTests {
     @Test("Shift+Alt modifier combination (mods = 3)")
     func shiftAltModifiers() {
         let box = EventBox(kind: 0)
-        box.ev.key_code = 1   // enter
-        box.ev.key_mods = 3   // SHIFT | ALT
+        box.ev.key_code = 1  // enter
+        box.ev.key_mods = 3  // SHIFT | ALT
         let event = box.decode()
         guard case let .key(_, mods) = event else {
-            Issue.record("Expected .key"); return
+            Issue.record("Expected .key")
+            return
         }
         #expect(mods.contains(.shift))
         #expect(mods.contains(.alt))
@@ -174,14 +184,15 @@ struct KeyEventDecodingTests {
     func arrowKeys() {
         // left=2, right=3, up=4, down=5
         let cases: [(UInt32, KeyCode)] = [
-            (2, .left), (3, .right), (4, .up), (5, .down)
+            (2, .left), (3, .right), (4, .up), (5, .down),
         ]
         for (code, expected) in cases {
             let box = EventBox(kind: 0)
             box.ev.key_code = code
             let event = box.decode()
             guard case let .key(kc, _) = event else {
-                Issue.record("Expected .key for code \(code)"); continue
+                Issue.record("Expected .key for code \(code)")
+                continue
             }
             #expect(kc == expected, "Code \(code) should produce \(expected), got \(kc)")
         }
@@ -195,7 +206,7 @@ struct ResizeEventDecodingTests {
 
     @Test("resize event carries cols and rows")
     func resizeEvent() {
-        let box = EventBox(kind: 1) // RffiEventKind.resize
+        let box = EventBox(kind: 1)  // RffiEventKind.resize
         box.ev.resize_cols = 200
         box.ev.resize_rows = 60
         let event = box.decode()
@@ -215,9 +226,9 @@ struct MouseEventDecodingTests {
 
     @Test("mouse down event carries position and button")
     func mouseDown() {
-        let box = EventBox(kind: 2) // RffiEventKind.mouse
-        box.ev.mouse_kind = 0       // MouseKind.down
-        box.ev.mouse_button = 0     // MouseButton.left
+        let box = EventBox(kind: 2)  // RffiEventKind.mouse
+        box.ev.mouse_kind = 0  // MouseKind.down
+        box.ev.mouse_button = 0  // MouseButton.left
         box.ev.mouse_col = 10
         box.ev.mouse_row = 5
         box.ev.mouse_mods = 0
@@ -241,7 +252,8 @@ struct MouseEventDecodingTests {
         box.ev.mouse_button = 0
         let event = box.decode()
         guard case let .mouse(kind, _, _, _, _) = event else {
-            Issue.record("Expected .mouse"); return
+            Issue.record("Expected .mouse")
+            return
         }
         // Unknown kind maps to .moved (MouseKind(rawValue:) returns nil → default)
         #expect(kind == .moved)
@@ -255,7 +267,7 @@ struct PasteEventDecodingTests {
 
     @Test("paste event carries text content")
     func pasteText() {
-        let box = EventBox(kind: 3) // RffiEventKind.paste
+        let box = EventBox(kind: 3)  // RffiEventKind.paste
         let text = "hello world"
         let bytes = Array(text.utf8)
         box.ev.paste_len = UInt32(bytes.count)
@@ -280,7 +292,8 @@ struct PasteEventDecodingTests {
         box.ev.paste_len = 0
         let event = box.decode()
         guard case let .paste(str) = event else {
-            Issue.record("Expected .paste"); return
+            Issue.record("Expected .paste")
+            return
         }
         #expect(str.isEmpty)
     }
@@ -293,7 +306,8 @@ struct PasteEventDecodingTests {
         box.ev.paste_len = 0
         let event = Event(from: box.ev)
         guard case let .paste(str) = event else {
-            Issue.record("Expected .paste"); return
+            Issue.record("Expected .paste")
+            return
         }
         #expect(str.isEmpty)
     }

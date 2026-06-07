@@ -252,7 +252,8 @@ private func reduceGlobalKey(
     // <C-p> — open project file in $EDITOR
     case (.char("p"), .ctrl):
         if case .loaded(_, _) = s.project,
-           case .project(let root) = s.launch {
+            case .project(let root) = s.launch
+        {
             let url = root.appendingPathComponent("moonswift.toml")
             return (s, [.spawnEditor(url)])
         }
@@ -556,7 +557,7 @@ private func tryRun(_ s: AppState) -> (AppState, [Effect]) {
 
     // Guard: a source must be selected and loaded.
     guard let id = s.selection,
-          case .loaded(let fragment) = s.sources[id]
+        case .loaded(let fragment) = s.sources[id]
     else {
         s.transient = TransientMessage(text: "No source loaded")
         return (s, [armTickIfNeeded(s)].compactMap { $0 })
@@ -584,7 +585,7 @@ private func tryRun(_ s: AppState) -> (AppState, [Effect]) {
 
     let effects: [Effect] = [
         .run(fragment, runConfig),
-        .startTick(interval: TickInterval.run)
+        .startTick(interval: TickInterval.run),
     ]
     return (s, effects)
 }
@@ -593,7 +594,8 @@ private func tryLint(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
 
     guard case .idle = s.lintState else {
-        let msg = s.lintState == .initializing
+        let msg =
+            s.lintState == .initializing
             ? "lint engine starting…"
             : "Lint engine not ready"
         s.transient = TransientMessage(text: msg)
@@ -601,7 +603,7 @@ private func tryLint(_ s: AppState) -> (AppState, [Effect]) {
     }
 
     guard let id = s.selection,
-          case .loaded(let fragment) = s.sources[id]
+        case .loaded(let fragment) = s.sources[id]
     else {
         s.transient = TransientMessage(text: "No source loaded")
         return (s, [armTickIfNeeded(s)].compactMap { $0 })

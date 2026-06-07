@@ -200,7 +200,8 @@ public struct TransientMessage: Sendable, Equatable {
 
     public init(text: String, duration: Duration = TickInterval.transientExpiry) {
         self.text = text
-        let seconds = Double(duration.components.seconds)
+        let seconds =
+            Double(duration.components.seconds)
             + Double(duration.components.attoseconds) / 1e18
         self.expiry = Date(timeIntervalSinceNow: seconds)
     }

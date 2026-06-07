@@ -15,7 +15,7 @@ import Foundation
 /// The verbosity level for the internal file logger.
 public enum LogLevel: Int, Sendable, Comparable {
     case error = 0
-    case info  = 1
+    case info = 1
     case debug = 2
 
     public static func < (lhs: LogLevel, rhs: LogLevel) -> Bool {
@@ -26,9 +26,9 @@ public enum LogLevel: Int, Sendable, Comparable {
     /// Falls back to `.error` for unrecognised values.
     static func fromEnvironment() -> LogLevel {
         switch ProcessInfo.processInfo.environment["MOONSWIFT_LOG"]?.lowercased() {
-        case "info":  return .info
+        case "info": return .info
         case "debug": return .debug
-        default:      return .error
+        default: return .error
         }
     }
 }
@@ -68,7 +68,7 @@ public final class Logger: Sendable {
     }
 
     public func error(_ message: String) { log(message, level: .error) }
-    public func info(_ message: String)  { log(message, level: .info) }
+    public func info(_ message: String) { log(message, level: .info) }
     public func debug(_ message: String) { log(message, level: .debug) }
 
     // MARK: Private helpers

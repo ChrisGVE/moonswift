@@ -33,10 +33,11 @@
 //   are stored as string "N". Pure integer-keyed contiguous tables become
 //   .array([LuaValue]) (0-indexed in Swift, 1-indexed in Lua).
 
-import Testing
 import Foundation
-@testable import MoonSwiftCore
 import LuaSwift
+import Testing
+
+@testable import MoonSwiftCore
 
 // MARK: - Vendor bundle helpers
 
@@ -56,23 +57,25 @@ private func vendoredModules() throws -> [String: String] {
     // moonSwiftCoreBundle (VendorBundle.swift) resolves the MoonSwiftCore bundle,
     // not the test target's bundle. Bundle.module here would resolve the test
     // bundle, which does not contain the vendored luacheck sources.
-    guard let luacheckDir = moonSwiftCoreBundle.resourceURL?
-        .appendingPathComponent("luacheck")      // the copied "Vendor/luacheck" dir
-        .appendingPathComponent("luacheck")      // the Lua module tree inside it
+    guard
+        let luacheckDir = moonSwiftCoreBundle.resourceURL?
+            .appendingPathComponent("luacheck")  // the copied "Vendor/luacheck" dir
+            .appendingPathComponent("luacheck")  // the Lua module tree inside it
     else {
         throw SpikeError.bundleResourceMissing(
-            "luacheck/luacheck not found in MoonSwiftCore bundle — " +
-            "check that Package.swift declares .copy(\"Vendor/luacheck\") " +
-            "on the MoonSwiftCore target"
+            "luacheck/luacheck not found in MoonSwiftCore bundle — "
+                + "check that Package.swift declares .copy(\"Vendor/luacheck\") " + "on the MoonSwiftCore target"
         )
     }
 
     let fm = FileManager.default
-    guard let enumerator = fm.enumerator(
-        at: luacheckDir,
-        includingPropertiesForKeys: [.isRegularFileKey],
-        options: [.skipsHiddenFiles]
-    ) else {
+    guard
+        let enumerator = fm.enumerator(
+            at: luacheckDir,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+    else {
         throw SpikeError.bundleResourceMissing(
             "Could not enumerate \(luacheckDir.path)"
         )
@@ -185,7 +188,7 @@ private func fileReport(from report: LuaValue) throws -> LuaValue {
         guard !arr.isEmpty else {
             throw SpikeError.reportShapeError("report array is empty")
         }
-        return arr[0] // 0-indexed in Swift; Lua index 1 is arr[0]
+        return arr[0]  // 0-indexed in Swift; Lua index 1 is arr[0]
     default:
         throw SpikeError.reportShapeError("check_strings returned \(report), expected table")
     }
@@ -256,10 +259,12 @@ struct LuacheckSpikeTests {
         )
         #expect(modules["luacheck"] != nil, "luacheck/init.lua must map to \"luacheck\"")
         #expect(modules["luacheck.lexer"] != nil, "luacheck.lexer must be present")
-        #expect(modules["luacheck.stages.detect_globals"] != nil,
-                "luacheck.stages.detect_globals must be present")
-        #expect(modules["luacheck.builtin_standards"] != nil,
-                "luacheck.builtin_standards must be present")
+        #expect(
+            modules["luacheck.stages.detect_globals"] != nil,
+            "luacheck.stages.detect_globals must be present")
+        #expect(
+            modules["luacheck.builtin_standards"] != nil,
+            "luacheck.builtin_standards must be present")
     }
 
     // MARK: - Fixture (a): clean script → zero issues
@@ -269,13 +274,14 @@ struct LuacheckSpikeTests {
     func cleanScriptReportsZeroIssues() throws {
         let engine = try makeEngine()
 
-        let report = try engine.evaluate("""
-            local luacheck = require("luacheck")
-            return luacheck.check_strings(
-                {[[local x = 1; return x]]},
-                {}
-            )
-        """)
+        let report = try engine.evaluate(
+            """
+                local luacheck = require("luacheck")
+                return luacheck.check_strings(
+                    {[[local x = 1; return x]]},
+                    {}
+                )
+            """)
 
         let fileRep = try fileReport(from: report)
         let issueList = issues(in: fileRep)
@@ -298,10 +304,11 @@ struct LuacheckSpikeTests {
         // string. The content must start at column 0 within the long brackets to
         // avoid Lua interpreting leading whitespace as part of the script.
         let snippet = "[[" + "\nlocal clean = 1\nreturn undefinedGlobal\n" + "]]"
-        let report = try engine.evaluate("""
-            local luacheck = require("luacheck")
-            return luacheck.check_strings({\(snippet)}, {})
-        """)
+        let report = try engine.evaluate(
+            """
+                local luacheck = require("luacheck")
+                return luacheck.check_strings({\(snippet)}, {})
+            """)
 
         let fileRep = try fileReport(from: report)
         let issueList = issues(in: fileRep)
@@ -349,13 +356,14 @@ struct LuacheckSpikeTests {
     func syntaxErrorReportsE011() throws {
         let engine = try makeEngine()
 
-        let report = try engine.evaluate("""
-            local luacheck = require("luacheck")
-            return luacheck.check_strings(
-                {[[this is not valid lua syntax !!]]},
-                {}
-            )
-        """)
+        let report = try engine.evaluate(
+            """
+                local luacheck = require("luacheck")
+                return luacheck.check_strings(
+                    {[[this is not valid lua syntax !!]]},
+                    {}
+                )
+            """)
 
         let fileRep = try fileReport(from: report)
         let issueList = issues(in: fileRep)
@@ -363,8 +371,9 @@ struct LuacheckSpikeTests {
 
         guard let first = issueList.first else { return }
         if let codeVal = first["code"], case .string(let code) = codeVal {
-            #expect(code == "011",
-                    "Expected code=\"011\" (syntax error), got \"\(code)\"")
+            #expect(
+                code == "011",
+                "Expected code=\"011\" (syntax error), got \"\(code)\"")
         } else {
             throw SpikeError.reportShapeError("Issue missing string 'code' field: \(first)")
         }
@@ -379,13 +388,14 @@ struct LuacheckSpikeTests {
         let engine = try makeEngine()
 
         // Without globals = {"myGlobal"} this would produce a W1xx warning.
-        let report = try engine.evaluate("""
-            local luacheck = require("luacheck")
-            return luacheck.check_strings(
-                {[[return myGlobal]]},
-                {globals = {"myGlobal"}}
-            )
-        """)
+        let report = try engine.evaluate(
+            """
+                local luacheck = require("luacheck")
+                return luacheck.check_strings(
+                    {[[return myGlobal]]},
+                    {globals = {"myGlobal"}}
+                )
+            """)
 
         let fileRep = try fileReport(from: report)
         let issueList = issues(in: fileRep)

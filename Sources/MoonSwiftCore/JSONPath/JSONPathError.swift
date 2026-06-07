@@ -75,32 +75,32 @@ extension JSONPathError {
         switch self {
         case .unsupportedFilterSelector:
             return """
-            Filter selectors ?() are not supported in MoonSwift's JSONPath subset. \
-            Supported: child name selectors ($.a.b), quoted names ($['a b']), \
-            non-negative array indices ($.a[0]), wildcard ($.a.*, $[*]), \
-            descendant segment ($..name).
-            """
+                Filter selectors ?() are not supported in MoonSwift's JSONPath subset. \
+                Supported: child name selectors ($.a.b), quoted names ($['a b']), \
+                non-negative array indices ($.a[0]), wildcard ($.a.*, $[*]), \
+                descendant segment ($..name).
+                """
         case .unsupportedSliceSelector:
             return """
-            Slice selectors [start:end] are not supported in MoonSwift's JSONPath \
-            subset. Supported: child name selectors ($.a.b), quoted names ($['a b']), \
-            non-negative array indices ($.a[0]), wildcard ($.a.*, $[*]), \
-            descendant segment ($..name).
-            """
+                Slice selectors [start:end] are not supported in MoonSwift's JSONPath \
+                subset. Supported: child name selectors ($.a.b), quoted names ($['a b']), \
+                non-negative array indices ($.a[0]), wildcard ($.a.*, $[*]), \
+                descendant segment ($..name).
+                """
         case let .unsupportedNegativeIndex(offset: _):
             return """
-            Negative array indices are not supported in MoonSwift's JSONPath subset. \
-            Use non-negative indices ($.a[0], $.a[1], …). Supported: child name \
-            selectors, quoted names, non-negative array indices, wildcard, \
-            descendant segment.
-            """
+                Negative array indices are not supported in MoonSwift's JSONPath subset. \
+                Use non-negative indices ($.a[0], $.a[1], …). Supported: child name \
+                selectors, quoted names, non-negative array indices, wildcard, \
+                descendant segment.
+                """
         case let .unsupportedFunctionExtension(name: name, offset: _):
             return """
-            Function extensions (\(name)()) are not supported in MoonSwift's JSONPath \
-            subset. Supported: child name selectors ($.a.b), quoted names ($['a b']), \
-            non-negative array indices ($.a[0]), wildcard ($.a.*, $[*]), \
-            descendant segment ($..name).
-            """
+                Function extensions (\(name)()) are not supported in MoonSwift's JSONPath \
+                subset. Supported: child name selectors ($.a.b), quoted names ($['a b']), \
+                non-negative array indices ($.a[0]), wildcard ($.a.*, $[*]), \
+                descendant segment ($..name).
+                """
         case .missingRoot:
             return "JSONPath expression must start with $ (the root identifier)."
         case let .unterminatedQuote(offset: offset):
@@ -108,7 +108,8 @@ extension JSONPathError {
         case let .unterminatedBracket(offset: offset):
             return "Unterminated bracket segment in JSONPath expression at offset \(offset). Add a closing ]."
         case let .invalidEscapeSequence(offset: offset):
-            return "Invalid escape sequence in JSONPath quoted string at offset \(offset). Valid escapes: \\', \\\", \\\\, \\/, \\b, \\f, \\n, \\r, \\t, \\uXXXX."
+            return
+                "Invalid escape sequence in JSONPath quoted string at offset \(offset). Valid escapes: \\', \\\", \\\\, \\/, \\b, \\f, \\n, \\r, \\t, \\uXXXX."
         case .invalidIndex:
             return "Array index in JSONPath expression must be a non-negative integer."
         case let .unexpectedCharacter(ch, offset: offset):

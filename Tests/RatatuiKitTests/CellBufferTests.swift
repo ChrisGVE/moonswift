@@ -7,6 +7,7 @@
 // Downstream: (test target — nothing imports this)
 
 import Testing
+
 @testable import RatatuiKit
 
 // MARK: - MockCellWriter
@@ -161,7 +162,7 @@ struct CellBufferBatchingTests {
     @Test("mixed rows produce correct per-row run boundaries")
     func mixedRowsCorrectBoundaries() throws {
         let buf = CellBuffer()
-        let red  = CellStyle(fg: 0xFF0000, bg: 0xFFFFFF, mods: 0)
+        let red = CellStyle(fg: 0xFF0000, bg: 0xFFFFFF, mods: 0)
         let blue = CellStyle(fg: 0x0000FF, bg: 0xFFFFFF, mods: 0)
 
         // Row 0: red "ab", blue "cd"
@@ -206,7 +207,7 @@ struct CellGridTests {
     @Test("initial cells are blank with default style")
     func initialCells() {
         let grid = CellGrid(cols: 10, rows: 5)
-        #expect(grid.rowText(0) == "          ") // 10 spaces
+        #expect(grid.rowText(0) == "          ")  // 10 spaces
         for row in 0..<5 {
             for col in 0..<10 {
                 #expect(grid.cells[row][col].char == " ")
@@ -293,8 +294,8 @@ struct CellStyleTests {
     @Test("default style has terminal-default colors and no mods")
     func defaultStyle() {
         let s = CellStyle.default
-        #expect(s.fg == 0xFFFFFFFF)
-        #expect(s.bg == 0xFFFFFFFF)
+        #expect(s.fg == 0xFFFF_FFFF)
+        #expect(s.bg == 0xFFFF_FFFF)
         #expect(s.mods == 0)
     }
 

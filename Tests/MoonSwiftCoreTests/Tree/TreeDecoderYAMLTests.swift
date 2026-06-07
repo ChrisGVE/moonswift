@@ -5,8 +5,9 @@
 // Upstream: MoonSwiftCore/Tree/TreeDecoderYAML.swift
 // Downstream: (test target)
 
-import Testing
 import Collections
+import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - Scalar types
@@ -18,7 +19,8 @@ struct YAMLDecoderScalarsTests {
     func stringScalar() throws {
         let result = try decodeYAML("value: hello")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["value"] == .string("hello"))
     }
@@ -27,7 +29,8 @@ struct YAMLDecoderScalarsTests {
     func integerScalar() throws {
         let result = try decodeYAML("n: 42")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["n"] == .int(42))
     }
@@ -36,7 +39,8 @@ struct YAMLDecoderScalarsTests {
     func negativeInteger() throws {
         let result = try decodeYAML("n: -7")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["n"] == .int(-7))
     }
@@ -45,7 +49,8 @@ struct YAMLDecoderScalarsTests {
     func floatScalar() throws {
         let result = try decodeYAML("x: 3.14")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["x"] == .double(3.14))
     }
@@ -54,7 +59,8 @@ struct YAMLDecoderScalarsTests {
     func boolTrue() throws {
         let result = try decodeYAML("flag: true")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["flag"] == .bool(true))
     }
@@ -63,7 +69,8 @@ struct YAMLDecoderScalarsTests {
     func boolFalse() throws {
         let result = try decodeYAML("flag: false")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["flag"] == .bool(false))
     }
@@ -72,7 +79,8 @@ struct YAMLDecoderScalarsTests {
     func nullTilde() throws {
         let result = try decodeYAML("v: ~")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["v"] == .null)
     }
@@ -81,7 +89,8 @@ struct YAMLDecoderScalarsTests {
     func nullKeyword() throws {
         let result = try decodeYAML("v: null")
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["v"] == .null)
     }
@@ -90,8 +99,10 @@ struct YAMLDecoderScalarsTests {
     func infinityFloat() throws {
         let result = try decodeYAML("x: .inf")
         guard case .map(let dict) = result,
-              case .double(let d) = dict["x"] else {
-            Issue.record("Expected .double for .inf"); return
+            case .double(let d) = dict["x"]
+        else {
+            Issue.record("Expected .double for .inf")
+            return
         }
         #expect(d.isInfinite && d > 0)
     }
@@ -100,8 +111,10 @@ struct YAMLDecoderScalarsTests {
     func nanFloat() throws {
         let result = try decodeYAML("x: .nan")
         guard case .map(let dict) = result,
-              case .double(let d) = dict["x"] else {
-            Issue.record("Expected .double for .nan"); return
+            case .double(let d) = dict["x"]
+        else {
+            Issue.record("Expected .double for .nan")
+            return
         }
         #expect(d.isNaN)
     }
@@ -115,12 +128,13 @@ struct YAMLDecoderAnchorTests {
     @Test("alias resolves to anchor scalar value")
     func aliasResolvesToScalar() throws {
         let yaml = """
-        original: &anchor hello
-        copy: *anchor
-        """
+            original: &anchor hello
+            copy: *anchor
+            """
         let result = try decodeYAML(yaml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["original"] == .string("hello"))
         #expect(dict["copy"] == .string("hello"))
@@ -129,20 +143,22 @@ struct YAMLDecoderAnchorTests {
     @Test("alias resolves to anchor mapping")
     func aliasResolvesToMapping() throws {
         let yaml = """
-        defaults: &defaults
-          color: red
-          size: 10
-        custom:
-          <<: *defaults
-          size: 20
-        """
+            defaults: &defaults
+              color: red
+              size: 10
+            custom:
+              <<: *defaults
+              size: 20
+            """
         let result = try decodeYAML(yaml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         // 'defaults' has the anchor values.
         guard case .map(let defaults) = dict["defaults"] else {
-            Issue.record("Expected defaults to be .map"); return
+            Issue.record("Expected defaults to be .map")
+            return
         }
         #expect(defaults["color"] == .string("red"))
         #expect(defaults["size"] == .int(10))
@@ -151,14 +167,15 @@ struct YAMLDecoderAnchorTests {
     @Test("alias resolves to anchor sequence")
     func aliasResolvesToSequence() throws {
         let yaml = """
-        list: &list
-          - a
-          - b
-        copy: *list
-        """
+            list: &list
+              - a
+              - b
+            copy: *list
+            """
         let result = try decodeYAML(yaml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["list"] == dict["copy"])
     }
@@ -172,14 +189,15 @@ struct YAMLDecoderMultiDocTests {
     @Test("selects document 0 by default")
     func defaultDocumentIsZero() throws {
         let yaml = """
-        ---
-        name: first
-        ---
-        name: second
-        """
+            ---
+            name: first
+            ---
+            name: second
+            """
         let result = try decodeYAML(yaml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["name"] == .string("first"))
     }
@@ -187,14 +205,15 @@ struct YAMLDecoderMultiDocTests {
     @Test("selects document 1 explicitly")
     func selectDocumentOne() throws {
         let yaml = """
-        ---
-        name: first
-        ---
-        name: second
-        """
+            ---
+            name: first
+            ---
+            name: second
+            """
         let result = try decodeYAML(yaml, document: 1)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["name"] == .string("second"))
     }
@@ -214,16 +233,17 @@ struct YAMLDecoderMultiDocTests {
     @Test("three-document stream, select doc 2")
     func threeDocumentStream() throws {
         let yaml = """
-        ---
-        n: 1
-        ---
-        n: 2
-        ---
-        n: 3
-        """
+            ---
+            n: 1
+            ---
+            n: 2
+            ---
+            n: 3
+            """
         let result = try decodeYAML(yaml, document: 2)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict["n"] == .int(3))
     }
@@ -238,8 +258,10 @@ struct YAMLDecoderCollectionTests {
     func sequenceArray() throws {
         let result = try decodeYAML("items:\n  - one\n  - two\n  - three")
         guard case .map(let dict) = result,
-              case .array(let arr) = dict["items"] else {
-            Issue.record("Expected array"); return
+            case .array(let arr) = dict["items"]
+        else {
+            Issue.record("Expected array")
+            return
         }
         #expect(arr == [.string("one"), .string("two"), .string("three")])
     }
@@ -247,13 +269,14 @@ struct YAMLDecoderCollectionTests {
     @Test("mapping preserves key order")
     func mappingKeyOrder() throws {
         let yaml = """
-        z: 1
-        a: 2
-        m: 3
-        """
+            z: 1
+            a: 2
+            m: 3
+            """
         let result = try decodeYAML(yaml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         #expect(dict.keys == ["z", "a", "m"])
     }
@@ -261,15 +284,17 @@ struct YAMLDecoderCollectionTests {
     @Test("deep nested mapping")
     func deepMapping() throws {
         let yaml = """
-        a:
-          b:
-            c: 42
-        """
+            a:
+              b:
+                c: 42
+            """
         let result = try decodeYAML(yaml)
         guard case .map(let a) = result,
-              case .map(let b) = a["a"],
-              case .map(let c) = b["b"] else {
-            Issue.record("Unexpected shape"); return
+            case .map(let b) = a["a"],
+            case .map(let c) = b["b"]
+        else {
+            Issue.record("Unexpected shape")
+            return
         }
         #expect(c["c"] == .int(42))
     }
@@ -285,7 +310,8 @@ struct YAMLDecoderTagTests {
         let yaml = "port: !!str 8080"
         let result = try decodeYAML(yaml)
         guard case .map(let dict) = result else {
-            Issue.record("Expected .map"); return
+            Issue.record("Expected .map")
+            return
         }
         // !!str overrides the default integer resolution.
         #expect(dict["port"] == .string("8080"))

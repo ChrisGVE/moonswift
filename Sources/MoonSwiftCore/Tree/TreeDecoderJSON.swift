@@ -120,11 +120,11 @@ private struct JSONParser {
         }
         switch c {
         case "\"": return .string(try parseString())
-        case "{":  return try parseObject()
-        case "[":  return try parseArray()
-        case "t":  return try parseLiteral("true",  value: .bool(true))
-        case "f":  return try parseLiteral("false", value: .bool(false))
-        case "n":  return try parseLiteral("null",  value: .null)
+        case "{": return try parseObject()
+        case "[": return try parseArray()
+        case "t": return try parseLiteral("true", value: .bool(true))
+        case "f": return try parseLiteral("false", value: .bool(false))
+        case "n": return try parseLiteral("null", value: .null)
         case "-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
             return try parseNumber()
         default:
@@ -177,13 +177,13 @@ private struct JSONParser {
         switch c {
         case "\"": return "\""
         case "\\": return "\\"
-        case "/":  return "/"
-        case "b":  return "\u{0008}"
-        case "f":  return "\u{000C}"
-        case "n":  return "\n"
-        case "r":  return "\r"
-        case "t":  return "\t"
-        case "u":  return try parseUnicodeEscape()
+        case "/": return "/"
+        case "b": return "\u{0008}"
+        case "f": return "\u{000C}"
+        case "n": return "\n"
+        case "r": return "\r"
+        case "t": return "\t"
+        case "u": return try parseUnicodeEscape()
         default:
             throw TreeDecoderError.jsonMalformed(
                 "invalid escape character '\\(c)' at offset \(offset)"
@@ -234,7 +234,8 @@ private struct JSONParser {
                 advance()
             }
             guard let lowUnit = UInt16(lowHex, radix: 16),
-                  lowUnit >= 0xDC00 && lowUnit <= 0xDFFF else {
+                lowUnit >= 0xDC00 && lowUnit <= 0xDFFF
+            else {
                 throw TreeDecoderError.jsonMalformed(
                     "invalid low surrogate '\\u\(lowHex)' at offset \(offset)"
                 )

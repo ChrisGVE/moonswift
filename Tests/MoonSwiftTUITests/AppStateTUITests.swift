@@ -7,6 +7,7 @@
 // Downstream: (test target — nothing imports this)
 
 import Testing
+
 @testable import MoonSwiftTUI
 
 @Suite("MoonSwiftTUI skeleton")

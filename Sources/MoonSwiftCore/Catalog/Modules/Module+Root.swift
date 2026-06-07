@@ -22,7 +22,7 @@ extension CatalogModule {
         functions: [
             // Imports all module extensions into the standard library tables
             // (string, math, table, utf8). Defined by ModuleRegistry.installExtendStdlib.
-            CatalogFunction(name: "extend_stdlib"),
+            CatalogFunction(name: "extend_stdlib")
         ],
         availability: .base
     )

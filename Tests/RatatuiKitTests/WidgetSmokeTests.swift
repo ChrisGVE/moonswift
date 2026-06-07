@@ -11,10 +11,11 @@
 //            clearWidget, Span, BlockConfig, BorderBits, BorderType)
 // Downstream: (test target — nothing imports this)
 
-import Testing
-@testable import RatatuiKit
 import CRatatuiFFI
 import Foundation
+import Testing
+
+@testable import RatatuiKit
 
 // MARK: - TTY detection (shared with TerminalLifecycleTests convention)
 
@@ -312,7 +313,7 @@ struct TabsWidgetHeadlessTests {
     @Test("setStyles does not throw")
     func setStyles() throws {
         let tabs = try TabsWidget()
-        let selected   = CellStyle(fg: 0xFFFFFF, bg: 0x0000FF, mods: UInt16(BOLD))
+        let selected = CellStyle(fg: 0xFFFFFF, bg: 0x0000FF, mods: UInt16(BOLD))
         let unselected = CellStyle(fg: 0xAAAAAA, bg: 0x000000, mods: 0)
         try tabs.setStyles(selected: selected, unselected: unselected)
     }

@@ -61,24 +61,24 @@ public enum Constraint: Sendable {
     // The shim's `constraint_kind` discriminant values (ratatui_ffi.h).
     var kind: UInt32 {
         switch self {
-        case .length:     return UInt32(LENGTH)
+        case .length: return UInt32(LENGTH)
         case .percentage: return UInt32(PERCENTAGE)
-        case .min:        return UInt32(MIN)
-        case .max:        return UInt32(MAX)
-        case .fill:       return UInt32(FILL)
-        case .ratio:      return UInt32(RATIO)
+        case .min: return UInt32(MIN)
+        case .max: return UInt32(MAX)
+        case .fill: return UInt32(FILL)
+        case .ratio: return UInt32(RATIO)
         }
     }
 
     /// Primary value (`value_a` in the shim parameter list).
     var valueA: UInt16 {
         switch self {
-        case .length(let n):     return n
+        case .length(let n): return n
         case .percentage(let p): return p
-        case .min(let n):        return n
-        case .max(let n):        return n
-        case .fill(let w):       return w
-        case .ratio(let n, _):   return n
+        case .min(let n): return n
+        case .max(let n): return n
+        case .fill(let w): return w
+        case .ratio(let n, _): return n
         }
     }
 
@@ -86,7 +86,7 @@ public enum Constraint: Sendable {
     var valueB: UInt16 {
         switch self {
         case .ratio(_, let d): return d
-        default:               return 1
+        default: return 1
         }
     }
 }
@@ -99,7 +99,7 @@ public enum Constraint: Sendable {
 /// - `horizontal`: children sit side-by-side (columns are split).
 public enum Direction: UInt32, Sendable {
     /// Children stacked vertically (top to bottom). `direction = 0` in shim.
-    case vertical   = 0
+    case vertical = 0
     /// Children arranged horizontally (left to right). `direction = 1` in shim.
     case horizontal = 1
 }
@@ -127,9 +127,9 @@ public func layout(
     let count = constraints.count
     guard count > 0 else { return [] }
 
-    let kinds  = constraints.map { $0.kind }
-    let valA   = constraints.map { $0.valueA }
-    let valB   = constraints.map { $0.valueB }
+    let kinds = constraints.map { $0.kind }
+    let valA = constraints.map { $0.valueA }
+    let valB = constraints.map { $0.valueB }
 
     // Allocate the output buffer on the stack via a Swift array.
     var outRects = [RffiRect](repeating: RffiRect(), count: count)

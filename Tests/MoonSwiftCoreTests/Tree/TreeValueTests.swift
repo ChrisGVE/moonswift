@@ -4,8 +4,9 @@
 // Upstream: MoonSwiftCore/Tree/TreeValue.swift
 // Downstream: (test target)
 
-import Testing
 import Collections
+import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - Equatable

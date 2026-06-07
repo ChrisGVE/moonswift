@@ -15,13 +15,14 @@
 // Downstream: (test target — nothing imports this)
 
 import Testing
+
 @testable import MoonSwiftCore
 
 // MARK: - Fixture lists (ground truth verified against LuaSwift source)
 
 /// Base module table names that must always be present.
 private let expectedBaseTableNames: Set<String> = [
-    "",         // root luaswift table
+    "",  // root luaswift table
     "json",
     "yaml",
     "regex",
@@ -392,8 +393,10 @@ struct LuaModuleCatalogAvailabilityTests {
             !$0.tableName.isEmpty && $0.availability == .base
         }
         let names = Set(nonRootBase.map(\.tableName))
-        let expected: Set<String> = ["json", "yaml", "regex", "mathx", "stringx",
-                                     "tablex", "types", "utf8x", "svg"]
+        let expected: Set<String> = [
+            "json", "yaml", "regex", "mathx", "stringx",
+            "tablex", "types", "utf8x", "svg",
+        ]
         #expect(names == expected)
     }
 }
@@ -418,8 +421,8 @@ struct LuaModuleCatalogOptInNamesTests {
         #expect(allowList.contains("iox"))
         #expect(allowList.contains("http"))
         #expect(allowList.contains("ui"))
-        #expect(!allowList.contains("json"))   // base module — not opt-in
-        #expect(!allowList.contains("toml"))   // conditional — not opt-in
+        #expect(!allowList.contains("json"))  // base module — not opt-in
+        #expect(!allowList.contains("toml"))  // conditional — not opt-in
         #expect(!allowList.contains("bogus"))  // unknown — not in catalog
     }
 }
