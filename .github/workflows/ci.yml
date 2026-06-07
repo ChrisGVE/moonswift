@@ -7,8 +7,8 @@
 #       builds and tests the Swift package in source mode with the freshly
 #       built shim artifact from job (1).
 #
-# Runner: macos-14 (Apple Silicon, macOS Sequoia 14 — stable GitHub-hosted
-#         runner for macOS + Xcode 16 workloads as of 2026).
+# Runner: macos-15 (macOS Sequoia 15 — ships with Xcode 16, providing the
+#         Swift 6 toolchain required by Package.swift's swift-tools-version 6.0).
 #
 # Environment variables propagated to every Swift step (mirrors the Makefile):
 #   MOONSWIFT_SHIM_SOURCE=1    — source-build mode: CRatatuiFFI is the stub
@@ -48,7 +48,7 @@ jobs:
   # run manually in that directory (Makefile `test` target: cargo test).
   shim:
     name: Shim (Rust)
-    runs-on: macos-14
+    runs-on: macos-15
 
     defaults:
       run:
@@ -105,7 +105,7 @@ jobs:
   # the cbindgen header are available before SPM resolves linker settings.
   swift:
     name: Swift package
-    runs-on: macos-14
+    runs-on: macos-15
     needs: shim
 
     env:
