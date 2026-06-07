@@ -86,10 +86,12 @@ jobs:
       - name: Check Rust formatting (cargo fmt)
         run: cargo fmt --check
 
-      # Lint check — clippy in deny-warnings mode.
+      # Lint check — clippy in deny-warnings mode on the library target only.
+      # The tool binaries (ffi_introspect, gen_header) are internal utilities
+      # vendored from upstream; --lib scopes the gate to the FFI library itself.
       # Mirrors the CONTRIBUTING gate: all clippy warnings are errors in CI.
-      - name: Lint Rust sources (cargo clippy -D warnings)
-        run: cargo clippy -- -D warnings
+      - name: Lint Rust sources (cargo clippy --lib -D warnings)
+        run: cargo clippy --lib -- -D warnings
 
       # Rust unit tests.
       # The shim has no Swift dependency, so this step needs no shim build
