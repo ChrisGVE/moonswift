@@ -176,17 +176,23 @@ jobs:
       # Run each test target in its own step so failures are immediately
       # attributable to a specific binary. Targets run sequentially to avoid
       # resource contention on the hosted runner.
+      #
+      # `ulimit -s unlimited` before each step removes the default 8 MB stack
+      # ceiling on macOS GCD/secondary threads, preventing SIGBUS when the
+      # test runner starts a thread to enumerate tests in a target that links
+      # libratatui_ffi.a (the Rust static lib with ~4 KB inline C structs on
+      # the stack in EventDecodingTests).
 
       # MoonSwiftCoreTests: pure Swift logic, Lua engine (LuacheckSpikeTests),
       # YAML/JSON/TOML decoders, JSONPath evaluator, project validation.
       # LuacheckSpikeTests is the required CI gate (PRD F4.0).
       - name: Test MoonSwiftCoreTests
-        run: swift test --filter MoonSwiftCoreTests
+        run: ulimit -s unlimited && swift test --filter MoonSwiftCoreTests
 
       # RatatuiKitTests: FFI bindings — links the Rust static lib.
       - name: Test RatatuiKitTests
-        run: swift test --filter RatatuiKitTests
+        run: ulimit -s unlimited && swift test --filter RatatuiKitTests
 
       # MoonSwiftTUITests: TUI app model tests.
       - name: Test MoonSwiftTUITests
-        run: swift test --filter MoonSwiftTUITests
+        run: ulimit -s unlimited && swift test --filter MoonSwiftTUITests
