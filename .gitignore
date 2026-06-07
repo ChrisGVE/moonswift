@@ -9,6 +9,9 @@ DerivedData/
 
 # Rust shim
 rust/ratatui-ffi/target/
+# Repo root holds no Cargo project; a stray root Cargo.lock is an artifact.
+# The vendored shim's own Cargo.lock (rust/ratatui-ffi/Cargo.lock) IS committed.
+/Cargo.lock
 
 # Build artifacts (release pipeline)
 *.xcframework

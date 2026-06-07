@@ -97,9 +97,13 @@ make test    # Rust unit tests (cargo test) + Swift tests (swift test)
 Or individually:
 
 ```sh
-cd rust/ratatui-ffi && cargo test
+cd rust/ratatui-ffi && cargo test -- --test-threads=1
 MOONSWIFT_SHIM_SOURCE=1 LUASWIFT_INCLUDE_TOMLKIT=1 swift test
 ```
+
+Rust tests must run single-threaded: the shim's last-error slot is
+process-global by design (TLS is avoided for arm64e compatibility — see
+`rust/ratatui-ffi/src/guard.rs`), so concurrent test threads race on it.
 
 `MoonSwiftCore` has a ≥ 85% coverage gate. CI enforces it.
 
