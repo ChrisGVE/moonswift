@@ -49,6 +49,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dependency map, release pipeline.
 - `docs/internals/ux-spec.md` — binding P1 UX specification: keybindings,
   error text literals, theme token table.
+- `docs/internals/ffi-boundary.md` — threading contract (render/terminal-class
+  vs input-class), error protocol (i32 + last-error), process-global last-error
+  slot (arm64e TLS/PAC rationale), `ffi_guard!` variants, cell batching
+  contract, and emergency restore design.
+- `docs/internals/lint.md` — vendored luacheck subset manifest, `package.preload`
+  loader mechanism, spike test verdict, upgrade path.
+- `docs/internals/catalog.md` — `LuaModuleCatalog` schema, availability
+  categories (`.base`/`.conditional`/`.optIn`/`.compileFlagGated`), three
+  consumers (`luacheckGlobals`, `optInNames`, completion/meta stubs), and
+  the maintenance rule for LuaSwift version bumps.
 - Repository hygiene: `CONTRIBUTING.md`, `CHANGELOG.md`, `.github/ISSUE_TEMPLATE/`
   (bug report and feature request templates), `.gitignore` extended for
   Rust `target/` and build artifacts.
