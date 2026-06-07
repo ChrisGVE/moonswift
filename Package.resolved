@@ -1,0 +1,84 @@
+{
+  "originHash" : "5b0742a2ad2b35fffb76ea05cce850b2be11b1bb83ad3aac4dbca3343a2027b7",
+  "pins" : [
+    {
+      "identity" : "luaswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ChrisGVE/LuaSwift.git",
+      "state" : {
+        "revision" : "2fd31bcd4c4dbc1da0cfd41a385c3b8f68e0d331"
+      }
+    },
+    {
+      "identity" : "swift-collections",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-collections.git",
+      "state" : {
+        "revision" : "fea17c02d767f46b23070fdfdacc28a03a39232a",
+        "version" : "1.5.1"
+      }
+    },
+    {
+      "identity" : "swifttreesitter",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ChimeHQ/SwiftTreeSitter.git",
+      "state" : {
+        "revision" : "08ef81eb8620617b55b08868126707ad72bf754f",
+        "version" : "0.25.0"
+      }
+    },
+    {
+      "identity" : "tomlkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/LebJe/TOMLKit.git",
+      "state" : {
+        "revision" : "ec6198d37d495efc6acd4dffbd262cdca7ff9b3f",
+        "version" : "0.6.0"
+      }
+    },
+    {
+      "identity" : "tree-sitter",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tree-sitter/tree-sitter",
+      "state" : {
+        "revision" : "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
+        "version" : "0.25.10"
+      }
+    },
+    {
+      "identity" : "tree-sitter-json",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tree-sitter/tree-sitter-json.git",
+      "state" : {
+        "revision" : "ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24"
+      }
+    },
+    {
+      "identity" : "tree-sitter-lua",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Azganoth/tree-sitter-lua.git",
+      "state" : {
+        "branch" : "84fcbca1b4e377010c5d55aa37fec52ce6a295a0",
+        "revision" : "6b02dfd7f07f36c223270e97eb0adf84e15a4cef"
+      }
+    },
+    {
+      "identity" : "tree-sitter-yaml",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mattmassicotte/tree-sitter-yaml.git",
+      "state" : {
+        "revision" : "bd633dc67bd71934961610ca8bd832bf2153883e"
+      }
+    },
+    {
+      "identity" : "yams",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/jpsim/Yams.git",
+      "state" : {
+        "revision" : "3d6871d5b4a5cd519adf233fbb576e0a2af71c17",
+        "version" : "5.4.0"
+      }
+    }
+  ],
+  "version" : 3
+}
