@@ -1,5 +1,5 @@
 // File: rust/ratatui-ffi/src/guard.rs
-// Role: Panic guard (ffi_guard macro), thread-local last-error string, and
+// Role: Panic guard (ffi_guard macro), per-thread last-error string, and
 //       the rffi_last_error accessor. Every extern "C" entry point wraps its
 //       body in ffi_guard!() so that a Rust panic becomes an i32 error code
 //       rather than undefined behaviour across the C ABI.
@@ -9,38 +9,54 @@
 //   - On error, set_last_error() stores a human-readable description.
 //   - rffi_last_error(buf, cap) copies the stored string to the caller.
 //
-// Upstream: std::panic (catch_unwind), std::thread_local
+// Implementation note (arm64 / Swift interop):
+//   Rust's thread_local! macro generates TLS (thread-local storage) sections
+//   that can conflict with Swift's own TLS on macOS arm64 when the Rust static
+//   lib is linked into a Swift binary, causing SIGBUS at test startup
+//   (ARCHITECTURE.md §5.4 arm64-TLS caveat).
+//
+//   To avoid this, per-thread last-error state is stored in a process-global
+//   OnceLock<Mutex<HashMap<ThreadId, String>>> instead of thread_local!.
+//   This is slightly heavier (one Mutex lock per FFI call) but avoids any
+//   Rust-managed TLS segment in the final binary.
+//
+// Upstream: std::panic (catch_unwind), std::sync, std::thread
 // Downstream: every src/*.rs module that defines extern "C" entry points
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::c_char;
+use std::sync::{Mutex, OnceLock};
+use std::thread;
 
 // ---------------------------------------------------------------------------
-// Thread-local last-error string
+// Per-thread last-error string (stored in a global map, keyed by ThreadId)
 // ---------------------------------------------------------------------------
 
-thread_local! {
-    // The last error message produced on this thread. Empty string = no error.
-    static LAST_ERROR: RefCell<String> = RefCell::new(String::new());
+static LAST_ERRORS: OnceLock<Mutex<HashMap<thread::ThreadId, String>>> = OnceLock::new();
+
+fn last_errors() -> &'static Mutex<HashMap<thread::ThreadId, String>> {
+    LAST_ERRORS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Store an error message in the thread-local slot.
+/// Store an error message for the current thread.
 ///
 /// Callers inside ffi_guard!() use this when the body returns an error code
 /// so that rffi_last_error can retrieve the description.
 pub(crate) fn set_last_error(msg: impl Into<String>) {
-    LAST_ERROR.with(|cell| {
-        *cell.borrow_mut() = msg.into();
-    });
+    if let Ok(mut map) = last_errors().lock() {
+        map.insert(thread::current().id(), msg.into());
+    }
 }
 
-/// Clear the thread-local last-error slot (called at the top of ffi_guard!
-/// before running the body, so a successful call leaves an empty slot).
+/// Clear the per-thread last-error slot.
+///
+/// Called at the top of ffi_guard! before running the body, so a successful
+/// call leaves an empty/absent slot for this thread.
 pub(crate) fn clear_last_error() {
-    LAST_ERROR.with(|cell| {
-        cell.borrow_mut().clear();
-    });
+    if let Ok(mut map) = last_errors().lock() {
+        map.remove(&thread::current().id());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -63,7 +79,7 @@ pub(crate) fn panic_message(payload: Box<dyn Any + Send + 'static>) -> String {
 
 /// Wrap an extern "C" entry-point body in a catch_unwind, translating Rust
 /// panics into an i32 error code and storing the panic message in the
-/// thread-local last-error slot.
+/// per-thread last-error slot.
 ///
 /// Usage — returns i32 (0 = ok):
 ///
@@ -137,7 +153,7 @@ macro_rules! ffi_guard_ptr {
 // rffi_last_error — C-visible accessor
 // ---------------------------------------------------------------------------
 
-/// Copy the thread-local last-error string into `buf` (at most `cap - 1`
+/// Copy the per-thread last-error string into `buf` (at most `cap - 1`
 /// bytes, NUL-terminated). Returns the number of bytes written (excluding
 /// NUL), or -1 if `buf` is NULL or `cap` is 0.
 ///
@@ -148,8 +164,9 @@ pub extern "C" fn rffi_last_error(buf: *mut c_char, cap: usize) -> i32 {
     if buf.is_null() || cap == 0 {
         return -1;
     }
-    LAST_ERROR.with(|cell| {
-        let msg = cell.borrow();
+    let tid = thread::current().id();
+    let n = if let Ok(map) = last_errors().lock() {
+        let msg = map.get(&tid).map(|s| s.as_str()).unwrap_or("");
         let bytes = msg.as_bytes();
         // Write at most cap-1 bytes so there is always room for the NUL.
         let n = bytes.len().min(cap - 1);
@@ -158,7 +175,11 @@ pub extern "C" fn rffi_last_error(buf: *mut c_char, cap: usize) -> i32 {
             *buf.add(n) = 0;
         }
         n as i32
-    })
+    } else {
+        unsafe { *buf = 0 };
+        0
+    };
+    n
 }
 
 #[cfg(test)]
@@ -223,7 +244,7 @@ mod tests {
         set_last_error("stale");
         let code = ffi_guard!("ok_entry", { 0 });
         assert_eq!(code, 0);
-        // After a successful call the slot should be empty.
+        // After a successful call the slot should be empty (removed from map).
         let mut buf = [0u8; 64];
         let n = rffi_last_error(buf.as_mut_ptr() as *mut c_char, buf.len());
         assert_eq!(n, 0);

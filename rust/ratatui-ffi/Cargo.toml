@@ -108,10 +108,6 @@ enums_renames = "Alignment=FfiAlign;Position=FfiPosition;Marker=FfiMarker"
 # ARCHITECTURE.md §5.2 and the fork README.  Allow it here rather than
 # sprinkling #[allow] on every entry point.
 #
-# `clippy::missing_const_for_thread_local` fires on the thread-local
-# last-error storage in guard.rs. The `const` form is a Rust 1.83+ feature;
-# we pin to stable and do not require a minimum version that late yet.
-#
 # `clippy::explicit_counter_loop` in cells.rs: the loop increments a column
 # counter whose type and semantics are checked against the C ABI layout; a zip
 # rewrite would require an additional iterator construction and obscures intent.
@@ -121,6 +117,5 @@ enums_renames = "Alignment=FfiAlign;Position=FfiPosition;Marker=FfiMarker"
 # grouping them would require an additional C struct and break callers.
 [lints.clippy]
 not_unsafe_ptr_arg_deref   = "allow"
-missing_const_for_thread_local = "allow"
 explicit_counter_loop      = "allow"
 too_many_arguments         = "allow"
