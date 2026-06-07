@@ -1,0 +1,13 @@
+// File: Sources/CRatatuiFFI/include/module.modulemap
+// Role: SPM module map declaring the CRatatuiFFI C module that RatatuiKit
+//       imports. Points to the umbrella header, which in production is the
+//       cbindgen-generated header from the Rust shim; in source mode (bootstrap,
+//       before the first shim release) it is the hand-authored stub header
+//       that mirrors the same ABI declarations.
+// Upstream: rust/ratatui-ffi (cbindgen-generated header, F0.2/F0.3)
+// Downstream: RatatuiKit (sole importer of this module)
+
+module CRatatuiFFI {
+    umbrella header "ratatui_ffi.h"
+    export *
+}
