@@ -5,10 +5,11 @@
 // Upstream: EventPump.swift, EventSource.swift, EventChannel.swift
 // Downstream: (test target)
 
-import Testing
 import Foundation
-@testable import MoonSwiftTUI
 import RatatuiKit
+import Testing
+
+@testable import MoonSwiftTUI
 
 // MARK: - EventPump tests
 
@@ -29,17 +30,20 @@ struct EventPumpTests {
         // on each call, so we just wait briefly and then drain.
         Thread.sleep(forTimeInterval: 0.2)
 
-        // Stop the pump before draining to avoid races.
+        // Stop the pump before draining to avoid races. Drain non-blockingly:
+        // after stop() no producer remains, so a blocking drain on an empty
+        // queue would deadlock instead of failing the assertion below.
         pump.stop()
 
-        let events = channel.waitAndDrainAll()
+        let events = channel.drainAll()
         #expect(events.count >= 2)
         if case .key(.char("j"), let mods) = events[0] {
             #expect(mods == [])
         } else {
             Issue.record("Expected first event to be key j, got \(events[0])")
         }
-        if case .key(.char("k"), _) = events[1] {} else {
+        if case .key(.char("k"), _) = events[1] {
+        } else {
             Issue.record("Expected second event to be key k, got \(events[1])")
         }
     }
@@ -81,8 +85,10 @@ struct EventPumpTests {
 
         // While parked: drain what was posted before the park.
         // Then wait a bit to confirm no new events arrive while parked.
+        // Must be the non-blocking drain — the parked pump posts nothing, so
+        // waitAndDrainAll() on an empty queue would block forever.
         Thread.sleep(forTimeInterval: 0.1)
-        let preUnparkCount = channel.waitAndDrainAll().count  // may be 0, 1, or 2
+        let preUnparkCount = channel.drainAll().count  // may be 0, 1, or 2
 
         // Unpark and stop.
         pump.unparkAfterResume()
@@ -112,13 +118,15 @@ struct EventPumpTests {
     func resizeEventsPosted() {
         let channel = EventChannel()
         let source = ScriptedEventSource([
-            .resize(cols: 80, rows: 24),
+            .resize(cols: 80, rows: 24)
         ])
         let pump = EventPump(source: source, channel: channel)
         Thread.sleep(forTimeInterval: 0.15)
         pump.stop()
 
-        let events = channel.waitAndDrainAll()
+        // Non-blocking drain: the pump is stopped, so nothing would wake a
+        // blocking drain if the resize event were missed.
+        let events = channel.drainAll()
         let hasResize = events.contains {
             if case .resize(let size) = $0 {
                 return size.cols == 80 && size.rows == 24

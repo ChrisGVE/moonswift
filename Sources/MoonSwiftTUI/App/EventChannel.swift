@@ -31,7 +31,6 @@ public final class EventChannel: @unchecked Sendable {
     // MARK: Internal state
 
     private var queue: [AppEvent] = []
-    private let lock = NSLock()
     private let condition = NSCondition()
 
     // MARK: Init
@@ -75,6 +74,20 @@ public final class EventChannel: @unchecked Sendable {
         }
 
         // Drain the entire queue atomically under the lock.
+        let drained = queue
+        queue.removeAll(keepingCapacity: true)
+        return drained
+    }
+
+    /// Return all queued events immediately without blocking.
+    ///
+    /// Unlike `waitAndDrainAll()`, an empty queue yields an empty array instead
+    /// of blocking. Intended for teardown paths and tests that must assert on
+    /// the *absence* of events — a blocking drain would deadlock there because
+    /// no producer is left to wake the consumer.
+    public func drainAll() -> [AppEvent] {
+        condition.lock()
+        defer { condition.unlock() }
         let drained = queue
         queue.removeAll(keepingCapacity: true)
         return drained

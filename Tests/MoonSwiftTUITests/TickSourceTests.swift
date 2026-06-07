@@ -5,8 +5,9 @@
 // Upstream: TickSource.swift, EventChannel.swift
 // Downstream: (test target)
 
-import Testing
 import Foundation
+import Testing
+
 @testable import MoonSwiftTUI
 
 // MARK: - TickSource tests
@@ -27,9 +28,13 @@ struct TickSourceTests {
 
         tick.stop()
 
-        // Drain: we expect at least 2 events (3 would be fine too, timing-dependent).
-        let events = channel.waitAndDrainAll()
-        let tickCount = events.filter { if case .tick = $0 { return true }; return false }.count
+        // Drain non-blockingly: if the TickSource posted nothing, a blocking
+        // drain would deadlock instead of failing the assertion below.
+        let events = channel.drainAll()
+        let tickCount = events.filter {
+            if case .tick = $0 { return true }
+            return false
+        }.count
         #expect(tickCount >= 2, "Armed TickSource must post ≥ 2 ticks in 150ms at 50ms interval")
     }
 
@@ -43,8 +48,9 @@ struct TickSourceTests {
         Thread.sleep(forTimeInterval: 0.05)
         tick.disarm()
 
-        // Drain any events accumulated before disarm.
-        _ = channel.waitAndDrainAll()
+        // Drain any events accumulated before disarm (non-blocking — there may
+        // be none if no tick fired in the brief armed window).
+        _ = channel.drainAll()
 
         // Wait another window — no new ticks should arrive.
         Thread.sleep(forTimeInterval: 0.1)
@@ -56,7 +62,10 @@ struct TickSourceTests {
         // was cleanly stopped.
         channel.post(.appStarted)
         let events = channel.waitAndDrainAll()
-        let ticksAfterDisarm = events.filter { if case .tick = $0 { return true }; return false }.count
+        let ticksAfterDisarm = events.filter {
+            if case .tick = $0 { return true }
+            return false
+        }.count
         #expect(ticksAfterDisarm <= 1, "Disarmed TickSource must not post ticks (at most 1 race tick accepted)")
     }
 
@@ -76,7 +85,10 @@ struct TickSourceTests {
 
         channel.post(.appStarted)  // sentinel
         let events = channel.waitAndDrainAll()
-        let tickCount = events.filter { if case .tick = $0 { return true }; return false }.count
+        let tickCount = events.filter {
+            if case .tick = $0 { return true }
+            return false
+        }.count
         #expect(tickCount >= 2, "After interval replacement to 50ms, must see ≥ 2 ticks in 130ms")
     }
 
