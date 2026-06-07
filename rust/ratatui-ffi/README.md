@@ -1,184 +1,91 @@
-# <img src="./logo.webp" alt="ratatui_ffi logo" width="36"/> ratatui_ffi
+# ratatui-ffi — MoonSwift vendored fork
 
-![CI](https://github.com/holo-q/ratatui-ffi/actions/workflows/ci.yml/badge.svg)
-[![GitHub Release](https://img.shields.io/github/v/release/holo-q/ratatui-ffi?logo=github)](https://github.com/holo-q/ratatui-ffi/releases)
-[![crates.io](https://img.shields.io/crates/v/ratatui_ffi.svg?logo=rust&label=crates.io)](https://crates.io/crates/ratatui_ffi)
-[![crates.io downloads](https://img.shields.io/crates/d/ratatui_ffi.svg?logo=rust)](https://crates.io/crates/ratatui_ffi)
-[![docs.rs](https://img.shields.io/docsrs/ratatui_ffi?logo=rust)](https://docs.rs/ratatui_ffi)
+This directory is a vendored fork of [holo-q/ratatui-ffi] used internally by
+MoonSwift as the Rust side of its terminal (TUI) layer.
 
-Native C ABI for [Ratatui], shipped as a tiny `cdylib` you can call from C, C#, Python, TypeScript (via FFI), and more. Optimized for hot loops: span‑based setters and batch APIs minimize allocations and marshaling.
+**This is not a standalone library.** It is built as part of the MoonSwift
+toolchain via `make shim` and consumed by the Swift `CRatatuiFFI` module.
+See `ARCHITECTURE.md §5.2/§5.4` and `PRD §4.5` for the full design rationale.
 
-## Highlights
+## Origin and pin
 
-- Widgets: Paragraph, List (+state), Table (+state), Tabs, Gauge, LineGauge, BarChart, Sparkline, Chart, Scrollbar, Clear, RatatuiLogo, Canvas.
-- Layout: `layout_split`, `layout_split_ex` (spacing + per‑side margins), `layout_split_ex2` (adds `Constraint::Ratio`).
-- Text/Styles: `FfiStyle`, `FfiSpan`, `FfiLineSpans`; lines of styled spans; paragraph base style, alignment, wrap(trim), scroll; named/RGB/indexed colors; all modifiers (incl. hidden/blink).
-- Blocks: per‑side borders, border type, padding, title alignment, and title as spans across all block‑bearing widgets.
-- Terminal: init/clear, batched frame render, raw/alt toggles, cursor get/set/show, size, event poll and injection.
-- Headless: ASCII snapshots; compact and extended style dumps; structured cell dump (`FfiCellInfo`).
-- Throughput: list/paragraph/table batching; table multi‑line cells; dataset batching; reserve helpers.
-- Zero‑alloc paths: span‑based label/title/divider setters for hot code paths.
+| Field         | Value                                                          |
+|---------------|----------------------------------------------------------------|
+| Upstream      | https://github.com/holo-q/ratatui-ffi                         |
+| Tag           | v0.2.6                                                         |
+| Pinned commit | 56858ea9dfe0d6ea2a6aa37f024921e01e07b956                       |
+| ratatui       | 0.29 (pinned to this minor)                                    |
+| crossterm     | 0.28.1 (the version ratatui 0.29 uses internally)              |
+| License       | MIT OR Apache-2.0 (see LICENSE-MIT, LICENSE-APACHE)            |
 
+## What this fork changes
 
-## Quick Start
+Modifications on top of v0.2.6 are tracked in the git history starting from
+the vendor commit. Current differences from upstream:
 
-### Language Bindings
+- **cargo fmt** applied (project pre-commit hook; no logic change).
+- **crate-type**: `["cdylib", "staticlib"]` — `staticlib` added so the Swift
+  package can consume a universal static lib wrapped in an XCFramework
+  binaryTarget (upstream only builds `cdylib`).
+- **crossterm**: updated from `"0.27"` to `"0.28.1"` to match ratatui 0.29's
+  internal dependency — a single crossterm in the link graph is required
+  (ARCH §5.4).
 
-- C#: [holo-q/Ratatui.cs](https://github.com/holo-q/Ratatui.cs)
-- Python: [holo-q/ratatui-py](https://github.com/holo-q/ratatui-py)
-- Go: [holo-q/ratatui-go](https://github.com/holo-q/ratatui-go)
-- TypeScript: [holo-q/ratatui-ts](https://github.com/holo-q/ratatui-ts)
+Future modifications (tracked as task-master tasks):
+- `rffi_` naming convention on all `extern "C"` entry points (task 8).
+- `ffi_guard` panic wrapper (`catch_unwind`) at every entry point (task 8).
+- Integer-status / thread-local last-error protocol (task 8).
+- Surface trimming: remove Table, Chart, BarChart, Sparkline, Gauge/LineGauge,
+  Canvas, Scrollbar, logo/mascot widgets (task 8).
+- Bracketed-paste decode addition (task 8).
+- cbindgen config tuned for MoonSwift's umbrella header (task 8).
 
-### Building
+## Building
 
-Build the library:
+From the MoonSwift repo root:
+
+```bash
+make shim          # cargo build --release + cbindgen header gen + artifact copy
+```
+
+Direct build (for development/testing):
+
 ```bash
 cargo build --release
-# → target/release/libratatui_ffi.so (Linux), .dylib (macOS), ratatui_ffi.dll (Windows)
+cargo test
 ```
 
-Use from C (example: Gauge label spans):
-```c
-FfiStyle white = { .fg = 0x00000010, .bg = 0, .mods = 0 }; // white named
-FfiSpan spans[2] = {
-  { .text_utf8 = "Load ", .style = white },
-  { .text_utf8 = "80%",    .style = white },
-};
-ratatui_gauge_set_label_spans(gauge, spans, 2);
-```
+The `target/release/libratatui_ffi.a` static lib and the generated
+`include/ratatui_ffi.h` header are the artifacts consumed by `CRatatuiFFI`.
 
-## Aspects
+## Pin policy and upgrade procedure
 
-### Span‑Based Setters (Zero‑Alloc Paths)
+Upgrades are deliberate, dedicated tasks — never opportunistic.
 
-Preferred over UTF‑8 string setters in hot loops. All functions treat `FfiSpan.text_utf8` as NUL‑terminated UTF‑8 without ownership transfer.
+**When to upgrade:** only when ratatui releases a minor that fixes a required
+bug or adds a needed surface, and only as a planned task.
 
-- Tabs: `ratatui_tabs_set_divider_spans(spans, len)`
-- Gauge: `ratatui_gauge_set_label_spans(spans, len)`, `ratatui_gauge_set_block_title_spans(spans, len, show_border)`
-- LineGauge: `ratatui_linegauge_set_label_spans(spans, len)`
-- BarChart: `ratatui_barchart_set_labels_spans(lines, len)`, `ratatui_barchart_set_block_title_spans(spans, len, show_border)`
-- Table: `ratatui_table_set_block_title_spans(spans, len, show_border)`
-- Paragraph/List/Tabs/LineGauge/Chart/Sparkline/Scrollbar/Canvas: `*_set_block_title_spans(spans, len, show_border)`
+**How to upgrade:**
 
-Notes and limits:
-- Tabs divider: if a single span is provided, style is preserved; otherwise texts are concatenated (ratatui accepts a single `Span`).
-- Gauge label: texts are concatenated; use `ratatui_gauge_set_styles(..., label_style, ...)` for label styling.
-- BarChart labels: per‑label styling is not supported by ratatui; text‑only, same as TSV path.
+1. Record the target tag and its commit hash.
+2. Re-apply each modification listed above as intent against the new source;
+   do not diff-merge mechanically.
+3. Update the crossterm pin to match the new ratatui minor's internal version
+   (check the new `ratatui` Cargo.toml).
+4. Update NOTICE with the new commit hash and date.
+5. Run `cargo build --release` and `cargo test`; verify the CI suite.
+6. Commit as a single vendor commit followed by per-modification commits.
 
-### FFI Types
+**Reference point:** the commit hash in the Origin table above is the base for
+the next upgrade diff.
 
-- `FfiStyle { fg: u32, bg: u32, mods: u16 }` with helpers `ratatui_color_rgb`, `ratatui_color_indexed`.
-- `FfiSpan { text_utf8: *const c_char, style: FfiStyle }`
-- `FfiLineSpans { spans: *const FfiSpan, len: usize }`
-- Structured outputs: `FfiCellInfo` (headless), list/table state types, draw commands for batched frames.
+## License
 
+holo-q/ratatui-ffi is dual-licensed MIT OR Apache-2.0. Full texts:
 
-### Headless Rendering
+- [LICENSE-MIT](./LICENSE-MIT)
+- [LICENSE-APACHE](./LICENSE-APACHE)
 
-- Text snapshots: `ratatui_headless_render_frame`, and per‑widget helpers (`_paragraph`, `_list`, `_table`, ...).
-- Style snapshots:
-  - Compact: `ratatui_headless_render_frame_styles` → rows of `FG2 BG2 MOD4` hex (named palette).
-  - Extended: `ratatui_headless_render_frame_styles_ex` → `FG8 BG8 MOD4` hex (`FfiStyle` encoding).
-  - Structured cells: `ratatui_headless_render_frame_cells` → fill array of `FfiCellInfo`.
+Attribution: [NOTICE](./NOTICE)
 
-### Feature Bits (Introspection)
-
-Call `ratatui_ffi_feature_bits()` to detect support at runtime. Bits include:
-
-- `SCROLLBAR`, `CANVAS`, `STYLE_DUMP_EX`, `BATCH_TABLE_ROWS`, `BATCH_LIST_ITEMS`, `COLOR_HELPERS`, `AXIS_LABELS`, `SPAN_SETTERS`.
-
-
-## Tips
-
-### Hot‑Path Tips
-
-- Prefer span‑based setters and batched APIs to avoid allocations and repeated marshaling.
-- Reserve capacity where possible (`ratatui_*_reserve_*`) before large appends.
-- Use headless render snapshots in CI for fast, deterministic tests.
-
-### Runtime Behavior & Logging
-
-- By default raw mode is enabled; use `RATATUI_FFI_NO_RAW=1` to disable; `RATATUI_FFI_ALTSCR=1` to use the alternate screen.
-- Set `RATATUI_FFI_TRACE=1` to trace `ENTER/EXIT` of FFI calls (stderr and optional file).
-- Set `RATATUI_FFI_LOG=<path>` to write logs; truncate per run; use `RATATUI_FFI_LOG_APPEND=1` to append.
-- Functions that interact with the terminal are wrapped in panic guards and validate pointers/rects.
-
-
-## Development
-
-### Introspection & Codegen
-
-The `ffi_introspect` tool drives coverage and optional code generation directly from the target crate sources (no rustdoc scraping). It is generic and configured via Cargo.toml.
-
-- One‑shot run (reads Cargo.toml metadata, no args):
-  - `cargo run --quiet --bin ffi_introspect`
-  - Clones the configured repo/tag into `target/src-cache/<repo>/<tag>` (cached), generates code if configured, or prints a clean, hierarchical coverage log (one line per symbol).
-  - Build first to see green binary coverage: `cargo build --release` (or debug).
-
-- Configure in Cargo.toml:
-  - Under `[package.metadata.ffi_introspect]` set:
-    - `emit_rs` → output file for generated symbols/palettes (e.g., `src/ffi/generated.rs`).
-    - `widgets_emit_rs` → optional output for widget DTOs (experimental).
-    - `git_url`, `git_tag` (optional), `dep_name` (to derive tag from Cargo.lock).
-    - `const_root` (path prefix for consts) and `fn_prefix` (name prefix for getters).
-    - `symbol_namespaces` and `set_modules` to control which modules emit string getters and `Set` structs.
-    - `const_modules` to scan nested modules (e.g., `symbols::half_block`) for char/u16 constants.
-    - `dto_enum_u32` to map specific enums to `u32` in generated DTOs (e.g., `Alignment`, `BorderType`).
-    - `dto_renames` to rename generated DTOs (e.g., `layout::Rect=FfiRect`).
-    - `macros.*` to override macro names so the generator can integrate with any project.
-
-- What gets generated:
-  - Public `&'static str` constants in configured namespaces → extern getters.
-  - `struct Set` constants (module‑scoped, all `&str` fields) → `repr(C)` FFI struct + getter per const.
-  - Palette structs (all `Color` fields) → `repr(C)` `u32` palette FFI struct + getters; single `Color` consts → `u32` getters.
-  - Char/u16 symbols within configured `const_modules` (e.g., half-block characters, braille `BLANK`).
-  - Widgets DTOs: placeholder file if `widgets_emit_rs` is configured (implementation evolving).
-
-- Using the output:
-  - The library includes `include!("ffi/generated.rs")` so getters are compiled into the cdylib.
-  - Commit generated files so consumers don’t need the tool at runtime.
-
-### Safety Checks (optional)
-
-For QA and development, you can compile additional input‑validation guards into the FFI layer.
-
-- Feature: `ffi_safety` (disabled by default)
-  - Build with: `cargo build --features ffi_safety`
-  - Adds lightweight validation at FFI boundaries and a small control API.
-  - Default builds remain zero‑overhead — no checks or safety symbols are compiled.
-
-- Runtime control (only available when built with `ffi_safety`):
-  - `void ratatui_ffi_set_safety(bool enabled)` — enable/disable checks at runtime.
-  - `void ratatui_ffi_set_caps(u16 max_w, u16 max_h, u32 max_area, u32 max_text_len, u32 max_batch)` — tune caps.
-  - `FfiStr ratatui_ffi_last_error()` / `void ratatui_ffi_clear_last_error()` — observe/clear the last safety error.
-
-- What is validated today
-  - Draw rectangles: dimension and viewport sanity in renderer and per‑widget draw_in paths.
-  - Lists: per‑item UTF‑8 length cap; batch length cap; selected/offset clamped to item count.
-  - Paragraphs: per‑item UTF‑8 length cap; batch length cap; rect sanity in draw_in.
-  - Tables: rect sanity in both stateful and stateless draw_in.
-
-- Recommended usage for bindings
-  - Ship two artifacts if you prefer (with/without `ffi_safety`), or ask advanced users to build from submodule.
-  - In debug/QA builds of the `ffi_safety` artifact, call `ratatui_ffi_set_safety(true)` at startup and optionally set caps. In release, leave safety disabled.
-
-### C Header Generation
-
-This crate exposes a C ABI and ships a cbindgen config to generate a header for C/C++ consumers.
-
-Generate `include/ratatui_ffi.h` with either:
-```bash
-# Rusty way (requires cbindgen installed):
-cargo run --quiet --bin gen_header
-
-# or Bash helper:
-bash tools/gen_header.sh
-```
-Then include it from C/C++ bindings. CI can generate and attach it to releases.
-
-
-### CI Notes
-
-Release builds can produce prebuilt binaries for Linux/macOS/Windows. See the GitHub Actions in this repo and the C# binding repo for multi‑RID examples.
-
-[Ratatui]: https://github.com/ratatui-org/ratatui
+[holo-q/ratatui-ffi]: https://github.com/holo-q/ratatui-ffi
