@@ -122,12 +122,21 @@ too_many_arguments         = "allow"
 
 # ── Crates.io patch overrides ─────────────────────────────────────────────────
 #
-# ratatui-0.29.0 contains `thread_local! { static LAYOUT_CACHE: … }` in
-# src/layout/layout.rs.  On arm64 macOS, Rust TLS sections inside a staticlib
-# conflict with Swift's TLS initialisation when the lib is linked into a Swift
-# test binary, causing SIGBUS (ARCHITECTURE.md §5.4 arm64-TLS caveat).
+# On arm64 macOS, Rust TLS sections (thread_local!) inside a staticlib conflict
+# with Swift's TLS initialisation when the lib is linked into a Swift test
+# binary, causing SIGBUS at binary load time (ARCHITECTURE.md §5.4 arm64-TLS).
 #
-# The local patch replaces the thread_local! with OnceLock<Mutex<Cache>>.
-# The patched source lives at rust/ratatui-patched/ (relative to workspace root).
+# Two patches eliminate all thread_local! from the link graph:
+#
+# ratatui-0.29.0 — LAYOUT_CACHE (thread_local! LruCache) removed from
+#   src/layout/layout.rs; split_with_spacers now calls try_split directly.
+#   Patched source: rust/ratatui-patched/
+#
+# crossterm-0.28.1 — parking_lot replaced with std::sync throughout:
+#   terminal/sys/unix.rs, style/types/colored.rs, event.rs.
+#   parking_lot_core uses thread_local! internally; removing it eliminates the
+#   last TLS sections from the static lib.
+#   Patched source: rust/crossterm-patched/
 [patch.crates-io]
 ratatui = { path = "../ratatui-patched" }
+crossterm = { path = "../crossterm-patched" }
