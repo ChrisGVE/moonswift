@@ -270,14 +270,12 @@ silent no-op — the user runs `reset`).
 `INITIALIZED`. The order matters: the static storage is populated before the
 flag that arms `rffi_emergency_restore` is set.
 
-```
-Mermaid diagram — signal-safe restore sequence
-
+```mermaid
 sequenceDiagram
     participant H as Signal handler (Main)
     participant S as rffi_emergency_restore
 
-    H->>S: call (from SIGSEGV/SIGBUS/SIGILL/… handler)
+    H->>S: call (from SIGSEGV/SIGBUS/SIGILL/... handler)
     S->>S: atomic read INITIALIZED — false → return (no-op)
     Note over S: if INITIALIZED is true:
     S->>S: atomic read TTY_FD
