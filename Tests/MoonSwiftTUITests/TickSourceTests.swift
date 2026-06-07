@@ -23,8 +23,10 @@ struct TickSourceTests {
         // Arm at a short interval for testing.
         tick.arm(interval: .milliseconds(50))
 
-        // Wait long enough for at least two ticks.
-        Thread.sleep(forTimeInterval: 0.15)
+        // Wait long enough for ~9 ticks. The wide window (10× the interval)
+        // absorbs CI-runner scheduling starvation — a 150ms window flaked on
+        // shared runners where thread wakeups were delayed by 80ms+.
+        Thread.sleep(forTimeInterval: 0.5)
 
         tick.stop()
 
@@ -35,7 +37,7 @@ struct TickSourceTests {
             if case .tick = $0 { return true }
             return false
         }.count
-        #expect(tickCount >= 2, "Armed TickSource must post ≥ 2 ticks in 150ms at 50ms interval")
+        #expect(tickCount >= 2, "Armed TickSource must post ≥ 2 ticks in 500ms at 50ms interval")
     }
 
     @Test("disarmed TickSource stops posting ticks")
@@ -79,8 +81,12 @@ struct TickSourceTests {
         Thread.sleep(forTimeInterval: 0.01)
         tick.arm(interval: .milliseconds(50))
 
-        // Wait 130ms — at 50ms we expect ≥ 2 ticks; at 200ms we'd expect 0.
-        Thread.sleep(forTimeInterval: 0.13)
+        // Count ticks over a 1s window. At the replaced 50ms interval ~19 ticks
+        // fire; if the replacement were ignored (still 200ms) at most 5 could.
+        // The ≥ 8 threshold separates the two by ~2× in both directions, which
+        // absorbs CI-runner scheduling starvation (a 130ms window flaked on
+        // shared runners where only 1 tick landed instead of 2).
+        Thread.sleep(forTimeInterval: 1.0)
         tick.stop()
 
         channel.post(.appStarted)  // sentinel
@@ -89,7 +95,9 @@ struct TickSourceTests {
             if case .tick = $0 { return true }
             return false
         }.count
-        #expect(tickCount >= 2, "After interval replacement to 50ms, must see ≥ 2 ticks in 130ms")
+        #expect(
+            tickCount >= 8,
+            "After interval replacement to 50ms, must see ≥ 8 ticks in 1s (200ms interval could yield at most 5)")
     }
 
     @Test("stop terminates the background thread cleanly")
@@ -100,9 +108,11 @@ struct TickSourceTests {
         Thread.sleep(forTimeInterval: 0.06)
 
         // stop() should return promptly — it signals the condition variable.
+        // The 1s bound is generous for CI-runner scheduling jitter; the test
+        // distinguishes "returns promptly" from "hangs", not exact latency.
         let before = Date()
         tick.stop()
         let elapsed = Date().timeIntervalSince(before)
-        #expect(elapsed < 0.2, "stop() must signal the background thread within 200ms")
+        #expect(elapsed < 1.0, "stop() must signal the background thread promptly (1s bound)")
     }
 }
