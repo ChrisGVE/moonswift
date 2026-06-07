@@ -10,6 +10,7 @@
 //             MoonSwiftTUI/Render/Renderer.swift (interprets RenderCommands)
 
 import CRatatuiFFI
+import Darwin
 
 // MARK: - CellStyle
 
