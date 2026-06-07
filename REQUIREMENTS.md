@@ -1,6 +1,7 @@
 # MoonSwift — Requirements
 
-Status: post-audit round 2 (req-collection, 2026-06-07)
+Status: **final** — converged after 3 audit rounds (req-collection,
+2026-06-07). Ready for `agentic-prd`.
 
 ## Overview
 
@@ -18,7 +19,9 @@ area": `LuaValueServer` namespaces and `registerFunction` callbacks). Today the
 only way to exercise such a script is to run the full host application. There
 is no way to run, lint, debug, or get completions for a script against a
 simulated host environment — and generic Lua tooling knows nothing about
-LuaSwift's ~31 Swift-backed modules or the app's registered functions.
+LuaSwift's Swift-backed modules (~31 across all optional dependency
+configurations; ~10 in the base configuration MoonSwift P1 targets) or the
+app's registered functions.
 
 **Solution.** A keyboard-driven TUI that loads Lua sources (whole files or
 designated fields inside structured files), lets the user mock the sharing
@@ -138,7 +141,10 @@ Delivery is phased. P1 is the MVP; each phase is independently shippable.
     static description of the `luaswift.*` modules shipped inside MoonSwift
     (names for lint; signatures added for F7a). It is the same artifact F7
     later reuses; LuaSwift#21 augments it with *live* entries (user mocks)
-    from P2 on. See Open Questions for its long-term source format.
+    from P2 on. See Open Questions for its long-term source format. Whether
+    the opt-in modules (`luaswift.iox`, `luaswift.http`, `luaswift.ui`) get
+    catalog entries (relevant for unrestricted-mode testing) is decided at
+    PRD time.
   - Known gap, accepted: luacheck's Lua 5.5 grammar is still maturing
     upstream (e.g. the 5.5 `global` declaration, lunarmodules/luacheck#134);
     affected constructs may mis-lint until upstream lands them. The syntax
