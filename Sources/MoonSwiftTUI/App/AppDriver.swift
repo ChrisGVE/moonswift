@@ -41,6 +41,7 @@ public final class AppDriver: @unchecked Sendable {
     private let channel: EventChannel
     private let pump: EventPump
     private let tickSource: TickSource
+    private let highlighter: Highlighter
 
     // MARK: State
 
@@ -65,16 +66,19 @@ public final class AppDriver: @unchecked Sendable {
     ///   - channel: The MPSC queue bridging all event producers to the loop.
     ///   - pump: The terminal event pump (already running on its thread).
     ///   - tickSource: The armed/disarmed tick poster (already running).
+    ///   - highlighter: The tree-sitter highlighter (serial parse executor).
     ///   - seed: The initial `AppState` built from the decoded project file.
     public init(
         channel: EventChannel,
         pump: EventPump,
         tickSource: TickSource,
+        highlighter: Highlighter = Highlighter(),
         seed: AppState
     ) {
         self.channel = channel
         self.pump = pump
         self.tickSource = tickSource
+        self.highlighter = highlighter
         self.state = seed
     }
 
@@ -163,8 +167,19 @@ public final class AppDriver: @unchecked Sendable {
             channel.post(.catalogProbed(tomlAvailable: false))
 
         case .highlight(let id):
-            // Highlighter.highlight() — no-op in skeleton; empty spans.
-            channel.post(.highlightReady(id, spans: []))
+            // Dispatch to the Highlighter's serial parse executor.
+            // The source text is extracted from the current state here, on the
+            // UI thread, before the async dispatch — so there is no data race:
+            // AppState is a value type and we copy the text string into the
+            // closure (Sendable capture).
+            if case .loaded(let fragment) = state.sources[id] {
+                let text = fragment.code
+                highlighter.highlight(id, text: text, via: channel)
+            } else {
+                // Source not loaded yet — post empty spans so the reducer's
+                // first-access-unhighlighted contract is satisfied.
+                channel.post(.highlightReady(id, spans: []))
+            }
 
         case .loadSources:
             // SourceStore.loadSources() — no-op in skeleton.
