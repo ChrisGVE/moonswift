@@ -239,6 +239,21 @@ jobs:
           sysctl -n machdep.cpu.brand_string 2>/dev/null || true
           uname -m
 
+          echo "=== swiftpm-testing-helper slices (swift-testing test host) ==="
+          # SPM runs swift-testing tests inside swiftpm-testing-helper, which
+          # loads the test bundle + Rust dylib. If the helper has an arm64e
+          # slice, dyld picks it on Apple Silicon and the arm64 Rust dylib's
+          # TLS descriptors are PAC-unsigned -> SIGBUS (the crash we chase).
+          for XC in /Applications/Xcode*.app; do
+            HELPER="$XC/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper"
+            if [ -f "$HELPER" ]; then
+              echo "--- $XC ---"
+              lipo -archs "$HELPER" 2>/dev/null || file "$HELPER"
+            fi
+          done
+          echo "=== Installed Xcodes ==="
+          ls -d /Applications/Xcode*.app 2>/dev/null
+
           echo "=== macOS Diagnostic Reports (test-process crash) ==="
           # ReportCrash writes the .ips asynchronously — give it time to land,
           # polling for a report named after the test binary specifically.
@@ -247,7 +262,9 @@ jobs:
           REPORT=""
           for i in $(seq 1 12); do
             REPORT=$(ls -t ~/Library/Logs/DiagnosticReports/MoonSwiftPackageTests*.ips \
+                           ~/Library/Logs/DiagnosticReports/swiftpm-testing-helper*.ips \
                            /Library/Logs/DiagnosticReports/MoonSwiftPackageTests*.ips \
+                           /Library/Logs/DiagnosticReports/swiftpm-testing-helper*.ips \
                            2>/dev/null | head -1)
             [ -n "$REPORT" ] && break
             sleep 5
@@ -256,7 +273,7 @@ jobs:
             echo "=== Test-process crash report: $REPORT (full) ==="
             cat "$REPORT"
           else
-            echo "(no MoonSwiftPackageTests*.ips appeared after 60s)"
+            echo "(no test-process .ips appeared after 60s)"
             for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
               [ -d "$dir" ] && { echo "--- $dir ---"; ls -lt "$dir" | head -10; }
             done
