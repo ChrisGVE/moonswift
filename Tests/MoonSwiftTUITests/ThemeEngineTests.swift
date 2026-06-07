@@ -168,14 +168,14 @@ struct TruecolorTokenTests {
         #expect(theme.tokens[.number]?.fg == .rgb(0xBD, 0x93, 0xF9))
     }
 
-    @Test("function fg = #50FA7B (Dracula green)")
-    func functionFg() {
-        #expect(theme.tokens[.function]?.fg == .rgb(0x50, 0xFA, 0x7B))
+    @Test("functionName (function_name) fg = #50FA7B (Dracula green)")
+    func functionNameFg() {
+        #expect(theme.tokens[.functionName]?.fg == .rgb(0x50, 0xFA, 0x7B))
     }
 
-    @Test("variable (identifier) fg = #F8F8F2 (Dracula foreground)")
-    func variableFg() {
-        #expect(theme.tokens[.variable]?.fg == .rgb(0xF8, 0xF8, 0xF2))
+    @Test("identifier fg = #F8F8F2 (Dracula foreground)")
+    func identifierFg() {
+        #expect(theme.tokens[.identifier]?.fg == .rgb(0xF8, 0xF8, 0xF2))
     }
 
     @Test("operatorToken fg = #FF79C6 (Dracula pink, same as keyword)")
@@ -195,7 +195,7 @@ struct TruecolorTokenTests {
         #expect(theme.tokens[.warning]?.fg == .rgb(0xFF, 0xB8, 0x6C))
     }
 
-    @Test("added fg = #50FA7B (Dracula green, same as function)")
+    @Test("added fg = #50FA7B (Dracula green, same as functionName)")
     func addedFg() {
         #expect(theme.tokens[.added]?.fg == .rgb(0x50, 0xFA, 0x7B))
     }
@@ -207,14 +207,14 @@ struct TruecolorTokenTests {
         #expect(theme.tokens[.focusBorder]?.fg == .rgb(0xBD, 0x93, 0xF9))
     }
 
-    @Test("activeTab (focus_bg) bg = #44475A (Dracula selection)")
-    func activeTabBg() {
-        #expect(theme.tokens[.activeTab]?.bg == .rgb(0x44, 0x47, 0x5A))
+    @Test("focusBg (focus_bg) bg = #44475A (Dracula selection — cursor-line background)")
+    func focusBgBg() {
+        #expect(theme.tokens[.focusBg]?.bg == .rgb(0x44, 0x47, 0x5A))
     }
 
-    @Test("type (highlight_bg) bg = #3D4455")
-    func typeBg() {
-        #expect(theme.tokens[.type]?.bg == .rgb(0x3D, 0x44, 0x55))
+    @Test("highlightBg (highlight_bg) bg = #3D4455 (jump-target line background)")
+    func highlightBgBg() {
+        #expect(theme.tokens[.highlightBg]?.bg == .rgb(0x3D, 0x44, 0x55))
     }
 
     @Test("highlightPulse (highlight_pulse) bg = #6272A4 (Dracula comment blue)")
@@ -227,19 +227,19 @@ struct TruecolorTokenTests {
         #expect(theme.tokens[.dim]?.fg == .rgb(0x62, 0x72, 0xA4))
     }
 
-    @Test("border (running) fg = #8BE9FD (Dracula cyan)")
-    func borderFg() {
-        #expect(theme.tokens[.border]?.fg == .rgb(0x8B, 0xE9, 0xFD))
+    @Test("running fg = #8BE9FD (Dracula cyan — [running…] indicator and spinner)")
+    func runningFg() {
+        #expect(theme.tokens[.running]?.fg == .rgb(0x8B, 0xE9, 0xFD))
     }
 
-    @Test("punctuation (gutter_bg) bg = #282A36 (Dracula background)")
-    func punctuationBg() {
-        #expect(theme.tokens[.punctuation]?.bg == .rgb(0x28, 0x2A, 0x36))
+    @Test("gutterBg (gutter_bg) bg = #282A36 (Dracula background — gutter column)")
+    func gutterBgBg() {
+        #expect(theme.tokens[.gutterBg]?.bg == .rgb(0x28, 0x2A, 0x36))
     }
 
-    @Test("normal (pane_bg) fg = #F8F8F2 and bg = #282A36")
-    func normalStyle() {
-        let style = theme.tokens[.normal]
+    @Test("paneBg (pane_bg) fg = #F8F8F2 and bg = #282A36")
+    func paneBgStyle() {
+        let style = theme.tokens[.paneBg]
         #expect(style?.fg == .rgb(0xF8, 0xF8, 0xF2))
         #expect(style?.bg == .rgb(0x28, 0x2A, 0x36))
     }
@@ -273,14 +273,14 @@ struct Color256TokenTests {
         #expect(theme.tokens[.number]?.fg == .index(141))
     }
 
-    @Test("function fg = index 84 (bright green)")
-    func functionFg() {
-        #expect(theme.tokens[.function]?.fg == .index(84))
+    @Test("functionName (function_name) fg = index 84 (bright green)")
+    func functionNameFg() {
+        #expect(theme.tokens[.functionName]?.fg == .index(84))
     }
 
-    @Test("variable fg = index 255 (near-white)")
-    func variableFg() {
-        #expect(theme.tokens[.variable]?.fg == .index(255))
+    @Test("identifier fg = index 255 (near-white)")
+    func identifierFg() {
+        #expect(theme.tokens[.identifier]?.fg == .index(255))
     }
 
     @Test("operatorToken fg = index 212 (medium pink)")
@@ -308,14 +308,14 @@ struct Color256TokenTests {
         #expect(theme.tokens[.focusBorder]?.fg == .index(141))
     }
 
-    @Test("activeTab bg = index 237 (dark gray)")
-    func activeTabBg() {
-        #expect(theme.tokens[.activeTab]?.bg == .index(237))
+    @Test("focusBg (focus_bg) bg = index 237 (dark gray — cursor-line background)")
+    func focusBgBg() {
+        #expect(theme.tokens[.focusBg]?.bg == .index(237))
     }
 
-    @Test("type bg = index 238 (slightly lighter gray)")
-    func typeBg() {
-        #expect(theme.tokens[.type]?.bg == .index(238))
+    @Test("highlightBg (highlight_bg) bg = index 238 (slightly lighter gray)")
+    func highlightBgBg() {
+        #expect(theme.tokens[.highlightBg]?.bg == .index(238))
     }
 
     @Test("highlightPulse bg = index 61 (muted blue-purple)")
@@ -328,19 +328,19 @@ struct Color256TokenTests {
         #expect(theme.tokens[.dim]?.fg == .index(61))
     }
 
-    @Test("border fg = index 117 (light cyan)")
-    func borderFg() {
-        #expect(theme.tokens[.border]?.fg == .index(117))
+    @Test("running fg = index 117 (light cyan — [running…] indicator and spinner)")
+    func runningFg() {
+        #expect(theme.tokens[.running]?.fg == .index(117))
     }
 
-    @Test("punctuation bg = index 236 (very dark gray)")
-    func punctuationBg() {
-        #expect(theme.tokens[.punctuation]?.bg == .index(236))
+    @Test("gutterBg (gutter_bg) bg = index 236 (very dark gray — gutter column)")
+    func gutterBgBg() {
+        #expect(theme.tokens[.gutterBg]?.bg == .index(236))
     }
 
-    @Test("normal fg = index 255, bg = index 235")
-    func normalStyle() {
-        let style = theme.tokens[.normal]
+    @Test("paneBg (pane_bg) fg = index 255, bg = index 235")
+    func paneBgStyle() {
+        let style = theme.tokens[.paneBg]
         #expect(style?.fg == .index(255))
         #expect(style?.bg == .index(235))
     }
@@ -388,9 +388,11 @@ struct NoColorTokenTests {
         #expect(theme.tokens[.focusBorder]?.bold == true)
     }
 
-    @Test("activeTab has Underline in NO_COLOR (tab underline is the paired marker — ux-spec §6.3)")
-    func activeTabUnderline() {
-        #expect(theme.tokens[.activeTab]?.underline == true)
+    @Test("focusBg has no underline in NO_COLOR (cursor line indicated by ▶ gutter mark)")
+    func focusBgPlainInNoColor() {
+        // focus_bg is the cursor-line background; in NO_COLOR the ▶ gutter mark
+        // is the sole indicator — no color modifier needed (ux-spec §6.6, §8.5).
+        #expect(theme.tokens[.focusBg]?.underline == false)
     }
 
     // MARK: Non-semantic tokens are plain
