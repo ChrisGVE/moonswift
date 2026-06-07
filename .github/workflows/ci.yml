@@ -173,13 +173,20 @@ jobs:
       - name: Build Swift package (swift build)
         run: swift build
 
-      # Full Swift test suite, including the luacheck spike (LuacheckSpikeTests).
-      # The spike test is a required CI check per PRD F4.0 — it runs inside this
-      # step; there is no separate job for it.
-      #
-      # --no-parallel: run tests serially inside each target to prevent SIGBUS on
-      # the CI runner when multiple Lua VM instances and async I/O compete under
-      # the constrained memory of a hosted runner. (Locally 374 tests pass with
-      # full parallelism; CI runners have tighter resource ceilings.)
-      - name: Run Swift tests (swift test --no-parallel)
-        run: swift test --no-parallel
+      # Run each test target in its own step so failures are immediately
+      # attributable to a specific binary. Targets run sequentially to avoid
+      # resource contention on the hosted runner.
+
+      # MoonSwiftCoreTests: pure Swift logic, Lua engine (LuacheckSpikeTests),
+      # YAML/JSON/TOML decoders, JSONPath evaluator, project validation.
+      # LuacheckSpikeTests is the required CI gate (PRD F4.0).
+      - name: Test MoonSwiftCoreTests
+        run: swift test --filter MoonSwiftCoreTests
+
+      # RatatuiKitTests: FFI bindings — links the Rust static lib.
+      - name: Test RatatuiKitTests
+        run: swift test --filter RatatuiKitTests
+
+      # MoonSwiftTUITests: TUI app model tests.
+      - name: Test MoonSwiftTUITests
+        run: swift test --filter MoonSwiftTUITests
