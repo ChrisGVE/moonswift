@@ -46,14 +46,15 @@ let shimSourceMode = ProcessInfo.processInfo.environment["MOONSWIFT_SHIM_SOURCE"
 // produces the wrong path and the -L linker flag points nowhere.
 let shimPackageRoot = Context.packageDirectory
 
-let cRatatuiFFITarget: Target = shimSourceMode
+let cRatatuiFFITarget: Target =
+    shimSourceMode
     ? .target(
         name: "CRatatuiFFI",
         path: "Sources/CRatatuiFFI",
         sources: ["shim_stub.c"],
         publicHeadersPath: "include",
         cSettings: [
-            .headerSearchPath("include"),
+            .headerSearchPath("include")
         ],
         linkerSettings: [
             // Link the Rust shim as a DYLIB, not a static lib.
@@ -83,7 +84,7 @@ let cRatatuiFFITarget: Target = shimSourceMode
                 "-Xlinker", "-lratatui_ffi",
                 // Embed rpath so the runtime loader finds the dylib.
                 "-Xlinker", "-rpath", "-Xlinker", "\(shimPackageRoot)/rust/ratatui-ffi/target/release",
-            ]),
+            ])
         ]
     )
     : .binaryTarget(
@@ -91,7 +92,7 @@ let cRatatuiFFITarget: Target = shimSourceMode
         // URL and checksum are updated by release.yml in the same change-set
         // that tags a release (two-phase release ordering protocol,
         // ARCHITECTURE.md §5.4). During bootstrap these fields are placeholders.
-        url: "https://github.com/ChrisGVE/MoonSwift/releases/download/placeholder/CRatatuiFFI.xcframework.zip",
+        url: "https://github.com/ChrisGVE/moonswift/releases/download/placeholder/CRatatuiFFI.xcframework.zip",
         checksum: "0000000000000000000000000000000000000000000000000000000000000000"
     )
 
@@ -111,14 +112,14 @@ let package = Package(
 
     // macOS 13 minimum per PRD F0.1 / ARCHITECTURE.md §1.
     platforms: [
-        .macOS(.v13),
+        .macOS(.v13)
     ],
 
     products: [
         .executable(
             name: "moonswift",
             targets: ["moonswift"]
-        ),
+        )
     ],
 
     // MARK: Dependencies
@@ -214,7 +215,7 @@ let package = Package(
                 "src/scanner.c",
             ],
             resources: [
-                .copy("queries"),
+                .copy("queries")
             ],
             publicHeadersPath: "bindings/swift/TreeSitterTOML",
             cSettings: [.headerSearchPath("src")]
@@ -234,7 +235,7 @@ let package = Package(
         .target(
             name: "RatatuiKit",
             dependencies: [
-                "CRatatuiFFI",
+                "CRatatuiFFI"
             ],
             path: "Sources/RatatuiKit",
             swiftSettings: swiftTargetSettings
@@ -265,7 +266,7 @@ let package = Package(
                 // Vendored luacheck pure-Lua subset (F4.0 spike; F4.2 production).
                 // Loaded at runtime by LintService via Bundle.module.
                 // See Sources/MoonSwiftCore/Vendor/luacheck/NOTICE for provenance.
-                .copy("Vendor/luacheck"),
+                .copy("Vendor/luacheck")
             ],
             swiftSettings: swiftTargetSettings
         ),
@@ -295,7 +296,7 @@ let package = Package(
         .executableTarget(
             name: "moonswift",
             dependencies: [
-                "MoonSwiftTUI",
+                "MoonSwiftTUI"
             ],
             path: "Sources/moonswift",
             swiftSettings: swiftTargetSettings
@@ -309,12 +310,12 @@ let package = Package(
         .testTarget(
             name: "MoonSwiftCoreTests",
             dependencies: [
-                "MoonSwiftCore",
+                "MoonSwiftCore"
             ],
             path: "Tests/MoonSwiftCoreTests",
             resources: [
                 // Fixture TOML files for ProjectStore / ProjectFileCodec tests.
-                .copy("Fixtures"),
+                .copy("Fixtures")
             ],
             swiftSettings: swiftTargetSettings
         ),
@@ -325,7 +326,7 @@ let package = Package(
         .testTarget(
             name: "MoonSwiftTUITests",
             dependencies: [
-                "MoonSwiftTUI",
+                "MoonSwiftTUI"
             ],
             path: "Tests/MoonSwiftTUITests",
             swiftSettings: swiftTargetSettings
@@ -335,7 +336,7 @@ let package = Package(
         .testTarget(
             name: "RatatuiKitTests",
             dependencies: [
-                "RatatuiKit",
+                "RatatuiKit"
             ],
             path: "Tests/RatatuiKitTests",
             swiftSettings: swiftTargetSettings
