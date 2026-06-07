@@ -11,7 +11,11 @@ keywords = ["tui", "terminal", "ffi", "c", "bindings"]
 categories = ["api-bindings", "command-line-interface", "gui"]
 
 [lib]
-crate-type = ["cdylib"]
+# "staticlib" added by the MoonSwift fork: the Swift package consumes a
+# universal static lib wrapped in an XCFramework binaryTarget (ARCH §5.4).
+# "cdylib" is retained to keep the upstream tooling (cbindgen, gen_header)
+# working unchanged.
+crate-type = ["cdylib", "staticlib"]
 
 [[bin]]
 name = "ffi_introspect"
@@ -30,8 +34,15 @@ ffi_safety = []
 scrollbar = []
 
 [dependencies]
+# ratatui pinned to the 0.29 minor (MoonSwift fork policy: pin to a specific
+# minor; upgrades are deliberate dedicated tasks — ARCH §5.4, PRD §4.5).
 ratatui = "0.29"
-crossterm = "0.27"
+# crossterm pinned to 0.28.1: the exact version ratatui 0.29 uses internally.
+# A single crossterm in the link graph is required (ARCH §5.4, PRD §4.5).
+# Upstream ratatui-ffi v0.2.6 declared "0.27" — ported here to eliminate the
+# dual-crossterm conflict that would otherwise arise from ratatui's transitive
+# dependency on 0.28.1.
+crossterm = "0.28.1"
 bitflags = "2"
 anstyle = "1"
 anstream = "0.6"
