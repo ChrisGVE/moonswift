@@ -11,6 +11,18 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `.github/workflows/release.yml` — `workflow_dispatch` release workflow
+  implementing the two-phase release ordering protocol (ARCHITECTURE.md §5.4):
+  cross-compile Rust shim (arm64 + x86_64) → lipo universal static lib →
+  XCFramework → sha256 → bot commit updating `Package.swift` binaryTarget →
+  tag → GitHub release with artifact upload → build-provenance attestation
+  (`actions/attest-build-provenance`) → clean x86_64 verify job (`swift build`
+  in binaryTarget mode, no Rust toolchain).  Also builds and attaches a
+  notarization-ready universal `moonswift` binary.
+- `RELEASING.md` — documents the release pipeline, the branch-protection bypass
+  allowance setup for `github-actions[bot]`, recovery procedures, and
+  notarization instructions.
+
 - `.swift-format` config at repo root: 4-space indent, 120-column line
   length, `UseLetInEveryBoundCaseVariable` disabled. Applies consistently
   across all Swift sources and tests.
