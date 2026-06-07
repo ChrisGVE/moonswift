@@ -185,12 +185,10 @@ jobs:
 
       # RatatuiKitTests: FFI bindings — links the Rust static lib.
       # Run with continue-on-error so the crash-report step runs even on signal.
-      # --no-parallel disables Swift Testing's parallel test runner, serialising
-      # all tests so a concurrent-access race does not mask the root cause.
       - name: Test RatatuiKitTests
         id: ratatui_tests
         continue-on-error: true
-        run: swift test --filter RatatuiKitTests --no-parallel
+        run: swift test --filter RatatuiKitTests
 
       # Capture any macOS crash report written by the test binary; the report
       # includes the exact faulting address, thread stack, and instruction that

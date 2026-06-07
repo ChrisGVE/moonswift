@@ -56,12 +56,16 @@ let cRatatuiFFITarget: Target = shimSourceMode
             .headerSearchPath("include"),
         ],
         linkerSettings: [
-            // Absolute path required: a relative -L resolves against the
-            // linker's cwd, not the package root (ARCHITECTURE.md §5.4, F0.3).
+            // Link the static lib by explicit path so the macOS linker
+            // chooses libratatui_ffi.a over libratatui_ffi.dylib.
+            // When both are present in target/release/deps/, ld prefers the
+            // dylib with a bare -lratatui_ffi flag, which then carries Rust
+            // std TLS sections and causes SIGBUS on arm64e.
+            // Passing the .a path directly forces static linking and avoids
+            // the dylib TLS entirely (ARCHITECTURE.md §5.4 arm64-TLS).
             .unsafeFlags([
-                "-L\(shimPackageRoot)/rust/ratatui-ffi/target/release",
+                "\(shimPackageRoot)/rust/ratatui-ffi/target/release/libratatui_ffi.a",
             ]),
-            .linkedLibrary("ratatui_ffi"),
         ]
     )
     : .binaryTarget(
