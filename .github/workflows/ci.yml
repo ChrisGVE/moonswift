@@ -231,19 +231,36 @@ jobs:
             echo "(dylib not found at $RUST_DYLIB)"
           fi
 
-          echo "=== macOS Diagnostic Reports ==="
-          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
-            if [ -d "$dir" ]; then
-              echo "--- $dir ---"
-              ls -lt "$dir" | head -10
-              # Print latest crash report produced since the test run started.
-              LATEST=$(ls -t "$dir"/*.ips "$dir"/*.crash 2>/dev/null | head -1)
-              if [ -n "$LATEST" ]; then
-                echo "=== Crash report: $LATEST ==="
-                cat "$LATEST" 2>/dev/null | head -100
-              fi
-            fi
+          echo "=== Toolchain / test-host architecture ==="
+          xcodebuild -version 2>/dev/null || true
+          XCTEST_BIN="$(xcrun -f xctest 2>/dev/null)"
+          echo "xctest harness: ${XCTEST_BIN:-(not found)}"
+          [ -n "$XCTEST_BIN" ] && file "$XCTEST_BIN"
+          sysctl -n machdep.cpu.brand_string 2>/dev/null || true
+          uname -m
+
+          echo "=== macOS Diagnostic Reports (test-process crash) ==="
+          # ReportCrash writes the .ips asynchronously — give it time to land,
+          # polling for a report named after the test binary specifically.
+          # The previous head -100 of "latest .ips" captured unrelated daemon
+          # crashes (e.g. lsd) and missed the actual test-process report.
+          REPORT=""
+          for i in $(seq 1 12); do
+            REPORT=$(ls -t ~/Library/Logs/DiagnosticReports/MoonSwiftPackageTests*.ips \
+                           /Library/Logs/DiagnosticReports/MoonSwiftPackageTests*.ips \
+                           2>/dev/null | head -1)
+            [ -n "$REPORT" ] && break
+            sleep 5
           done
+          if [ -n "$REPORT" ]; then
+            echo "=== Test-process crash report: $REPORT (full) ==="
+            cat "$REPORT"
+          else
+            echo "(no MoonSwiftPackageTests*.ips appeared after 60s)"
+            for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
+              [ -d "$dir" ] && { echo "--- $dir ---"; ls -lt "$dir" | head -10; }
+            done
+          fi
 
           echo "=== Test binary analysis ==="
           TEST_BIN=$(find .build -name "MoonSwiftPackageTests.xctest" -type d 2>/dev/null | head -1)
