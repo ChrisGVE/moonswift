@@ -446,3 +446,73 @@ struct ThemeEngineOverrideTests {
         #expect(state.name == "default")
     }
 }
+
+// MARK: - Canonical vocabulary guard (ux-spec §8.1)
+
+/// Guards the ThemeToken vocabulary against future drift from ux-spec §8.1.
+///
+/// The spec defines exactly 18 semantic tokens. This suite asserts the count
+/// and names, so any addition or removal causes an immediate compile-time or
+/// runtime test failure before it can break rendering or highlighting.
+@Suite("ThemeToken — canonical 18-token vocabulary (ux-spec §8.1)")
+struct ThemeTokenVocabularyTests {
+
+    // The complete canonical set from ux-spec §8.1, in spec order.
+    private let canonicalCases: [ThemeToken] = [
+        .keyword, .string, .comment, .number,
+        .functionName, .identifier, .operatorToken,
+        .error, .warning, .added,
+        .focusBorder, .focusBg, .highlightBg, .highlightPulse,
+        .dim, .running, .gutterBg, .paneBg,
+    ]
+
+    @Test("ThemeToken has exactly 18 canonical cases (ux-spec §8.1)")
+    func exactlyEighteenCases() {
+        #expect(ThemeToken.allCases.count == 18, "ux-spec §8.1 defines exactly 18 tokens")
+    }
+
+    @Test("ThemeToken.allCases matches the canonical ux-spec §8.1 vocabulary")
+    func allCasesMatchCanonical() {
+        let actual = Set(ThemeToken.allCases)
+        let expected = Set(canonicalCases)
+        #expect(actual == expected, "ThemeToken cases must exactly match the ux-spec §8.1 18-token table")
+    }
+
+    // MARK: Semantic identity — each token has the right color role
+
+    @Test("paneBg is a background token (spec: default pane content background)")
+    func paneBgIsBackground() {
+        let style = ThemeEngine.resolve(capability: .truecolor).tokens[.paneBg]
+        #expect(style?.bg != nil, "paneBg must carry a background color — it is the pane background")
+    }
+
+    @Test("focusBg is a background token (spec: cursor-line background)")
+    func focusBgIsBackground() {
+        let style = ThemeEngine.resolve(capability: .truecolor).tokens[.focusBg]
+        #expect(style?.bg != nil, "focusBg must carry a background color — it is the cursor-line background")
+    }
+
+    @Test("highlightBg is a background token (spec: jump-target line background)")
+    func highlightBgIsBackground() {
+        let style = ThemeEngine.resolve(capability: .truecolor).tokens[.highlightBg]
+        #expect(style?.bg != nil, "highlightBg must carry a background color — it is the jump-target background")
+    }
+
+    @Test("gutterBg is a background token (spec: gutter column background)")
+    func gutterBgIsBackground() {
+        let style = ThemeEngine.resolve(capability: .truecolor).tokens[.gutterBg]
+        #expect(style?.bg != nil, "gutterBg must carry a background color — it is the gutter column background")
+    }
+
+    @Test("running is a foreground token (spec: [running…] indicator and spinner color)")
+    func runningIsForeground() {
+        let style = ThemeEngine.resolve(capability: .truecolor).tokens[.running]
+        #expect(style?.fg != nil, "running must carry a foreground color — it colors the [running…] text")
+    }
+
+    @Test("focusBorder is a foreground token (spec: focused pane border color)")
+    func focusBorderIsForeground() {
+        let style = ThemeEngine.resolve(capability: .truecolor).tokens[.focusBorder]
+        #expect(style?.fg != nil, "focusBorder must carry a foreground color — it colors the focused border")
+    }
+}
