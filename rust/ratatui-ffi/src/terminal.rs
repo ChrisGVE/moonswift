@@ -141,9 +141,9 @@ pub extern "C" fn rffi_terminal_init() -> *mut () {
         }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(not(feature = "swift_ffi"))]
     {
-        // Dev profile: catch_unwind converts panics to a null return.
+        // Non-swift_ffi: catch_unwind converts panics to a null return.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(init_body)) {
             Ok(ptr) => ptr,
             Err(payload) => {
@@ -153,9 +153,10 @@ pub extern "C" fn rffi_terminal_init() -> *mut () {
             }
         }
     }
-    #[cfg(not(debug_assertions))]
+    #[cfg(feature = "swift_ffi")]
     {
-        // Release profile (panic = "abort"): no unwind machinery; panics abort.
+        // swift_ffi: no catch_unwind — LOCAL_PANIC_COUNT TLS never accessed.
+        // Panics abort the process; caller sees no null return on panic.
         init_body()
     }
 }

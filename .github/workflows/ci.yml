@@ -139,13 +139,21 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
 
-      # Build the Rust static lib that SPM's linker flags (-L/-l) reference.
+      # Build the Rust static lib that SPM's linker flags reference.
+      # --features swift_ffi disables catch_unwind in ffi_guard! so that
+      # LOCAL_PANIC_COUNT (and other std TLS vars) are never referenced from
+      # the compiled objects.  On arm64e, those TLS descriptors carry
+      # PAC-unsigned tlv_bootstrap pointers that trigger SIGBUS on first access.
+      # With swift_ffi, the TLS stubs are unreachable; -dead_strip in
+      # Package.swift's unsafeFlags eliminates any survivors from precompiled
+      # std objects.  (ARCHITECTURE.md §5.4 arm64-TLS)
+      #
       # We skip cbindgen here; the committed header in Sources/CRatatuiFFI/include/
       # is the source-of-record ABI (Makefile shim target: best-effort regeneration
       # is only needed when the Rust ABI changes, not on every CI run).
-      - name: Build Rust shim (cargo build --release)
+      - name: Build Rust shim (cargo build --release --features swift_ffi)
         working-directory: rust/ratatui-ffi
-        run: cargo build --release
+        run: cargo build --release --features swift_ffi
 
       # Cache SPM resolved packages.
       # swift package reset (run in the build step below) clears the manifest-

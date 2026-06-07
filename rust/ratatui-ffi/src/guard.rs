@@ -9,28 +9,36 @@
 //   - On error, set_last_error() stores a human-readable description.
 //   - rffi_last_error(buf, cap) copies the stored string to the caller.
 //
-// Implementation note (arm64 / Swift interop — ARCHITECTURE.md §5.4):
-//   Rust std's own thread_local! machinery (thread::current, HashMap random
-//   state, panic bookkeeping) embeds $tlv$init TLS stubs in the __thread_vars
-//   Mach-O section.  On macOS arm64 these stubs conflict with Swift's TLS
-//   initialisation when the Rust static lib is linked into a Swift test binary,
-//   causing SIGBUS.  nm -j misses them (they are local symbols); objdump --syms
-//   reveals them.
+// Implementation note (arm64e / Swift interop — ARCHITECTURE.md §5.4):
+//   Rust std's catch_unwind pulls in std::panicking::panic_count::LOCAL_PANIC_COUNT,
+//   a thread-local variable stored in a Mach-O __thread_vars section.  On macOS
+//   arm64e (Apple Silicon), __thread_vars descriptors carry tlv_bootstrap function
+//   pointers that must be PAC-signed for arm64e.  The Rust compiler targets
+//   aarch64-apple-darwin (arm64), not arm64e, so those pointers are not PAC-signed.
+//   When the Swift test binary (compiled for arm64e) tries to call tlv_bootstrap to
+//   initialise LOCAL_PANIC_COUNT on the first catch_unwind call, arm64e's PAC
+//   verification rejects the un-signed pointer → SIGBUS (signal 10).
 //
-//   To eliminate all reachable TLS from the release static lib:
+//   Three layered mitigations:
 //
-//   1. Last-error state is stored in a single global Mutex<String> rather than
-//      a HashMap<ThreadId, String>.  HashMap uses std::hash::random::RandomState
-//      (TLS); thread::current().id() uses std::thread TLS.  A single mutex is
-//      correct for a UI-thread-only library.
+//   1. Last-error state uses a single global Mutex<String> (not HashMap<ThreadId,
+//      String>).  HashMap pulls in RandomState TLS; thread::current() pulls in
+//      std::thread TLS.  A single mutex avoids both — correct for a UI-thread-only
+//      library.
 //
-//   2. catch_unwind is removed from ffi_guard! in the release profile (where
-//      panic = "abort" applies).  std::panicking::panic_count::LOCAL_PANIC_COUNT
-//      (TLS) is pulled in only by catch_unwind.  With panic = "abort", a Rust
-//      panic aborts the process immediately — visible and debuggable, not UB.
+//   2. catch_unwind is omitted from ffi_guard! when the `swift_ffi` feature is
+//      enabled (used when building the static lib for Swift consumption via
+//      `cargo build --release --features swift_ffi`).  Without catch_unwind,
+//      LOCAL_PANIC_COUNT is never referenced from our objects; with -dead_strip the
+//      linker eliminates any std TLS stubs that survive from precompiled std objects.
+//      Panics in the release Swift-linked lib abort the process — intentional: a
+//      panic in a terminal library is a bug, not a recoverable condition.
 //
-//   3. The dev profile retains panic = "unwind" so cargo test (dev binary) still
-//      catches panics and reports them as test failures.
+//   3. cargo test (dev profile, no swift_ffi) retains catch_unwind so panics are
+//      caught and reported as test failures rather than aborting the test harness.
+//
+//   The `swift_ffi` feature is set only in the CI/Makefile `cargo build` step that
+//   produces the Swift-linked .a; `cargo test` never sets it.
 //
 // Upstream: std::sync, std::ffi
 // Downstream: every src/*.rs module that defines extern "C" entry points
@@ -77,14 +85,15 @@ pub(crate) fn clear_last_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Panic payload → human-readable string (dev profile only)
+// Panic payload → human-readable string (non-swift_ffi builds only)
 // ---------------------------------------------------------------------------
 //
-// In the release profile (panic = "abort") panics abort the process before
-// any unwinding occurs, so this function is unreachable.  It is preserved for
-// the dev profile where ffi_guard! uses catch_unwind.
+// In swift_ffi builds, catch_unwind is omitted from ffi_guard! to prevent
+// arm64e SIGBUS.  Panics in swift_ffi builds abort the process.  This
+// function is compiled only for non-swift_ffi builds (cargo test, dev builds)
+// where ffi_guard! includes catch_unwind.
 
-#[cfg(debug_assertions)]
+#[cfg(not(feature = "swift_ffi"))]
 pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
@@ -99,18 +108,21 @@ pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send + 'static>) ->
 // ffi_guard! macro
 // ---------------------------------------------------------------------------
 //
-// Release profile (panic = "abort"): guard is a thin call-through.  A Rust
-// panic aborts the process — intentional for a library (bug, not user error).
+// swift_ffi feature (static lib for Swift consumption): guard is a thin
+// call-through.  catch_unwind is omitted so LOCAL_PANIC_COUNT (TLS) is never
+// referenced.  A Rust panic aborts the process — correct for a library: a
+// panic is a bug, not a recoverable condition, and aborting surfaces it
+// clearly.  Eliminates arm64e SIGBUS from PAC-unsigned tlv_bootstrap pointers.
 //
-// Dev/test profile (panic = "unwind"): catch_unwind converts panics to an
-// i32 error code so cargo test reports failures instead of crashing.
+// Non-swift_ffi builds (cargo test, dev): catch_unwind converts panics to an
+// i32 error code so cargo test reports failures instead of aborting.
 
 /// Wrap an extern "C" entry-point body in the FFI guard.
 ///
 /// On success the body's i32 return value is propagated.
-/// In debug builds (dev profile), Rust panics are caught and returned as
-/// RFFI_ERR_PANIC with the panic message stored in the last-error slot.
-/// In release builds (panic = "abort"), panics terminate the process.
+/// Without the `swift_ffi` feature (cargo test / dev), Rust panics are caught
+/// and returned as RFFI_ERR_PANIC with the panic message in the last-error slot.
+/// With `swift_ffi` (static lib for Swift), panics abort the process.
 ///
 /// Usage:
 /// ```no_run
@@ -126,9 +138,9 @@ pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send + 'static>) ->
 macro_rules! ffi_guard {
     ($name:expr, $body:block) => {{
         $crate::guard::clear_last_error();
-        #[cfg(debug_assertions)]
+        #[cfg(not(feature = "swift_ffi"))]
         {
-            // Dev profile: catch_unwind converts panics to error codes.
+            // Non-swift_ffi: catch_unwind converts panics to error codes.
             let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| $body));
             match result {
                 Ok(v) => v,
@@ -140,9 +152,9 @@ macro_rules! ffi_guard {
                 }
             }
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(feature = "swift_ffi")]
         {
-            // Release profile (panic = "abort"): no unwind machinery needed.
+            // swift_ffi: no catch_unwind — LOCAL_PANIC_COUNT TLS never accessed.
             // A panic aborts the process; the guard is a transparent call-through.
             $body
         }
@@ -154,8 +166,8 @@ macro_rules! ffi_guard {
 // ---------------------------------------------------------------------------
 
 /// Like ffi_guard!, but for functions that return a raw pointer.
-/// In debug builds, panics store the error and return null.
-/// In release builds, panics abort the process.
+/// Without `swift_ffi`, panics store the error and return null.
+/// With `swift_ffi`, panics abort the process.
 ///
 /// Usage:
 /// ```no_run
@@ -170,7 +182,7 @@ macro_rules! ffi_guard {
 macro_rules! ffi_guard_ptr {
     ($name:expr, $body:block) => {{
         $crate::guard::clear_last_error();
-        #[cfg(debug_assertions)]
+        #[cfg(not(feature = "swift_ffi"))]
         {
             let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| $body));
             match result {
@@ -183,7 +195,7 @@ macro_rules! ffi_guard_ptr {
                 }
             }
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(feature = "swift_ffi")]
         {
             $body
         }
@@ -270,7 +282,7 @@ mod tests {
         assert_eq!(&buf[..3], b"abc");
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(not(feature = "swift_ffi"))]
     #[test]
     fn ffi_guard_catches_panic_and_returns_error_code() {
         let _guard = GUARD_TEST_LOCK.lock().unwrap();

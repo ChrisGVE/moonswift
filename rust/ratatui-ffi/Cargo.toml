@@ -32,6 +32,16 @@ default = ["scrollbar" ]
 ffi_safety = []
 # Enable experimental Scrollbar support (requires newer Ratatui API). Off by default for crates.io compatibility.
 scrollbar = []
+# Build the static lib for Swift FFI integration.
+# When enabled, ffi_guard! omits catch_unwind entirely so Rust's unwind TLS
+# (LOCAL_PANIC_COUNT etc.) is never referenced from the compiled objects.
+# On arm64e macOS, those TLS descriptors in __thread_vars carry un-PAC-signed
+# tlv_bootstrap pointers that trigger SIGBUS when the test binary accesses them
+# for the first time.  Without catch_unwind the TLS stubs are dead code; the
+# macOS linker's -dead_strip eliminates them from the final test binary.
+# Use: cargo build --release --features swift_ffi
+# (ARCHITECTURE.md §5.4 arm64-TLS)
+swift_ffi = []
 
 [dependencies]
 # ratatui pinned to the 0.29 minor (MoonSwift fork policy: pin to a specific
