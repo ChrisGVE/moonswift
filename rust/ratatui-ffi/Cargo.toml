@@ -119,3 +119,15 @@ enums_renames = "Alignment=FfiAlign;Position=FfiPosition;Marker=FfiMarker"
 not_unsafe_ptr_arg_deref   = "allow"
 explicit_counter_loop      = "allow"
 too_many_arguments         = "allow"
+
+# ── Crates.io patch overrides ─────────────────────────────────────────────────
+#
+# ratatui-0.29.0 contains `thread_local! { static LAYOUT_CACHE: … }` in
+# src/layout/layout.rs.  On arm64 macOS, Rust TLS sections inside a staticlib
+# conflict with Swift's TLS initialisation when the lib is linked into a Swift
+# test binary, causing SIGBUS (ARCHITECTURE.md §5.4 arm64-TLS caveat).
+#
+# The local patch replaces the thread_local! with OnceLock<Mutex<Cache>>.
+# The patched source lives at rust/ratatui-patched/ (relative to workspace root).
+[patch.crates-io]
+ratatui = { path = "../ratatui-patched" }
