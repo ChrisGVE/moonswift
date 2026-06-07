@@ -230,14 +230,17 @@ struct RendererBelowMinTests {
 @Suite("Renderer — Focus borders")
 struct RendererFocusBorderTests {
 
-    /// Returns the empty `ThemeState` with `focus_border` mapped to a recognisable
-    /// color so focus assertions can distinguish it from the unfocused border.
+    /// Returns an `AppState` with `focus_border` and `dim` mapped to recognisable
+    /// colors so focus assertions can distinguish focused from unfocused borders.
+    ///
+    /// Unfocused pane borders use `dim` (ux-spec §1.5 + §8.1 — the canonical 18-token
+    /// table has no `border` entry; `dim` is the secondary chrome color).
     private func themedState(focus: FocusState) -> AppState {
         var state = AppState()
         state.focus = focus
-        // Wire up two distinct colors: focused = red (0xFF0000), unfocused = white (0xFFFFFF).
+        // Wire up two distinct colors: focused = red (0xFF0000), unfocused = dim gray (0xC8C8C8).
         state.theme.tokens[.focusBorder] = TokenStyle(fg: .rgb(255, 0, 0))
-        state.theme.tokens[.border] = TokenStyle(fg: .rgb(200, 200, 200))
+        state.theme.tokens[.dim] = TokenStyle(fg: .rgb(200, 200, 200))
         return state
     }
 
