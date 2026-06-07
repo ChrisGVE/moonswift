@@ -73,10 +73,10 @@ let cRatatuiFFITarget: Target = shimSourceMode
                 // release lib.  With -dead_strip, the linker eliminates the
                 // unreachable TLS descriptors, preventing SIGBUS on arm64e where
                 // PAC-unsigned tlv_bootstrap pointers crash at initialisation.
-                // SPM unsafeFlags in linkerSettings are passed with -Xlinker to
-                // swiftc; no -Wl, prefix is used.
+                // SPM unsafeFlags are passed to swiftc (the compiler driver), so
+                // linker flags must use -Xlinker prefix: "-Xlinker", "-dead_strip".
                 // (ARCHITECTURE.md §5.4 arm64-TLS)
-                "-dead_strip",
+                "-Xlinker", "-dead_strip",
             ]),
         ]
     )
