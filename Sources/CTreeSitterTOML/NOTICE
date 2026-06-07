@@ -1,0 +1,23 @@
+tree-sitter-toml grammar sources
+=================================
+
+Origin: https://github.com/mattmassicotte/tree-sitter-toml
+Branch: feature/spm
+Commit: bf4ceeb9c7e3ef796106d7b8c481d539b653d3d8
+
+The grammar sources in src/ (parser.c, scanner.c) and the Swift binding
+header in bindings/swift/TreeSitterTOML/toml.h are vendored here because
+the upstream feature/spm branch's Package.swift omits scanner.c from the
+sources list, causing undefined-symbol link errors. This local target
+includes both parser.c and scanner.c as required.
+
+Upstream license: MIT (see https://github.com/mattmassicotte/tree-sitter-toml/blob/main/LICENSE)
+Upstream grammar origin: ikatyang/tree-sitter-toml (MIT)
+
+Modifications: None to the grammar sources or headers. The Package.swift
+declaration is replaced by this local SPM target in MoonSwift's manifest.
+
+This bundling is a workaround. The preferred long-term path is a fixed
+upstream Package.swift (PR filed or fork maintained). When a working
+external package is available, this local target should be removed and
+the dependency entry in Package.swift updated to reference it.
