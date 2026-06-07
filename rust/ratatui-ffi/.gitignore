@@ -10,3 +10,7 @@ Thumbs.db
 
 # Cargo (crates publish ignores target regardless)
 # Keep Cargo.lock if you prefer, or remove to follow lib crate guidance.
+
+# cbindgen intermediate output — `make shim` regenerates this and copies it to
+# Sources/CRatatuiFFI/include/, which is the committed source-of-record header.
+/include/ratatui_ffi.h
