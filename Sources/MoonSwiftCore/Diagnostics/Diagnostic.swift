@@ -30,6 +30,10 @@ public enum DiagnosticSource: Sendable, Equatable {
     case runtime
     /// Emitted by the Lua Language Server (P3b).
     case luals
+    /// Emitted by `SourceStore` for file-read failures (I/O errors,
+    /// unreadable bytes). Distinct from `.projectConfig` so the renderer can
+    /// label source-load errors separately from project-validation errors.
+    case sourceLoad
 }
 
 // MARK: - Diagnostic
