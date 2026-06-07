@@ -283,6 +283,14 @@ let package = Package(
             dependencies: [
                 "MoonSwiftCore",
                 "RatatuiKit",
+                // Tree-sitter grammars and Swift overlay for the Highlighter component.
+                // Lua is loaded eagerly at startup; JSON/YAML/TOML are lazy on first access.
+                // (ARCHITECTURE.md §2 Highlighter row, §3a cold-start budget)
+                .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
+                .product(name: "TreeSitterLua", package: "tree-sitter-lua"),
+                .product(name: "TreeSitterJSON", package: "tree-sitter-json"),
+                "CTreeSitterTOML",
+                .product(name: "TreeSitterYAML", package: "tree-sitter-yaml"),
             ],
             path: "Sources/MoonSwiftTUI",
             swiftSettings: swiftTargetSettings
@@ -329,6 +337,10 @@ let package = Package(
                 "MoonSwiftTUI"
             ],
             path: "Tests/MoonSwiftTUITests",
+            resources: [
+                // Lua fixtures for HighlighterTests.
+                .copy("Fixtures")
+            ],
             swiftSettings: swiftTargetSettings
         ),
 
