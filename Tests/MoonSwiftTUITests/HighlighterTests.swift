@@ -158,15 +158,15 @@ struct HighlighterLuaTests {
         #expect(!numbers.isEmpty, "Expected number span for '42'")
     }
 
-    @Test("function name produces .function span")
+    @Test("function name produces .functionName span")
     func functionNameSpan() async {
         // Named function definition: name node captured as @function
         let spans = await highlight(text: "function greet(name) end")
         #expect(spans != nil, "Highlight must complete")
         guard let spans else { return }
 
-        let funcSpans = spans.filter { $0.tokenKind == .function }
-        #expect(!funcSpans.isEmpty, "Expected .function span for 'greet'")
+        let funcSpans = spans.filter { $0.tokenKind == .functionName }
+        #expect(!funcSpans.isEmpty, "Expected .functionName span for 'greet'")
     }
 
     @Test("nil / true / false produce .keyword spans")
@@ -450,19 +450,19 @@ struct CaptureMappingTests {
         #expect(CaptureMapping.token(for: "constant") == .number)
     }
 
-    @Test("function / method / constructor / type → .function (function_name role)")
+    @Test("function / method / constructor / type → .functionName (function_name role)")
     func functionFamily() {
         let names = ["function", "method", "constructor", "type"]
         for name in names {
-            #expect(CaptureMapping.token(for: name) == .function, "\(name) → .function")
+            #expect(CaptureMapping.token(for: name) == .functionName, "\(name) → .functionName")
         }
     }
 
-    @Test("variable / field / parameter → .variable (identifier role)")
+    @Test("variable / field / parameter → .identifier (identifier role)")
     func variableFamily() {
         let names = ["variable", "field", "parameter"]
         for name in names {
-            #expect(CaptureMapping.token(for: name) == .variable, "\(name) → .variable")
+            #expect(CaptureMapping.token(for: name) == .identifier, "\(name) → .identifier")
         }
     }
 
@@ -471,16 +471,16 @@ struct CaptureMappingTests {
         #expect(CaptureMapping.token(for: "operator") == .operatorToken)
     }
 
-    @Test("punctuation.bracket / punctuation.delimiter → .variable (identifier role)")
+    @Test("punctuation.bracket / punctuation.delimiter → .identifier (identifier role)")
     func punctuationCaptures() {
-        #expect(CaptureMapping.token(for: "punctuation.bracket") == .variable)
-        #expect(CaptureMapping.token(for: "punctuation.delimiter") == .variable)
+        #expect(CaptureMapping.token(for: "punctuation.bracket") == .identifier)
+        #expect(CaptureMapping.token(for: "punctuation.delimiter") == .identifier)
     }
 
-    @Test("unknown captures fall back to .variable (identifier role)")
+    @Test("unknown captures fall back to .identifier (identifier role)")
     func fallback() {
-        #expect(CaptureMapping.token(for: "unknown.capture") == .variable)
-        #expect(CaptureMapping.token(for: "") == .variable)
-        #expect(CaptureMapping.token(for: "xyz") == .variable)
+        #expect(CaptureMapping.token(for: "unknown.capture") == .identifier)
+        #expect(CaptureMapping.token(for: "") == .identifier)
+        #expect(CaptureMapping.token(for: "xyz") == .identifier)
     }
 }
