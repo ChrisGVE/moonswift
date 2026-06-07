@@ -122,17 +122,34 @@ public struct CodePaneState: Sendable, Equatable {
     public var jumpPulseLine: Int?
     /// Gutter diagnostic marks by line (0-based fragment-relative lines).
     public var gutterMarks: [Int: GutterMark]
+    /// Digit accumulator for the `:N<Enter>` jump command (ux-spec §2.3).
+    ///
+    /// `nil` = no active command entry. When the user types `:`, this is set to
+    /// the empty string `""`. Each subsequent digit is appended. On `<Enter>`
+    /// the accumulated string is parsed as the target line. On `<Esc>` or any
+    /// non-digit (except `q` which shows a transient) the command is cancelled.
+    public var colonCommand: String?
+    /// Index of the currently selected diagnostic for `n`/`N` navigation
+    /// (0-based into `BottomPaneState.diagnostics`). `nil` before first jump.
+    ///
+    /// Reset to `nil` whenever the active source changes so navigation restarts
+    /// from the cursor position rather than an out-of-bounds index.
+    public var diagnosticIndex: Int?
 
     public init(
         scrollOffset: Int = 0,
         cursorLine: Int = 0,
         jumpPulseLine: Int? = nil,
-        gutterMarks: [Int: GutterMark] = [:]
+        gutterMarks: [Int: GutterMark] = [:],
+        colonCommand: String? = nil,
+        diagnosticIndex: Int? = nil
     ) {
         self.scrollOffset = scrollOffset
         self.cursorLine = cursorLine
         self.jumpPulseLine = jumpPulseLine
         self.gutterMarks = gutterMarks
+        self.colonCommand = colonCommand
+        self.diagnosticIndex = diagnosticIndex
     }
 }
 

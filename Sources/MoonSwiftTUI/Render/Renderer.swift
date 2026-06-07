@@ -275,10 +275,12 @@ private func renderCodePane(
     switch state.sources[selectionID] {
     case .loaded(let fragment):
         let spans = state.highlight[selectionID] ?? []
-        return renderCodePaneSource(
+        let allDiags = state.bottomPane.diagnostics
+        return renderCodePaneWithSource(
             fragment: fragment,
             codePane: state.codePane,
             highlights: spans,
+            diagnostics: allDiags,
             rect: inner,
             theme: theme
         )
@@ -308,64 +310,180 @@ private func paragraphLines(_ text: String, rect: Rect, style: CellStyle) -> [Re
     return [.paragraph(rect: rect, lines: lines, block: nil)]
 }
 
-private func renderCodePaneSource(
+/// Entry point that resolves the hover diagnostic and delegates to the core renderer.
+///
+/// Called from `renderCodePane` with the full diagnostic list so the hover row
+/// can be shown when the cursor is on a diagnostic line (ux-spec §6.7).
+private func renderCodePaneWithSource(
     fragment: LuaSourceFragment,
     codePane: CodePaneState,
     highlights: [HighlightSpan],
+    diagnostics: [Diagnostic],
     rect: Rect,
     theme: ThemeState
 ) -> [RenderCommand] {
     let lines = fragment.code.components(separatedBy: "\n")
+    // Clamp scroll and cursor offsets so they never exceed the last valid line.
+    let maxOffset = max(0, lines.count - 1)
+    let startLine = min(codePane.scrollOffset, maxOffset)
+    let cursorLineIdx = min(codePane.cursorLine, maxOffset)
+
+    // Resolve hover: show one diagnostic hover row when the cursor sits on a
+    // diagnostic line (ux-spec §6.7).
+    let hover = hoverDiagnosticForLine(lineIdx: cursorLineIdx, diagnostics: diagnostics)
+
+    return renderCodePaneSourceWithHover(
+        lines: lines,
+        startLine: startLine,
+        cursorLineIdx: cursorLineIdx,
+        codePane: codePane,
+        highlights: highlights,
+        hoverDiagnostic: hover,
+        rect: rect,
+        theme: theme
+    )
+}
+
+/// Renders the code pane source, optionally including a single-row inline
+/// diagnostic hover below the cursor line (ux-spec §6.7).
+///
+/// - Parameters:
+///   - lines: The source split into individual lines.
+///   - startLine: The first visible line index (0-based, already clamped).
+///   - cursorLineIdx: The 0-based cursor line index (already clamped).
+///   - codePane: The current code pane scroll/cursor state.
+///   - highlights: Syntax spans for the visible area.
+///   - hoverDiagnostic: If non-nil, a hover row is inserted directly below the
+///     cursor line. Format: `"  ^ <message>"` indented to the diagnostic column.
+///   - rect: The inner rectangle of the code pane (border already excluded).
+///   - theme: The active theme state.
+private func renderCodePaneSourceWithHover(
+    lines: [String],
+    startLine: Int,
+    cursorLineIdx: Int,
+    codePane: CodePaneState,
+    highlights: [HighlightSpan],
+    hoverDiagnostic: HoverDiagnostic?,
+    rect: Rect,
+    theme: ThemeState
+) -> [RenderCommand] {
+    let gutterWidth: UInt16 = 4
+    let contentWidth = Int(rect.width) - Int(gutterWidth)
+    let contentCol = rect.x + gutterWidth
     let visibleRows = Int(rect.height)
-    let startLine = min(codePane.scrollOffset, max(0, lines.count - 1))
-    let endLine = min(startLine + visibleRows, lines.count)
 
     // Build a per-line span lookup for the visible range.
+    // We scan ahead by one extra line beyond visibleRows to accommodate the
+    // hover row potentially pushing one source line off the bottom.
+    let scanEnd = min(startLine + visibleRows + 1, lines.count)
     var spansByLine: [Int: [HighlightSpan]] = [:]
-    for span in highlights where span.line >= startLine && span.line < endLine {
+    for span in highlights where span.line >= startLine && span.line < scanEnd {
         spansByLine[span.line, default: []].append(span)
     }
 
     var commands: [RenderCommand] = []
+    // `termRow` tracks which terminal row we are writing into (starts at rect.y).
+    var termRow = Int(rect.y)
+    var lineIdx = startLine
 
-    for (rowOffset, lineIdx) in (startLine..<endLine).enumerated() {
-        let row = rect.y + UInt16(rowOffset)
-        let lineText = lineIdx < lines.count ? lines[lineIdx] : ""
+    while termRow < Int(rect.y) + visibleRows, lineIdx < lines.count {
+        let row = UInt16(termRow)
+        let lineText = lines[lineIdx]
         let lineNumber = lineIdx + 1
         let mark = codePane.gutterMarks[lineIdx]
-        let isCursor = lineIdx == codePane.cursorLine
+        let isCursor = lineIdx == cursorLineIdx
 
-        // Gutter column (4 cells wide: 1 mark + 3 line-number digits).
-        let gutterWidth: UInt16 = 4
+        // Gutter cell: 1 mark character + 3 right-aligned line-number digits.
         let gutterText = formatGutterCell(
             lineNumber: lineNumber,
             mark: mark,
             isCursor: isCursor,
             noColor: theme.capability == .noColor
         )
-        let gStyle = gutterCellStyle(mark: mark, isCursor: isCursor, theme: theme)
-        commands.append(.cellRun(col: rect.x, row: row, text: gutterText, style: gStyle))
+        let gutterStyle = gutterCellStyle(mark: mark, isCursor: isCursor, theme: theme)
+        commands.append(.cellRun(col: rect.x, row: row, text: gutterText, style: gutterStyle))
 
-        // Code content to the right of the gutter.
-        let contentCol = rect.x + gutterWidth
-        let contentWidth = Int(rect.width) - Int(gutterWidth)
-        guard contentWidth > 0 else { continue }
+        // Source line content (right of gutter).
+        if contentWidth > 0 {
+            let baseStyle = isCursor ? cursorLineStyle(theme) : normalStyle(theme)
+            let lineSpans = spansByLine[lineIdx] ?? []
+            commands += renderCodeLine(
+                text: lineText,
+                spans: lineSpans,
+                col: contentCol,
+                row: row,
+                maxWidth: contentWidth,
+                baseStyle: baseStyle,
+                theme: theme
+            )
+        }
 
-        let baseStyle = isCursor ? cursorLineStyle(theme) : normalStyle(theme)
-        let lineSpans = spansByLine[lineIdx] ?? []
-        let lineCommands = renderCodeLine(
-            text: lineText,
-            spans: lineSpans,
-            col: contentCol,
-            row: row,
-            maxWidth: contentWidth,
-            baseStyle: baseStyle,
-            theme: theme
-        )
-        commands += lineCommands
+        termRow += 1
+
+        // Inline hover row: inserted immediately below the cursor line when
+        // the cursor is on a diagnostic line (ux-spec §6.7). The row is only
+        // emitted if there is at least one more terminal row available.
+        if isCursor, let hover = hoverDiagnostic, termRow < Int(rect.y) + visibleRows {
+            let hRow = UInt16(termRow)
+            let hoverText = buildHoverText(hover: hover, contentWidth: Int(rect.width))
+            let hoverStyle = tokenStyle(.dim, theme: theme)
+            commands.append(
+                .cellRun(col: rect.x, row: hRow, text: hoverText, style: hoverStyle)
+            )
+            termRow += 1
+            // The hover row uses one extra terminal row. The source line at
+            // `lineIdx + 1` will be skipped if the pane is now full, which is
+            // correct — the hover visually replaces the next source line.
+        }
+
+        lineIdx += 1
     }
 
     return commands
+}
+
+/// A resolved hover diagnostic ready for rendering (ux-spec §6.7).
+struct HoverDiagnostic {
+    /// Message text displayed in the hover row.
+    let message: String
+    /// 0-based column of the diagnostic (determines indentation in hover text).
+    let column: Int
+}
+
+/// Builds the hover row text for a diagnostic (ux-spec §6.7).
+///
+/// Format: spaces × column + "^ " + message, truncated to `maxWidth`.
+/// The caret `^` is placed at the diagnostic column; 2 leading spaces provide
+/// visual separation from the gutter (gutter is 4 wide; caret follows the gap).
+private func buildHoverText(hover: HoverDiagnostic, contentWidth: Int) -> String {
+    let gutterWidth = 4
+    let totalWidth = gutterWidth + contentWidth
+    // The gutter area of the hover row is left blank (spaces), matching the
+    // gutter width. Within the content area the caret is placed at the
+    // diagnostic column position (0-based within the line).
+    let gutterSpaces = String(repeating: " ", count: gutterWidth)
+    let indent = String(repeating: " ", count: max(0, hover.column))
+    let hoverContent = indent + "^ " + hover.message
+    let full = gutterSpaces + hoverContent
+    // Pad or truncate to totalWidth so the hover fills the pane row exactly.
+    if full.count < totalWidth {
+        return full + String(repeating: " ", count: totalWidth - full.count)
+    }
+    return String(full.prefix(totalWidth))
+}
+
+/// Returns a `HoverDiagnostic` if any diagnostic falls on `lineIdx` (0-based).
+///
+/// `Diagnostic.line` is 1-based per the MoonSwiftCore convention; the
+/// conversion is applied here so all callers can use the renderer's 0-based
+/// line indices directly.
+private func hoverDiagnosticForLine(
+    lineIdx: Int,
+    diagnostics: [Diagnostic]
+) -> HoverDiagnostic? {
+    let oneBased = lineIdx + 1
+    guard let diag = diagnostics.first(where: { $0.line == oneBased }) else { return nil }
+    return HoverDiagnostic(message: diag.message, column: diag.column ?? 0)
 }
 
 /// Formats the 4-character gutter cell for one code line.
@@ -398,15 +516,22 @@ private func formatGutterCell(
 }
 
 /// Returns the gutter cell style for a line.
+///
+/// Priority order (ux-spec §6.6):
+/// 1. Cursor line: `focus_bg` background — cursor mark (`▶`/`>`) uses this style.
+/// 2. Error mark: `error` color for the `E` character.
+/// 3. Warning mark: `warning` color for the `W` character.
+/// 4. No mark: `gutter_bg` — the gutter background color (ux-spec §8.1).
 private func gutterCellStyle(mark: GutterMark?, isCursor: Bool, theme: ThemeState) -> CellStyle {
+    // Cursor line takes priority so the ▶ mark appears on focus_bg.
+    if isCursor { return cursorLineStyle(theme) }
     if let mark {
         switch mark {
         case .error: return tokenStyle(.error, theme: theme)
         case .warning: return tokenStyle(.warning, theme: theme)
         }
     }
-    if isCursor { return cursorLineStyle(theme) }
-    return dimStyle(theme)
+    return tokenStyle(.gutterBg, theme: theme)
 }
 
 /// Renders one source line as a sequence of cell runs with highlight spans.

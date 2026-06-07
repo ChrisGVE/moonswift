@@ -382,39 +382,58 @@ private func reduceCodePaneKey(
 ) -> (AppState, [Effect]) {
     var s = s
 
+    // When a colon command is being entered, only digits, Enter, Esc, and the
+    // special `:q` sequence are meaningful (ux-spec §2.3).
+    if s.codePane.colonCommand != nil {
+        return reduceColonCommand(s, code: code, modifiers: modifiers)
+    }
+
     switch (code, modifiers) {
 
     case (.char("j"), []):
         s.codePane.scrollOffset += 1
+        s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
 
     case (.char("k"), []):
         s.codePane.scrollOffset = max(0, s.codePane.scrollOffset - 1)
+        s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
 
     case (.char("d"), []):
         s.codePane.scrollOffset += halfPageSize
+        s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
 
     case (.char("u"), []):
         s.codePane.scrollOffset = max(0, s.codePane.scrollOffset - halfPageSize)
+        s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
 
     case (.char("f"), []):
         s.codePane.scrollOffset += fullPageSize
+        s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
 
     case (.char("b"), []):
         s.codePane.scrollOffset = max(0, s.codePane.scrollOffset - fullPageSize)
+        s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
 
     case (.char("g"), []):
         s.codePane.scrollOffset = 0
+        s.codePane.cursorLine = 0
         return (s, [])
 
     case (.char("G"), []):
-        // Jump to bottom — renderer clamps; use a large value.
+        // Jump to bottom — renderer clamps; use a large sentinel value.
         s.codePane.scrollOffset = Int.max / 2
+        s.codePane.cursorLine = Int.max / 2
+        return (s, [])
+
+    // : — begin colon command entry (ux-spec §2.3 ":N<Enter>" and ":q").
+    case (.char(":"), []):
+        s.codePane.colonCommand = ""
         return (s, [])
 
     case (.char("n"), []):
@@ -432,6 +451,58 @@ private func reduceCodePaneKey(
         return jumpToDiagnostic(s, direction: .last)
 
     default:
+        return (s, [])
+    }
+}
+
+// MARK: - Colon command handler (ux-spec §2.3 ":N<Enter>" jump)
+
+/// Handles key input while the code pane `:` command is being entered.
+///
+/// Accepts digits (accumulated in `colonCommand`), `Enter` to execute the jump,
+/// and `Esc` to cancel. The special sequence `:q` shows the "use q to quit"
+/// transient per ux-spec §2.3 — it is the only recognised non-digit input.
+/// Any other non-digit character cancels the command silently.
+private func reduceColonCommand(
+    _ s: AppState,
+    code: KeyCode,
+    modifiers: KeyModifiers
+) -> (AppState, [Effect]) {
+    var s = s
+
+    switch (code, modifiers) {
+
+    case (.escape, []):
+        // Cancel without executing.
+        s.codePane.colonCommand = nil
+        return (s, [])
+
+    case (.enter, []):
+        // Execute: parse digits and jump, then clear the command buffer.
+        let digits = s.codePane.colonCommand ?? ""
+        s.codePane.colonCommand = nil
+        if let lineNum = Int(digits), lineNum > 0 {
+            // Jump to line lineNum (1-based → 0-based).
+            let target = lineNum - 1
+            s.codePane.cursorLine = target
+            s.codePane.scrollOffset = target
+        }
+        return (s, [])
+
+    case (.char(let scalar), []) where Character(scalar).isNumber:
+        // Append a digit to the command buffer.
+        s.codePane.colonCommand = (s.codePane.colonCommand ?? "") + String(scalar)
+        return (s, [])
+
+    case (.char("q"), []):
+        // ":q" — show the "use q to quit" transient (ux-spec §2.3 exact string).
+        s.codePane.colonCommand = nil
+        s.transient = TransientMessage(text: "use q to quit")
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+
+    default:
+        // Any other character cancels the command silently.
+        s.codePane.colonCommand = nil
         return (s, [])
     }
 }
@@ -708,6 +779,9 @@ private func extractExtraModules(from project: ProjectState) -> [String] {
 }
 
 /// Select the currently highlighted navigator entry and load it into the code pane.
+///
+/// Resets the full `CodePaneState` so scroll, cursor, colon command, and
+/// diagnostic index all start fresh for the newly selected source.
 private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
     guard s.navigator.selectedIndex < s.navigatorOrder.count else {
@@ -715,6 +789,7 @@ private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
     }
     let id = s.navigatorOrder[s.navigator.selectedIndex]
     s.selection = id
+    // Full reset: scroll offset, cursor line, colonCommand, diagnosticIndex.
     s.codePane = CodePaneState()
 
     var effects: [Effect] = []
@@ -733,6 +808,11 @@ private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
 
 private enum DiagnosticDirection { case next, previous, first, last }
 
+/// Jumps the code pane cursor to a diagnostic using the `diagnosticIndex` counter.
+///
+/// Navigation is wrap-around: `n` past the last diagnostic wraps to the first;
+/// `N` before the first wraps to the last (ux-spec §2.3). `diagnosticIndex` is
+/// maintained across `n`/`N` calls and reset whenever the active source changes.
 private func jumpToDiagnostic(
     _ s: AppState,
     direction: DiagnosticDirection
@@ -741,21 +821,25 @@ private func jumpToDiagnostic(
     let diags = s.bottomPane.diagnostics
     guard !diags.isEmpty else { return (s, []) }
 
-    let current = s.codePane.cursorLine + 1  // 1-based
-    let targetLine: Int
+    let count = diags.count
+    let newIndex: Int
     switch direction {
     case .first:
-        targetLine = diags.first!.line
+        newIndex = 0
     case .last:
-        targetLine = diags.last!.line
+        newIndex = count - 1
     case .next:
-        let next = diags.first(where: { $0.line > current })
-        targetLine = next?.line ?? diags.first!.line
+        // Wrap-around: advance from current index or start from 0 on first call.
+        let current = s.codePane.diagnosticIndex ?? -1
+        newIndex = (current + 1) % count
     case .previous:
-        let prev = diags.last(where: { $0.line < current })
-        targetLine = prev?.line ?? diags.last!.line
+        // Wrap-around: step back, wrapping to last when at index 0 or unset.
+        let current = s.codePane.diagnosticIndex ?? 0
+        newIndex = (current - 1 + count) % count
     }
 
+    s.codePane.diagnosticIndex = newIndex
+    let targetLine = diags[newIndex].line
     s.codePane.cursorLine = max(0, targetLine - 1)
     s.codePane.scrollOffset = max(0, targetLine - 1)
     return (s, [])
