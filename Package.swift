@@ -56,27 +56,33 @@ let cRatatuiFFITarget: Target = shimSourceMode
             .headerSearchPath("include"),
         ],
         linkerSettings: [
-            // Link the static lib by explicit path so the macOS linker
-            // chooses libratatui_ffi.a over libratatui_ffi.dylib.
-            // When both are present in target/release/deps/, ld prefers the
-            // dylib with a bare -lratatui_ffi flag, which then carries Rust
-            // std TLS sections and causes SIGBUS on arm64e.
-            // Passing the .a path directly forces static linking and avoids
-            // the dylib TLS entirely (ARCHITECTURE.md §5.4 arm64-TLS).
+            // Link the Rust shim as a DYLIB, not a static lib.
+            //
+            // Background: cargo produces both libratatui_ffi.dylib (cdylib) and
+            // libratatui_ffi.a (staticlib).  When the .a is linked into the Swift
+            // test binary — which is compiled for arm64e-apple-macos14.0 — the
+            // Rust std precompiled object (std-cgu.0.rcgu.o) is merged into the
+            // arm64e binary.  That object contains __thread_vars TLS descriptors
+            // with tlv_bootstrap function pointers that are not PAC-signed for
+            // arm64e.  dyld's arm64e TLS initialiser rejects these unsigned
+            // pointers at binary load time → SIGBUS (signal 10).
+            //
+            // Using the dylib sidesteps the ABI mismatch: dyld loads
+            // libratatui_ffi.dylib as a separate arm64 image and initialises
+            // its TLS sections in the arm64 context, where the tlv_bootstrap
+            // pointers are valid.  The arm64e test binary never owns the Rust
+            // TLS descriptors; it only holds an LC_LOAD_DYLIB reference.
+            //
+            // The rpath entry tells the runtime loader where to find the dylib
+            // at test execution time (same absolute path used at link time).
+            // (ARCHITECTURE.md §5.4 arm64-TLS dylib strategy)
             .unsafeFlags([
-                "\(shimPackageRoot)/rust/ratatui-ffi/target/release/libratatui_ffi.a",
-                // Dead-strip unreachable code and data from the final binary.
-                // Rust std's precompiled cgu.0 object contains TLS variables
-                // (LOCAL_PANIC_COUNT etc.) in __thread_vars/__thread_bss that
-                // are only reachable via catch_unwind / is_panicking.  Those
-                // paths are #[cfg(debug_assertions)]-gated and absent from the
-                // release lib.  With -dead_strip, the linker eliminates the
-                // unreachable TLS descriptors, preventing SIGBUS on arm64e where
-                // PAC-unsigned tlv_bootstrap pointers crash at initialisation.
-                // SPM unsafeFlags are passed to swiftc (the compiler driver), so
-                // linker flags must use -Xlinker prefix: "-Xlinker", "-dead_strip".
-                // (ARCHITECTURE.md §5.4 arm64-TLS)
-                "-Xlinker", "-dead_strip",
+                // Add the Rust release dir to the linker search path.
+                "-Xlinker", "-L\(shimPackageRoot)/rust/ratatui-ffi/target/release",
+                // Link against the dylib (ld prefers dylib over .a when both exist).
+                "-Xlinker", "-lratatui_ffi",
+                // Embed rpath so the runtime loader finds the dylib.
+                "-Xlinker", "-rpath", "-Xlinker", "\(shimPackageRoot)/rust/ratatui-ffi/target/release",
             ]),
         ]
     )
