@@ -164,24 +164,27 @@ jobs:
       # The glob is version-independent; only one such object exists per lib.
       - name: Strip std TLS objects from static lib (arm64e SIGBUS workaround)
         working-directory: rust/ratatui-ffi
+        shell: bash
         run: |
-          ALIB_REL="target/release/libratatui_ffi.a"
-          ALIB_ABS="$(pwd)/$ALIB_REL"
-          echo "Before strip: $(ar -t $ALIB_ABS | grep 'std-.*cgu.0.rcgu.o' | wc -l) std TLS objects"
-          mkdir -p /tmp/strip_tls
-          (cd /tmp/strip_tls && ar -x "$ALIB_ABS")
-          TLS_OBJS=$(ls /tmp/strip_tls/std-*.cgu.0.rcgu.o 2>/dev/null)
-          if [ -n "$TLS_OBJS" ]; then
-            for obj in $TLS_OBJS; do
-              name="$(basename $obj)"
-              echo "Removing TLS object: $name"
+          set +e  # Handle errors manually.
+          ALIB_ABS="$(pwd)/target/release/libratatui_ffi.a"
+          echo "Static lib: $ALIB_ABS"
+          # List TLS-carrying std objects using ar -t (no extraction needed).
+          TLS_NAMES=$(ar -t "$ALIB_ABS" 2>&1 | grep 'std-.*cgu\.0\.rcgu\.o')
+          echo "TLS objects: ${TLS_NAMES:-none}"
+          if [ -n "$TLS_NAMES" ]; then
+            while IFS= read -r name; do
+              echo "Removing: $name"
               ar -d "$ALIB_ABS" "$name"
-            done
-            echo "After strip: $(ar -t $ALIB_ABS | grep 'std-.*cgu.0.rcgu.o' | wc -l) std TLS objects remain"
+              RC=$?
+              echo "ar -d exit code: $RC"
+            done <<< "$TLS_NAMES"
+            REMAINING=$(ar -t "$ALIB_ABS" 2>&1 | grep 'std-.*cgu\.0\.rcgu\.o' | wc -l)
+            echo "Remaining TLS objects: $REMAINING"
           else
             echo "No std TLS objects found — nothing to strip"
           fi
-          rm -rf /tmp/strip_tls
+          set -e
 
       # Cache SPM resolved packages.
       # swift package reset (run in the build step below) clears the manifest-
