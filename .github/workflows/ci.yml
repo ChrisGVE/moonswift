@@ -7,8 +7,16 @@
 #       builds and tests the Swift package in source mode with the freshly
 #       built shim artifact from job (1).
 #
-# Runner: macos-15 (macOS Sequoia 15 — ships with Xcode 16, providing the
-#         Swift 6 toolchain required by Package.swift's swift-tools-version 6.0).
+# Runners: the swift job runs a two-arch matrix.
+#   • macos-15-intel (x86_64) — PRIMARY, blocking. MoonSwift's first target
+#     machine is Intel (development happens on x86_64); this gate must be green.
+#   • macos-15 (arm64) — secondary, non-blocking (continue-on-error). Keeps
+#     Apple Silicon signal flowing while arm64-specific issues (small
+#     swift-testing stacks, arm64e PAC interactions with the Rust dylib) are
+#     worked through without blocking x86 development.
+#   Both ship Xcode 16 (Swift 6 toolchain per swift-tools-version 6.0).
+#   Note: macos-15-intel is the last x86_64 image GitHub provides (retires
+#   August 2027) — revisit the matrix before then.
 #
 # Environment variables propagated to every Swift step (mirrors the Makefile):
 #   MOONSWIFT_SHIM_SOURCE=1    — source-build mode: CRatatuiFFI is the stub
@@ -107,9 +115,26 @@ jobs:
   # Depends on `shim` so the static lib (target/release/libratatui_ffi.a) and
   # the cbindgen header are available before SPM resolves linker settings.
   swift:
-    name: Swift package
-    runs-on: macos-15
+    name: Swift package (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs: shim
+    # The arm64 leg is advisory: its failure does not fail the workflow.
+    continue-on-error: ${{ matrix.experimental }}
+
+    strategy:
+      # Let the x86_64 leg finish even if the arm64 leg fails early.
+      fail-fast: false
+      matrix:
+        include:
+          # PRIMARY — the project's first target machine is Intel.
+          - runner: macos-15-intel
+            arch: x86_64
+            experimental: false
+          # SECONDARY — Apple Silicon signal, non-blocking while arm64
+          # runner-specific issues are worked through.
+          - runner: macos-15
+            arch: arm64
+            experimental: true
 
     env:
       # Source mode: CRatatuiFFI is declared as a stub C target linked against
@@ -131,6 +156,8 @@ jobs:
 
       # Restore the Cargo cache — the shim job already populated it.
       # The same key means this restore will typically hit without re-downloading.
+      # Keyed per-arch: the x86_64 and arm64 legs produce incompatible
+      # target/ artefacts and must not share a cache entry.
       - name: Restore Cargo cache
         uses: actions/cache@v4
         with:
@@ -138,9 +165,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/ratatui-ffi/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('rust/ratatui-ffi/Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('rust/ratatui-ffi/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-${{ runner.os }}-${{ matrix.arch }}-
 
       # Build the Rust shim (cdylib + staticlib).  cargo produces both
       # libratatui_ffi.dylib and libratatui_ffi.a; Package.swift links against
@@ -177,9 +204,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.swiftpm
-          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          key: spm-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('Package.resolved') }}
           restore-keys: |
-            spm-${{ runner.os }}-
+            spm-${{ runner.os }}-${{ matrix.arch }}-
 
       # Reset SPM's manifest-evaluation cache before building.
       # Required when MOONSWIFT_SHIM_SOURCE is toggled: SPM caches the manifest
