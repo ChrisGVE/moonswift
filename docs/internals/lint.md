@@ -1,6 +1,6 @@
 # Lint internals — luacheck-in-engine loader mechanism
 
-Status: F4.0 spike complete (2026-06-07).
+Status: F4.0 spike complete; loader promoted to production (`LuacheckLoader.swift`).
 Relates to: PRD F4.0, F4.2; ARCHITECTURE.md §3d (lint flow), §2 (LintService).
 
 ---
@@ -16,6 +16,11 @@ custom `package.preload` shim — no filesystem access from within Lua, no
 The spike test (F4.0) proved this works: luacheck runs in-engine, produces
 structured reports with line/column/code fields, and handles all three
 required fixture cases. The test is a permanent required CI check.
+
+The loader logic from the spike is extracted into production code:
+`Sources/MoonSwiftCore/Lint/LuacheckLoader.swift`. It exposes two functions:
+`vendoredLuacheckModules()` (bundle enumeration) and
+`installLuacheckPreloadShim(engine:modules:)` (shim registration).
 
 ---
 
