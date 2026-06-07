@@ -176,27 +176,32 @@ public struct HighlightSpan: Sendable, Equatable {
 
 /// Semantic token types used by the ThemeEngine and Highlighter.
 ///
-/// Each token maps to a resolved attribute (foreground/background/modifiers)
-/// in the active theme's token table. The 18 tokens cover all P1 UI surfaces.
+/// The 18 canonical tokens are defined in ux-spec.md §8.1 and cover all P1 UI
+/// surfaces. Swift case names follow camelCase; the spec uses snake_case. All
+/// names match the spec directly except `operatorToken`: `operator` is a Swift
+/// reserved word, so the case is spelled `operatorToken` while the spec name
+/// is `operator`. This deviation is intentional and documented here to prevent
+/// any future reader from "fixing" it back to `.operator`.
 public enum ThemeToken: Sendable, Equatable, CaseIterable {
-    // Code tokens
-    case keyword
-    case string
-    case number
-    case comment
-    case function
-    case type
-    case variable
-    case operatorToken
-    case punctuation
+    // Syntax highlight tokens (ux-spec §8.1, §8.2)
+    case keyword  // Lua keywords
+    case string  // String literals
+    case comment  // Line/block comments
+    case number  // Numeric literals
+    case functionName  // Function/method declaration names (spec: function_name)
+    case identifier  // Local variables, parameters, field access
+    case operatorToken  // Operators (spec: operator — reserved word in Swift)
+    // Diagnostic and status tokens
+    case error  // Error-severity diagnostics; ✖ prefixes
+    case warning  // Warning-severity diagnostics; ⚠ prefixes
+    case added  // Picker marks (●); newly-added items
     // UI chrome tokens
-    case border
-    case focusBorder
-    case activeTab
-    case dim
-    case added
-    case warning
-    case error
-    case highlightPulse
-    case normal
+    case focusBorder  // Focused pane border; active tab underline (spec: focus_border)
+    case focusBg  // Cursor-line background; cursor-row ▶ gutter mark (spec: focus_bg)
+    case highlightBg  // Jump-target line background, persistent (spec: highlight_bg)
+    case highlightPulse  // 500 ms pulse animation start color (spec: highlight_pulse)
+    case dim  // Non-markable fields, dividers, secondary labels
+    case running  // [running…] status indicator; spinner color
+    case gutterBg  // Gutter column background (line numbers + marks) (spec: gutter_bg)
+    case paneBg  // Default pane content background (spec: pane_bg)
 }
