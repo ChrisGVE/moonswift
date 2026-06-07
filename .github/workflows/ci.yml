@@ -147,45 +147,6 @@ jobs:
         working-directory: rust/ratatui-ffi
         run: cargo build --release
 
-      # Strip TLS-carrying precompiled std objects from the static lib.
-      #
-      # On arm64e (Apple Silicon macOS), Mach-O __thread_vars TLS sections
-      # inside a staticlib conflict with Swift's TLS initialisation when the
-      # lib is linked into a Swift test binary, causing SIGBUS at test start.
-      #
-      # Rust's precompiled std bundles std-*.cgu.0.rcgu.o in every staticlib.
-      # That object contains LOCAL_PANIC_COUNT and other std TLS variables
-      # regardless of the crate's panic = "abort" setting.  The stubs are
-      # only reachable via catch_unwind / is_panicking — paths excluded from
-      # our release profile — so removing the object is link-safe.
-      #
-      # Stable workaround (pending -Z build-std support for nightly):
-      # extract the archive, delete any std-*.cgu.0.rcgu.o member, repack.
-      # The glob is version-independent; only one such object exists per lib.
-      - name: Strip std TLS objects from static lib (arm64e SIGBUS workaround)
-        working-directory: rust/ratatui-ffi
-        shell: bash
-        run: |
-          set +e  # Handle errors manually.
-          ALIB_ABS="$(pwd)/target/release/libratatui_ffi.a"
-          echo "Static lib: $ALIB_ABS"
-          # List TLS-carrying std objects using ar -t (no extraction needed).
-          TLS_NAMES=$(ar -t "$ALIB_ABS" 2>&1 | grep 'std-.*cgu\.0\.rcgu\.o')
-          echo "TLS objects: ${TLS_NAMES:-none}"
-          if [ -n "$TLS_NAMES" ]; then
-            while IFS= read -r name; do
-              echo "Removing: $name"
-              ar -d "$ALIB_ABS" "$name"
-              RC=$?
-              echo "ar -d exit code: $RC"
-            done <<< "$TLS_NAMES"
-            REMAINING=$(ar -t "$ALIB_ABS" 2>&1 | grep 'std-.*cgu\.0\.rcgu\.o' | wc -l)
-            echo "Remaining TLS objects: $REMAINING"
-          else
-            echo "No std TLS objects found — nothing to strip"
-          fi
-          set -e
-
       # Cache SPM resolved packages.
       # swift package reset (run in the build step below) clears the manifest-
       # evaluation cache (.build) but does NOT clear the package download cache
@@ -229,62 +190,40 @@ jobs:
         continue-on-error: true
         run: swift test --filter RatatuiKitTests
 
-      # Capture any macOS crash report written by the test binary; the report
-      # includes the exact faulting address, thread stack, and instruction that
-      # raised the signal — essential for diagnosing arm64 SIGBUS root causes.
-      - name: Capture crash reports (arm64 SIGBUS diagnostics)
+      # Capture diagnostics if RatatuiKitTests fails.
+      # Dumps TLS sections remaining in the linked test binary to diagnose any
+      # arm64e SIGBUS regression (PAC-unsigned tlv_bootstrap in __thread_vars).
+      # Package.swift passes -Wl,-dead_strip so unreachable Rust TLS vars
+      # (LOCAL_PANIC_COUNT etc., only reachable via catch_unwind which is
+      # #[cfg(debug_assertions)]-gated) are eliminated from the final binary.
+      - name: Capture RatatuiKitTests failure diagnostics
         if: steps.ratatui_tests.outcome == 'failure'
         shell: bash
         run: |
           set +e   # Do not exit on individual step failures in this diagnostic.
-          echo "=== RatatuiKitTests exited with signal ==="
+          echo "=== RatatuiKitTests failed ==="
 
-          echo "=== macOS Diagnostic Reports (all paths) ==="
-          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
-            if [ -d "$dir" ]; then
-              echo "--- $dir ---"
-              ls -la "$dir" | tail -10
-            fi
-          done
-
-          echo "=== TLS section check on static lib ==="
-          ALIB="rust/ratatui-ffi/target/release/libratatui_ffi.a"
-          echo "Static lib size: $(du -sh $ALIB 2>/dev/null || echo 'missing')"
-          mkdir -p /tmp/tlv_check
-          (cd /tmp/tlv_check && ar -x "$OLDPWD/$ALIB") 2>&1 || true
-          OBJ_COUNT=$(ls /tmp/tlv_check/*.o 2>/dev/null | wc -l || echo 0)
-          echo "Objects extracted: $OBJ_COUNT"
-          TLS_COUNT=0
-          for o in /tmp/tlv_check/*.o; do
-            [ -f "$o" ] || continue
-            segs=$(otool -l "$o" 2>/dev/null | grep "sectname" | grep -c "__thread" || echo 0)
-            if [ "$segs" -gt 0 ] 2>/dev/null; then
-              echo "TLS: $(basename $o) ($segs __thread sections)"
-              TLS_COUNT=$((TLS_COUNT + 1))
-            fi
-          done
-          echo "Objects with TLS: $TLS_COUNT"
-          rm -rf /tmp/tlv_check
-
-          echo "=== Test binary TLS/dylib info ==="
+          echo "=== Test binary TLS sections (should be empty after -dead_strip) ==="
           TEST_BIN=$(find .build -name "MoonSwiftPackageTests.xctest" -type d 2>/dev/null | head -1)
           if [ -n "$TEST_BIN" ]; then
-            echo "Test bundle: $TEST_BIN"
-            # SPM bundles the binary directly inside .xctest on macOS
             BIN=$(find "$TEST_BIN" -maxdepth 3 -type f -perm -u+x 2>/dev/null | head -1)
-            echo "Binary: $BIN"
+            echo "Binary: ${BIN:-(not found)}"
             if [ -n "$BIN" ]; then
+              echo "--- TLS sections in test binary (expect none from Rust) ---"
+              otool -l "$BIN" 2>/dev/null | grep -B1 "sectname.*__thread" | head -40 || echo "(none)"
               echo "--- Linked dylibs ---"
-              otool -L "$BIN" 2>/dev/null | head -30
-              echo "--- TLS sections in test binary ---"
-              otool -l "$BIN" 2>/dev/null | grep -B1 "sectname.*__thread" | head -40 || true
+              otool -L "$BIN" 2>/dev/null | head -20
             fi
           else
             echo "(test binary not found in .build/)"
-            find .build -name "*.xctest" -type d 2>/dev/null | head -5
           fi
 
-          # Fail the job since ratatui tests failed.
+          echo "=== macOS Diagnostic Reports ==="
+          for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
+            [ -d "$dir" ] && ls -la "$dir" | tail -5
+          done
+
+          # Propagate failure.
           exit 1
 
       # MoonSwiftTUITests: TUI app model tests.

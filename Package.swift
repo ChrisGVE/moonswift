@@ -65,6 +65,16 @@ let cRatatuiFFITarget: Target = shimSourceMode
             // the dylib TLS entirely (ARCHITECTURE.md §5.4 arm64-TLS).
             .unsafeFlags([
                 "\(shimPackageRoot)/rust/ratatui-ffi/target/release/libratatui_ffi.a",
+                // Dead-strip unreachable code and data from the final binary.
+                // Rust std's precompiled cgu.0 object contains TLS variables
+                // (LOCAL_PANIC_COUNT etc.) in __thread_vars/__thread_bss that
+                // are only reachable via catch_unwind / is_panicking.  Those
+                // paths are #[cfg(debug_assertions)]-gated and absent from the
+                // release lib.  With -dead_strip, the linker eliminates the
+                // unreachable TLS descriptors, preventing SIGBUS on arm64e where
+                // PAC-unsigned tlv_bootstrap pointers crash at initialisation.
+                // (ARCHITECTURE.md §5.4 arm64-TLS)
+                "-Wl,-dead_strip",
             ]),
         ]
     )
