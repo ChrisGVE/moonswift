@@ -184,8 +184,36 @@ jobs:
         run: swift test --filter MoonSwiftCoreTests
 
       # RatatuiKitTests: FFI bindings — links the Rust static lib.
+      # Run with continue-on-error so the crash-report step runs even on signal.
       - name: Test RatatuiKitTests
+        id: ratatui_tests
+        continue-on-error: true
         run: swift test --filter RatatuiKitTests
+
+      # Capture any macOS crash report written by the test binary; the report
+      # includes the exact faulting address, thread stack, and instruction that
+      # raised the signal — essential for diagnosing arm64 SIGBUS root causes.
+      - name: Capture crash reports (arm64 SIGBUS diagnostics)
+        if: steps.ratatui_tests.outcome == 'failure'
+        run: |
+          echo "=== RatatuiKitTests exited with signal ==="
+          echo "=== macOS Diagnostic Reports ==="
+          ls ~/Library/Logs/DiagnosticReports/ 2>/dev/null | tail -5 || echo "(no reports)"
+          for f in ~/Library/Logs/DiagnosticReports/*.crash \
+                   ~/Library/Logs/DiagnosticReports/*.ips \
+                   /Library/Logs/DiagnosticReports/*.crash; do
+            [ -f "$f" ] && echo "=== $f ===" && cat "$f" && echo
+          done || echo "(no crash files found)"
+          echo "=== nm tlv check on static lib ==="
+          mkdir -p /tmp/tlv_check
+          ar -x rust/ratatui-ffi/target/release/libratatui_ffi.a --output /tmp/tlv_check 2>/dev/null
+          for o in /tmp/tlv_check/*.o; do
+            segs=$(otool -l "$o" 2>/dev/null | grep "sectname" | grep "__thread")
+            [ -n "$segs" ] && echo "TLS: $(basename $o): $segs"
+          done
+          rm -rf /tmp/tlv_check
+          # Fail the job since ratatui tests failed.
+          exit 1
 
       # MoonSwiftTUITests: TUI app model tests.
       - name: Test MoonSwiftTUITests
