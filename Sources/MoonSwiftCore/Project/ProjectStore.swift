@@ -55,12 +55,12 @@ public enum ProjectStore {
     /// - Parameters:
     ///   - projectDirectory: The project root directory URL.
     ///   - extraModulesAllowList: Allow-list for `lint.extra_modules` validation.
-    ///     Default: stub `["iox", "http", "ui"]`. Replace with the real catalog
-    ///     query when LuaModuleCatalog (task 27) is available.
+    ///     Defaults to `LuaModuleCatalog.v0.optInNames` — the canonical set of
+    ///     valid opt-in module names. Pass a custom closure in tests.
     /// - Returns: A `LoadResult` describing the decoded file and any diagnostics.
     public static func load(
         at projectDirectory: URL,
-        extraModulesAllowList: () -> Set<String> = { ["iox", "http", "ui"] }
+        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> LoadResult {
         let fileURL = projectDirectory.appendingPathComponent(fileName)
         return load(from: fileURL, extraModulesAllowList: extraModulesAllowList)
@@ -69,7 +69,7 @@ public enum ProjectStore {
     /// Loads and validates the project file at an explicit `fileURL`.
     public static func load(
         from fileURL: URL,
-        extraModulesAllowList: () -> Set<String> = { ["iox", "http", "ui"] }
+        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> LoadResult {
 
         // 1. Read the file from disk.
@@ -96,9 +96,10 @@ public enum ProjectStore {
     /// - Parameters:
     ///   - tomlString: The raw TOML content.
     ///   - extraModulesAllowList: Allow-list for `lint.extra_modules` validation.
+    ///     Defaults to `LuaModuleCatalog.v0.optInNames`.
     public static func loadFromString(
         _ tomlString: String,
-        extraModulesAllowList: () -> Set<String> = { ["iox", "http", "ui"] }
+        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> LoadResult {
 
         // 2. Decode via codec.

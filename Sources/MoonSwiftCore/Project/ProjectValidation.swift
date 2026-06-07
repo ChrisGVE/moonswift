@@ -6,11 +6,9 @@
 //
 //       Catalog integration point for extraModules (ARCHITECTURE.md §7.3):
 //       The allow-list of valid `.optIn` module names is injected as a closure
-//       parameter `extraModulesAllowList` to avoid a direct dependency on the
-//       LuaModuleCatalog type (task 27 builds the catalog). The stub list
-//       `["iox", "http", "ui"]` is used in tests and by `ProjectStore` until the
-//       catalog task wires in the real query. This is the catalog integration
-//       point — NOT a stubbed feature.
+//       parameter `extraModulesAllowList`. The default is now the real catalog
+//       query: `LuaModuleCatalog.v0.optInNames`. Tests that need a custom list
+//       pass an explicit closure. The seam is fully wired as of task 27.
 //
 //       #22 compile-time condition (ARCHITECTURE.md §3c): `wall_clock_limit_ms`
 //       requires the #22 cooperative-cancellation API. The warning is emitted
@@ -38,14 +36,14 @@ public enum ProjectValidation {
     ///   - unknownKeyDiagnostics: Diagnostics collected by `ProjectFileCodec`
     ///     for unknown TOML keys (forwarded unchanged).
     ///   - extraModulesAllowList: Closure returning the set of valid `.optIn`
-    ///     module names. **Catalog integration point** — task 27 replaces the
-    ///     default stub `["iox", "http", "ui"]` with a real catalog query. The
-    ///     closure is called at most once per validate invocation.
+    ///     module names. Defaults to `LuaModuleCatalog.v0.optInNames` — the
+    ///     canonical opt-in set from the catalog. Pass a custom closure in tests.
+    ///     The closure is called at most once per validate invocation.
     /// - Returns: All collected diagnostics. Empty = the file is valid.
     public static func validate(
         _ projectFile: ProjectFile,
         unknownKeyDiagnostics: [Diagnostic] = [],
-        extraModulesAllowList: () -> Set<String> = { ["iox", "http", "ui"] }
+        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> [Diagnostic] {
 
         var diagnostics: [Diagnostic] = []
@@ -280,9 +278,9 @@ public enum ProjectValidation {
 
     /// Validates that each name in `extraModules` is in `allowList`.
     ///
-    /// The allow-list is exactly the catalog's `.optIn` module names. This is
-    /// the **catalog integration point** — task 27 injects the real catalog
-    /// allow-list here. The default stub `["iox", "http", "ui"]` covers P1 tests.
+    /// The allow-list is exactly the catalog's `.optIn` module names, sourced
+    /// from `LuaModuleCatalog.v0.optInNames` via the `extraModulesAllowList`
+    /// closure. Tests that need isolation pass a custom closure.
     static func validateExtraModules(
         _ extraModules: [String],
         allowList: Set<String>,
@@ -376,7 +374,7 @@ extension ProjectValidation {
         _ projectFile: ProjectFile,
         rawRunConfig: String?,
         unknownKeyDiagnostics: [Diagnostic] = [],
-        extraModulesAllowList: () -> Set<String> = { ["iox", "http", "ui"] }
+        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> [Diagnostic] {
 
         var diagnostics = validate(
