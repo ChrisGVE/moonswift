@@ -147,6 +147,40 @@ jobs:
         working-directory: rust/ratatui-ffi
         run: cargo build --release
 
+      # Strip TLS-carrying precompiled std objects from the static lib.
+      #
+      # On arm64e (Apple Silicon macOS), Mach-O __thread_vars TLS sections
+      # inside a staticlib conflict with Swift's TLS initialisation when the
+      # lib is linked into a Swift test binary, causing SIGBUS at test start.
+      #
+      # Rust's precompiled std bundles std-*.cgu.0.rcgu.o in every staticlib.
+      # That object contains LOCAL_PANIC_COUNT and other std TLS variables
+      # regardless of the crate's panic = "abort" setting.  The stubs are
+      # only reachable via catch_unwind / is_panicking — paths excluded from
+      # our release profile — so removing the object is link-safe.
+      #
+      # Stable workaround (pending -Z build-std support for nightly):
+      # extract the archive, delete any std-*.cgu.0.rcgu.o member, repack.
+      # The glob is version-independent; only one such object exists per lib.
+      - name: Strip std TLS objects from static lib (arm64e SIGBUS workaround)
+        working-directory: rust/ratatui-ffi
+        run: |
+          ALIB="target/release/libratatui_ffi.a"
+          echo "Before strip: $(ar -t $ALIB | grep 'std-.*cgu.0.rcgu.o' | wc -l) std TLS objects"
+          mkdir -p /tmp/strip_tls
+          (cd /tmp/strip_tls && ar -x "$OLDPWD/$ALIB")
+          TLS_OBJS=$(ls /tmp/strip_tls/std-*.cgu.0.rcgu.o 2>/dev/null)
+          if [ -n "$TLS_OBJS" ]; then
+            for obj in $TLS_OBJS; do
+              echo "Removing TLS object: $(basename $obj)"
+              ar -d "$ALIB" "$(basename $obj)"
+            done
+            echo "After strip: $(ar -t $ALIB | grep 'std-.*cgu.0.rcgu.o' | wc -l) std TLS objects remain"
+          else
+            echo "No std TLS objects found — nothing to strip"
+          fi
+          rm -rf /tmp/strip_tls
+
       # Cache SPM resolved packages.
       # swift package reset (run in the build step below) clears the manifest-
       # evaluation cache (.build) but does NOT clear the package download cache
