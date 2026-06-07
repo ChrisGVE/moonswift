@@ -215,6 +215,12 @@ jobs:
       - name: Reset SPM manifest cache (swift package reset)
         run: swift package reset
 
+      # Install swift-format (Apple's official formatter — not in the default
+      # Xcode toolchain on GitHub runners; brew is the canonical install path).
+      # Homebrew is pre-installed on all macos-15 GitHub runners (both arches).
+      - name: Install swift-format
+        run: brew install swift-format
+
       # Formatting gate — reject any unformatted Swift source.
       # Uses the project's .swift-format JSON config (4-space indent, 120-col,
       # UseLetInEveryBoundCaseVariable off). Deliberately aligned blocks are
