@@ -19,10 +19,30 @@ relative to the vendor commit. Current changes applied on top of v0.2.6:
   - [lib] crate-type extended to include "staticlib" alongside "cdylib"
   - crossterm dependency aligned to 0.28.1 (the version ratatui 0.29 uses
     internally) to ensure a single crossterm in the link graph
-
-Future modifications (task 8 and beyond) will add panic guards, the
-integer-status error protocol, rffi_* naming, and surface trimming per
-ARCHITECTURE.md §5.2 and PRD §4.5.
+  - libc = "0.2" added as an explicit dependency for async-signal-safe
+    emergency restore (write(2), tcsetattr, termios) on Unix platforms
+  - Entire source surface restructured (task 8, 2026-06-07):
+      * error.rs: RFFI_ERR_* i32 constants (ARCHITECTURE.md §5.2)
+      * guard.rs: ffi_guard!/ffi_guard_ptr! macros, thread-local last-error,
+        rffi_last_error C accessor; panic = "unwind" in all profiles
+      * terminal.rs: rffi_terminal_init (returns *mut ()), teardown, suspend,
+        resume, size, rffi_emergency_restore (lock-free, void, async-signal-safe)
+      * events.rs: rffi_poll_event with EINTR retry, RffiEvent struct,
+        RffiEventKind::Paste=4 with 4096-byte inline paste_buf (fork addition)
+      * cells.rs: rffi_write_cells (run of grapheme clusters), rffi_clear_rect,
+        rffi_flush
+      * layout.rs: rffi_layout_split, RffiRect canonical C geometry type
+      * widgets/block.rs: RffiStyle, RffiSpan shared types, build_block helper
+      * widgets/list.rs: RffiList/RffiListState opaque handles, stateful draw
+      * widgets/paragraph.rs: RffiParagraph, scroll/wrap/alignment/block
+      * widgets/tabs.rs: RffiTabs, RffiTabsStyles, highlight style
+      * widgets/clear.rs: rffi_clear_rect_widget
+      * lib.rs: thin wiring, all modules declared, public re-exports
+  - TRIM (PRD §4.5): Table, Chart, BarChart, Sparkline, Gauge, LineGauge,
+    Canvas, Scrollbar, logo/mascot widgets deleted
+  - All extern "C" entry points renamed from ratatui_* to rffi_*
+  - All constructor entry points use ffi_guard_ptr! (returns null on panic)
+    rather than ffi_guard! (which returns i32)
 
 Upgrade policy
 --------------
