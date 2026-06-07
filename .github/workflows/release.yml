@@ -1,0 +1,390 @@
+# release.yml — MoonSwift
+#
+# Location: .github/workflows/release.yml
+# Role: Manual release workflow that implements the two-phase release ordering
+#       protocol documented in ARCHITECTURE.md §5.4.
+#
+# Trigger: workflow_dispatch only — NOT tag-triggered.
+#   Rationale: the binaryTarget chicken-and-egg problem: the manifest commit
+#   that references the artifact's URL + checksum must be pushed (and tagged)
+#   AFTER the artifact exists; a tag trigger fires on the wrong commit (the
+#   one before the checksum is known).  A single workflow_dispatch run does
+#   everything in order:
+#     1. Build XCFramework (arm64 + x86_64 → lipo universal static lib)
+#     2. Bot commit updating Package.swift binaryTarget URL + sha256
+#     3. Tag that commit with the input version
+#     4. Upload artifact → create GitHub release
+#     5. Generate build-provenance attestation
+#     6. Verify job: clean checkout of the new tag + plain swift build
+#
+# Permissions: the workflow pushes directly to protected main via a
+#   branch-protection bypass allowance for github-actions[bot].  See
+#   RELEASING.md §3 for setup instructions.
+#
+# Environment variables propagated to every Swift step:
+#   LUASWIFT_INCLUDE_TOMLKIT=1 — LuaSwift's manifest reads this at
+#     manifest-evaluation time; release binary must always have luaswift.toml.
+#   MOONSWIFT_SHIM_SOURCE is NOT set — release uses binaryTarget mode.
+#
+# Runners: single-arch macos-15 runner for the build job (arm64 runner has
+#   cargo cross-compile for both targets).  The verify job deliberately picks
+#   macos-15-intel (x86_64) to maximise coverage diversity from the build
+#   runner.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (SemVer, e.g. 0.5.0)"
+        required: true
+        type: string
+
+# Only one release run at a time — prevent accidental double-tagging.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # push bot commit, create tag, create release, upload asset
+  id-token: write   # OIDC token for actions/attest-build-provenance
+
+jobs:
+  # ── job 1: build ──────────────────────────────────────────────────────────
+  # Build the universal XCFramework, update Package.swift, tag, release,
+  # and generate provenance attestation.
+  build:
+    name: Build & Release (arm64 runner, cross-compile x86_64)
+    runs-on: macos-15
+
+    outputs:
+      # Pass the precise commit SHA that was tagged so the verify job checks
+      # out exactly the right commit (races between pushes are impossible
+      # because concurrency:release blocks double runs, but being explicit
+      # is cleaner than relying on tag resolution).
+      tag-sha: ${{ steps.push-tag.outputs.tag-sha }}
+
+    env:
+      # LuaSwift's own manifest reads this at evaluation time; must be set
+      # for every swift build in this workflow (ARCHITECTURE.md §5.4).
+      LUASWIFT_INCLUDE_TOMLKIT: "1"
+      # Do NOT set MOONSWIFT_SHIM_SOURCE — release uses binaryTarget mode.
+      VERSION: ${{ github.event.inputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so the bot commit is pushed onto the true HEAD.
+          fetch-depth: 0
+
+      # ── Phase 1: Build Rust shim for both architectures ──────────────────
+
+      - name: Install Rust stable toolchain with cross-compile targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      # Cache Cargo registry and both target directories.
+      # Keyed on Cargo.lock + target pair — separate entries per arch so
+      # the cache is still usable even when one arch artifact is stale.
+      - name: Cache Cargo registry and build artefacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/ratatui-ffi/target
+          key: cargo-release-${{ runner.os }}-${{ hashFiles('rust/ratatui-ffi/Cargo.lock') }}
+          restore-keys: |
+            cargo-release-${{ runner.os }}-
+
+      # Build arm64 static lib.  --features swift_ffi disables catch_unwind
+      # in ffi_guard! (keeps release build clean per ARCHITECTURE.md §5.4).
+      - name: Build shim (aarch64-apple-darwin)
+        working-directory: rust/ratatui-ffi
+        run: cargo build --release --features swift_ffi --target aarch64-apple-darwin
+
+      # Build x86_64 static lib.
+      - name: Build shim (x86_64-apple-darwin)
+        working-directory: rust/ratatui-ffi
+        run: cargo build --release --features swift_ffi --target x86_64-apple-darwin
+
+      # ── Phase 2: Assemble XCFramework ────────────────────────────────────
+
+      # Merge the two single-arch static libs into one universal (fat) binary.
+      # The output is a .a so XCFramework -library wraps it as a static lib.
+      - name: Create universal static lib (lipo)
+        run: |
+          lipo -create \
+            rust/ratatui-ffi/target/aarch64-apple-darwin/release/libratatui_ffi.a \
+            rust/ratatui-ffi/target/x86_64-apple-darwin/release/libratatui_ffi.a \
+            -output libratatui_ffi_universal.a
+
+      # Regenerate the cbindgen header from the current Rust source so it
+      # matches exactly the static lib being packaged.  The committed header
+      # in Sources/CRatatuiFFI/include/ is the source-of-record; regenerating
+      # here ensures the packaged header matches the binary (ARCHITECTURE.md §5.4).
+      - name: Regenerate cbindgen header
+        working-directory: rust/ratatui-ffi
+        run: |
+          cargo install cbindgen --quiet 2>/dev/null || true
+          cbindgen --config cbindgen.toml --output ../../Sources/CRatatuiFFI/include/ratatui_ffi.h
+
+      # Wrap the universal static lib + umbrella header in an XCFramework.
+      # -library (not -framework) is correct for a static lib; -headers
+      # points at the include/ directory carrying the cbindgen header and
+      # the module.modulemap (copied from the source tree into the staging dir).
+      - name: Wrap in XCFramework
+        run: |
+          # Collect headers needed by the XCFramework consumer (Swift package).
+          HEADERS_DIR="xcfw_headers"
+          mkdir -p "$HEADERS_DIR"
+          cp Sources/CRatatuiFFI/include/ratatui_ffi.h "$HEADERS_DIR/"
+          cp Sources/CRatatuiFFI/include/module.modulemap "$HEADERS_DIR/" 2>/dev/null || true
+
+          xcodebuild -create-xcframework \
+            -library libratatui_ffi_universal.a \
+            -headers "$HEADERS_DIR" \
+            -output CRatatuiFFI.xcframework
+
+      # ── Phase 3: Zip + checksum ──────────────────────────────────────────
+
+      - name: Zip XCFramework and compute sha256
+        id: checksum
+        run: |
+          zip -r CRatatuiFFI.xcframework.zip CRatatuiFFI.xcframework
+          CHECKSUM=$(swift package compute-checksum CRatatuiFFI.xcframework.zip)
+          echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
+          echo "Checksum: ${CHECKSUM}"
+
+      # ── Phase 4: Build universal moonswift binary (notarization-ready) ───
+      # Build the Swift package in binaryTarget mode using the XCFramework
+      # we just assembled (which isn't uploaded yet — we use the local copy
+      # via a temporary source-mode shim build to produce the universal binary,
+      # then strip back to binaryTarget for the release commit).
+      #
+      # Strategy: build arm64 and x86_64 separately via SDKROOT overrides,
+      # then lipo the two moonswift executables into a universal binary.
+
+      - name: Cache SPM packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.swiftpm
+          key: spm-release-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            spm-release-${{ runner.os }}-
+
+      - name: Build moonswift arm64 (source mode, shim from XCFramework build)
+        env:
+          MOONSWIFT_SHIM_SOURCE: "1"
+        run: |
+          swift package reset
+          swift build --configuration release \
+            --triple aarch64-apple-macosx \
+            -Xlinker -L"$PWD/rust/ratatui-ffi/target/aarch64-apple-darwin/release" \
+            -Xlinker -lratatui_ffi
+
+      - name: Copy arm64 moonswift binary
+        run: cp .build/aarch64-apple-macosx/release/moonswift moonswift_arm64
+
+      - name: Build moonswift x86_64 (source mode, shim from XCFramework build)
+        env:
+          MOONSWIFT_SHIM_SOURCE: "1"
+        run: |
+          swift package reset
+          swift build --configuration release \
+            --triple x86_64-apple-macosx \
+            -Xlinker -L"$PWD/rust/ratatui-ffi/target/x86_64-apple-darwin/release" \
+            -Xlinker -lratatui_ffi
+
+      - name: Copy x86_64 moonswift binary
+        run: cp .build/x86_64-apple-macosx/release/moonswift moonswift_x86_64
+
+      - name: Create universal moonswift binary (lipo)
+        run: |
+          lipo -create moonswift_arm64 moonswift_x86_64 -output moonswift_universal
+          echo "Universal moonswift arches: $(lipo -archs moonswift_universal)"
+
+      - name: Zip universal moonswift binary
+        run: zip moonswift_universal.zip moonswift_universal
+
+      # ── Phase 5 (two-phase protocol): Bot commit updating Package.swift ──
+      # The predictable artifact URL (known before the release exists) and
+      # the now-computed sha256 are written into Package.swift.  This commit
+      # is then tagged and the release points at it.
+
+      - name: Configure git bot identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update Package.swift binaryTarget URL and checksum
+        id: update-package
+        run: |
+          TAG="v${VERSION}"
+          ARTIFACT_URL="https://github.com/ChrisGVE/moonswift/releases/download/${TAG}/CRatatuiFFI.xcframework.zip"
+          CHECKSUM="${{ steps.checksum.outputs.checksum }}"
+
+          # Replace placeholder/previous URL and checksum in Package.swift.
+          # The binaryTarget block looks like:
+          #   url: "https://github.com/ChrisGVE/moonswift/releases/download/.../CRatatuiFFI.xcframework.zip",
+          #   checksum: "<hex64>"
+          # We use Python for reliable in-place multi-line edit.
+          python3 - "$ARTIFACT_URL" "$CHECKSUM" <<'PYEOF'
+          import sys, re, pathlib
+
+          url, checksum = sys.argv[1], sys.argv[2]
+          p = pathlib.Path("Package.swift")
+          text = p.read_text()
+
+          # Update the url: field inside the binaryTarget block.
+          text = re.sub(
+              r'(url:\s*")https://github\.com/ChrisGVE/moonswift/releases/download/[^"]+(")',
+              f'\\g<1>{url}\\g<2>',
+              text,
+          )
+          # Update the checksum: field (64 hex chars).
+          text = re.sub(
+              r'(checksum:\s*")[0-9a-f]{64}(")',
+              f'\\g<1>{checksum}\\g<2>',
+              text,
+          )
+          p.write_text(text)
+          print(f"Package.swift updated: url={url}, checksum={checksum}")
+          PYEOF
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "artifact-url=${ARTIFACT_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit Package.swift with updated binaryTarget
+        run: |
+          TAG="${{ steps.update-package.outputs.tag }}"
+          git add Package.swift
+          git commit -m "chore(release): update binaryTarget checksum for ${TAG}"
+
+      # ── Phase 6: Tag the checksum commit ─────────────────────────────────
+
+      - name: Tag the release commit and push
+        id: push-tag
+        run: |
+          TAG="${{ steps.update-package.outputs.tag }}"
+          # Annotated tag: message matches the release title.
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin HEAD:main --follow-tags
+          echo "tag-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # ── Phase 7: Create GitHub release and upload artifact ───────────────
+
+      - name: Create GitHub release and upload artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.update-package.outputs.tag }}"
+          CHECKSUM="${{ steps.checksum.outputs.checksum }}"
+
+          gh release create "${TAG}" \
+            --title "MoonSwift ${TAG}" \
+            --notes "## MoonSwift ${TAG}
+
+          ### Artifacts
+
+          | File | Description |
+          |------|-------------|
+          | \`CRatatuiFFI.xcframework.zip\` | Universal XCFramework (arm64 + x86_64 static lib + cbindgen header) |
+          | \`moonswift_universal.zip\` | Universal \`moonswift\` binary (notarization-ready) |
+
+          ### sha256 (CRatatuiFFI.xcframework.zip)
+          \`\`\`
+          ${CHECKSUM}
+          \`\`\`
+
+          ### Build provenance
+          Provenance attestation is attached to this release via GitHub's supply-chain
+          security feature. Verify with:
+          \`\`\`
+          gh attestation verify CRatatuiFFI.xcframework.zip \
+            --repo ChrisGVE/moonswift
+          \`\`\`
+
+          ### Install (plain swift build, no Rust toolchain required)
+          Package.swift on this tag references the XCFramework artifact above.
+          A plain \`swift build\` resolves and downloads it automatically.
+          " \
+            CRatatuiFFI.xcframework.zip \
+            moonswift_universal.zip
+
+      # ── Phase 8: Generate build-provenance attestation ───────────────────
+      # Produces a signed SLSA-style attestation for the XCFramework zip and
+      # attaches it to the release.  Consumers verify with
+      # `gh attestation verify CRatatuiFFI.xcframework.zip --repo ChrisGVE/moonswift`.
+
+      - name: Generate build-provenance attestation (XCFramework)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: CRatatuiFFI.xcframework.zip
+
+      - name: Generate build-provenance attestation (universal binary)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: moonswift_universal.zip
+
+  # ── job 2: verify ─────────────────────────────────────────────────────────
+  # Clean-machine verification: check out the tagged commit and run a plain
+  # swift build (no Rust toolchain, no MOONSWIFT_SHIM_SOURCE).  This
+  # validates that Package.swift's binaryTarget URL and checksum are correct
+  # and that end users can build without a Rust toolchain.
+  #
+  # Deliberately run on a DIFFERENT runner arch (x86_64) from the build job
+  # (arm64) to exercise the XCFramework's x86_64 slice.
+  verify:
+    name: Verify (clean x86_64 machine, plain swift build)
+    runs-on: macos-15-intel
+    needs: build
+
+    env:
+      # LuaSwift's own manifest requires this; the release binary always
+      # includes luaswift.toml (ARCHITECTURE.md §5.4).
+      LUASWIFT_INCLUDE_TOMLKIT: "1"
+      # DO NOT set MOONSWIFT_SHIM_SOURCE — this is the binaryTarget mode test.
+
+    steps:
+      # Check out the exact commit that was tagged in the build job.
+      # Using the tag ref ensures SPM resolves the correct binaryTarget URL.
+      - name: Checkout tagged release commit
+        uses: actions/checkout@v4
+        with:
+          ref: "v${{ github.event.inputs.version }}"
+          # Single commit is sufficient — no history needed for build.
+          fetch-depth: 1
+
+      # Cache SPM resolved packages.
+      # Note: different cache key from the build job (different runner OS/arch
+      # and no ~shim~ in the key) — these packages are the same dependencies but
+      # the binary download cache key diverges per runner.
+      - name: Cache SPM packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.swiftpm
+          key: spm-verify-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            spm-verify-${{ runner.os }}-
+
+      # Plain swift build — no MOONSWIFT_SHIM_SOURCE, no Rust toolchain.
+      # SPM fetches and verifies the XCFramework artifact from the GitHub
+      # release using the URL + checksum in Package.swift.
+      # If the checksum is wrong or the URL is 404, this step fails.
+      - name: Build Swift package (plain swift build, binaryTarget mode)
+        run: swift build
+
+      - name: Verify moonswift binary was produced
+        run: |
+          BIN=".build/debug/moonswift"
+          if [ ! -f "$BIN" ]; then
+            echo "ERROR: $BIN not found after swift build"
+            exit 1
+          fi
+          echo "moonswift binary: $BIN"
+          file "$BIN"
+          echo "Build verified successfully."
