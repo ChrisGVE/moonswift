@@ -1,69 +1,91 @@
 // File: rust/ratatui-ffi/src/guard.rs
-// Role: Panic guard (ffi_guard macro), per-thread last-error string, and
+// Role: Panic guard (ffi_guard macro), single-process last-error string, and
 //       the rffi_last_error accessor. Every extern "C" entry point wraps its
-//       body in ffi_guard!() so that a Rust panic becomes an i32 error code
-//       rather than undefined behaviour across the C ABI.
+//       body in ffi_guard!() so that errors produce an i32 error code rather
+//       than undefined behaviour across the C ABI.
 //
 // Error protocol (ARCHITECTURE.md §5.2):
 //   - Entry points return i32: 0 = ok, nonzero = error code.
 //   - On error, set_last_error() stores a human-readable description.
 //   - rffi_last_error(buf, cap) copies the stored string to the caller.
 //
-// Implementation note (arm64 / Swift interop):
-//   Rust's thread_local! macro generates TLS (thread-local storage) sections
-//   that can conflict with Swift's own TLS on macOS arm64 when the Rust static
-//   lib is linked into a Swift binary, causing SIGBUS at test startup
-//   (ARCHITECTURE.md §5.4 arm64-TLS caveat).
+// Implementation note (arm64 / Swift interop — ARCHITECTURE.md §5.4):
+//   Rust std's own thread_local! machinery (thread::current, HashMap random
+//   state, panic bookkeeping) embeds $tlv$init TLS stubs in the __thread_vars
+//   Mach-O section.  On macOS arm64 these stubs conflict with Swift's TLS
+//   initialisation when the Rust static lib is linked into a Swift test binary,
+//   causing SIGBUS.  nm -j misses them (they are local symbols); objdump --syms
+//   reveals them.
 //
-//   To avoid this, per-thread last-error state is stored in a process-global
-//   OnceLock<Mutex<HashMap<ThreadId, String>>> instead of thread_local!.
-//   This is slightly heavier (one Mutex lock per FFI call) but avoids any
-//   Rust-managed TLS segment in the final binary.
+//   To eliminate all reachable TLS from the release static lib:
 //
-// Upstream: std::panic (catch_unwind), std::sync, std::thread
+//   1. Last-error state is stored in a single global Mutex<String> rather than
+//      a HashMap<ThreadId, String>.  HashMap uses std::hash::random::RandomState
+//      (TLS); thread::current().id() uses std::thread TLS.  A single mutex is
+//      correct for a UI-thread-only library.
+//
+//   2. catch_unwind is removed from ffi_guard! in the release profile (where
+//      panic = "abort" applies).  std::panicking::panic_count::LOCAL_PANIC_COUNT
+//      (TLS) is pulled in only by catch_unwind.  With panic = "abort", a Rust
+//      panic aborts the process immediately — visible and debuggable, not UB.
+//
+//   3. The dev profile retains panic = "unwind" so cargo test (dev binary) still
+//      catches panics and reports them as test failures.
+//
+// Upstream: std::sync, std::ffi
 // Downstream: every src/*.rs module that defines extern "C" entry points
 
-use std::any::Any;
-use std::collections::HashMap;
 use std::ffi::c_char;
 use std::sync::{Mutex, OnceLock};
-use std::thread;
 
 // ---------------------------------------------------------------------------
-// Per-thread last-error string (stored in a global map, keyed by ThreadId)
+// Process-global last-error string
 // ---------------------------------------------------------------------------
+//
+// A single global string rather than a per-thread map:
+//   - Eliminates HashMap (which pulls in std::hash::random TLS via RandomState)
+//   - Eliminates thread::current() calls (which pull in std::thread TLS)
+//   - Correct for a single-UI-thread library: the caller always checks the
+//     last error on the same thread that made the FFI call.
+//
+// The Mutex is initialised once (OnceLock) and never destroyed.
 
-static LAST_ERRORS: OnceLock<Mutex<HashMap<thread::ThreadId, String>>> = OnceLock::new();
+static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 
-fn last_errors() -> &'static Mutex<HashMap<thread::ThreadId, String>> {
-    LAST_ERRORS.get_or_init(|| Mutex::new(HashMap::new()))
+fn last_error() -> &'static Mutex<String> {
+    LAST_ERROR.get_or_init(|| Mutex::new(String::new()))
 }
 
-/// Store an error message for the current thread.
+/// Store an error message for the last FFI call.
 ///
-/// Callers inside ffi_guard!() use this when the body returns an error code
-/// so that rffi_last_error can retrieve the description.
+/// Called from ffi_guard! when the body returns an error code, so that
+/// rffi_last_error can retrieve the description.
 pub(crate) fn set_last_error(msg: impl Into<String>) {
-    if let Ok(mut map) = last_errors().lock() {
-        map.insert(thread::current().id(), msg.into());
+    if let Ok(mut s) = last_error().lock() {
+        *s = msg.into();
     }
 }
 
-/// Clear the per-thread last-error slot.
+/// Clear the last-error slot.
 ///
-/// Called at the top of ffi_guard! before running the body, so a successful
-/// call leaves an empty/absent slot for this thread.
+/// Called at the entry of every ffi_guard! body so a successful call leaves
+/// an empty error slot.
 pub(crate) fn clear_last_error() {
-    if let Ok(mut map) = last_errors().lock() {
-        map.remove(&thread::current().id());
+    if let Ok(mut s) = last_error().lock() {
+        s.clear();
     }
 }
 
 // ---------------------------------------------------------------------------
-// Panic payload → human-readable string
+// Panic payload → human-readable string (dev profile only)
 // ---------------------------------------------------------------------------
+//
+// In the release profile (panic = "abort") panics abort the process before
+// any unwinding occurs, so this function is unreachable.  It is preserved for
+// the dev profile where ffi_guard! uses catch_unwind.
 
-pub(crate) fn panic_message(payload: Box<dyn Any + Send + 'static>) -> String {
+#[cfg(debug_assertions)]
+pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -76,54 +98,66 @@ pub(crate) fn panic_message(payload: Box<dyn Any + Send + 'static>) -> String {
 // ---------------------------------------------------------------------------
 // ffi_guard! macro
 // ---------------------------------------------------------------------------
+//
+// Release profile (panic = "abort"): guard is a thin call-through.  A Rust
+// panic aborts the process — intentional for a library (bug, not user error).
+//
+// Dev/test profile (panic = "unwind"): catch_unwind converts panics to an
+// i32 error code so cargo test reports failures instead of crashing.
 
-/// Wrap an extern "C" entry-point body in a catch_unwind, translating Rust
-/// panics into an i32 error code and storing the panic message in the
-/// per-thread last-error slot.
+/// Wrap an extern "C" entry-point body in the FFI guard.
 ///
-/// Usage — returns i32 (0 = ok):
+/// On success the body's i32 return value is propagated.
+/// In debug builds (dev profile), Rust panics are caught and returned as
+/// RFFI_ERR_PANIC with the panic message stored in the last-error slot.
+/// In release builds (panic = "abort"), panics terminate the process.
 ///
+/// Usage:
 /// ```no_run
 /// #[no_mangle]
 /// pub extern "C" fn rffi_foo(x: u32) -> i32 {
 ///     ffi_guard!("rffi_foo", {
-///         // body; return 0 on success, negative code on error
 ///         if x == 0 { set_last_error("x must be non-zero"); return -1; }
 ///         0
 ///     })
 /// }
 /// ```
-///
-/// On panic the macro sets the last-error string and returns
-/// crate::error::RFFI_ERR_PANIC.
 #[macro_export]
 macro_rules! ffi_guard {
     ($name:expr, $body:block) => {{
         $crate::guard::clear_last_error();
-        let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| $body));
-        match result {
-            Ok(v) => v,
-            Err(payload) => {
-                let msg = $crate::guard::panic_message(payload);
-                let full = ::std::format!("panic in {}: {}", $name, msg);
-                $crate::guard::set_last_error(full);
-                $crate::error::RFFI_ERR_PANIC
+        #[cfg(debug_assertions)]
+        {
+            // Dev profile: catch_unwind converts panics to error codes.
+            let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| $body));
+            match result {
+                Ok(v) => v,
+                Err(payload) => {
+                    let msg = $crate::guard::panic_message(payload);
+                    let full = ::std::format!("panic in {}: {}", $name, msg);
+                    $crate::guard::set_last_error(full);
+                    $crate::error::RFFI_ERR_PANIC
+                }
             }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            // Release profile (panic = "abort"): no unwind machinery needed.
+            // A panic aborts the process; the guard is a transparent call-through.
+            $body
         }
     }};
 }
-
-// clear_last_error is pub(crate) so ffi_guard! can call it via `$crate::guard::clear_last_error`.
 
 // ---------------------------------------------------------------------------
 // ffi_guard_ptr! macro — for constructor functions that return *mut T
 // ---------------------------------------------------------------------------
 
 /// Like ffi_guard!, but for functions that return a raw pointer.
-/// On panic, stores the error in the last-error slot and returns null.
+/// In debug builds, panics store the error and return null.
+/// In release builds, panics abort the process.
 ///
 /// Usage:
-///
 /// ```no_run
 /// #[no_mangle]
 /// pub extern "C" fn rffi_foo_new() -> *mut Foo {
@@ -136,15 +170,22 @@ macro_rules! ffi_guard {
 macro_rules! ffi_guard_ptr {
     ($name:expr, $body:block) => {{
         $crate::guard::clear_last_error();
-        let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| $body));
-        match result {
-            Ok(v) => v,
-            Err(payload) => {
-                let msg = $crate::guard::panic_message(payload);
-                let full = ::std::format!("panic in {}: {}", $name, msg);
-                $crate::guard::set_last_error(full);
-                ::std::ptr::null_mut()
+        #[cfg(debug_assertions)]
+        {
+            let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| $body));
+            match result {
+                Ok(v) => v,
+                Err(payload) => {
+                    let msg = $crate::guard::panic_message(payload);
+                    let full = ::std::format!("panic in {}: {}", $name, msg);
+                    $crate::guard::set_last_error(full);
+                    ::std::ptr::null_mut()
+                }
             }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            $body
         }
     }};
 }
@@ -153,9 +194,9 @@ macro_rules! ffi_guard_ptr {
 // rffi_last_error — C-visible accessor
 // ---------------------------------------------------------------------------
 
-/// Copy the per-thread last-error string into `buf` (at most `cap - 1`
-/// bytes, NUL-terminated). Returns the number of bytes written (excluding
-/// NUL), or -1 if `buf` is NULL or `cap` is 0.
+/// Copy the last-error string into `buf` (at most `cap - 1` bytes,
+/// NUL-terminated). Returns the number of bytes written (excluding NUL),
+/// or -1 if `buf` is NULL or `cap` is 0.
 ///
 /// Call this immediately after any rffi_* function returns nonzero to
 /// retrieve a human-readable error description.
@@ -164,10 +205,8 @@ pub extern "C" fn rffi_last_error(buf: *mut c_char, cap: usize) -> i32 {
     if buf.is_null() || cap == 0 {
         return -1;
     }
-    let tid = thread::current().id();
-    let n = if let Ok(map) = last_errors().lock() {
-        let msg = map.get(&tid).map(|s| s.as_str()).unwrap_or("");
-        let bytes = msg.as_bytes();
+    let n = if let Ok(s) = last_error().lock() {
+        let bytes = s.as_bytes();
         // Write at most cap-1 bytes so there is always room for the NUL.
         let n = bytes.len().min(cap - 1);
         unsafe {
@@ -186,9 +225,15 @@ pub extern "C" fn rffi_last_error(buf: *mut c_char, cap: usize) -> i32 {
 mod tests {
     use super::*;
     use crate::error::RFFI_ERR_PANIC;
+    use std::sync::Mutex;
+
+    // Guard tests share the process-global LAST_ERROR; serialise them so
+    // concurrent cargo test threads don't interleave set/read sequences.
+    static GUARD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn last_error_round_trip() {
+        let _guard = GUARD_TEST_LOCK.lock().unwrap();
         // Store a message and retrieve it through rffi_last_error.
         set_last_error("hello error");
         let mut buf = [0u8; 64];
@@ -200,12 +245,14 @@ mod tests {
 
     #[test]
     fn last_error_null_buf_returns_minus_one() {
+        // No shared state access; no lock needed.
         let n = rffi_last_error(std::ptr::null_mut(), 64);
         assert_eq!(n, -1);
     }
 
     #[test]
     fn last_error_zero_cap_returns_minus_one() {
+        let _guard = GUARD_TEST_LOCK.lock().unwrap();
         set_last_error("x");
         let mut buf = [0u8; 1];
         let n = rffi_last_error(buf.as_mut_ptr() as *mut c_char, 0);
@@ -214,6 +261,7 @@ mod tests {
 
     #[test]
     fn last_error_truncates_to_cap_minus_one() {
+        let _guard = GUARD_TEST_LOCK.lock().unwrap();
         set_last_error("abcde");
         let mut buf = [0u8; 4]; // cap = 4 → max 3 bytes + NUL
         let n = rffi_last_error(buf.as_mut_ptr() as *mut c_char, buf.len());
@@ -222,8 +270,10 @@ mod tests {
         assert_eq!(&buf[..3], b"abc");
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn ffi_guard_catches_panic_and_returns_error_code() {
+        let _guard = GUARD_TEST_LOCK.lock().unwrap();
         // A deliberately-panicking closure must return RFFI_ERR_PANIC and
         // populate the last-error slot — not unwind across the test.
         let code = ffi_guard!("test_entry", { panic!("deliberate panic") });
@@ -240,11 +290,12 @@ mod tests {
 
     #[test]
     fn ffi_guard_clears_last_error_on_success() {
+        let _guard = GUARD_TEST_LOCK.lock().unwrap();
         // Leave a stale error from a previous call.
         set_last_error("stale");
         let code = ffi_guard!("ok_entry", { 0 });
         assert_eq!(code, 0);
-        // After a successful call the slot should be empty (removed from map).
+        // After a successful call the slot should be empty.
         let mut buf = [0u8; 64];
         let n = rffi_last_error(buf.as_mut_ptr() as *mut c_char, buf.len());
         assert_eq!(n, 0);
