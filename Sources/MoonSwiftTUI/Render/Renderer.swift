@@ -713,9 +713,9 @@ private let helpGlobalKeys: [(String, String)] = [
 
 // MARK: - Style helpers
 
-/// Returns the style for the `normal` (identifier) token.
+/// Returns the style for the `pane_bg` token (default pane background + text).
 private func normalStyle(_ theme: ThemeState) -> CellStyle {
-    return tokenStyle(.normal, theme: theme)
+    return tokenStyle(.paneBg, theme: theme)
 }
 
 /// Returns the style for the `dim` token (secondary / inactive content).
@@ -724,13 +724,23 @@ private func dimStyle(_ theme: ThemeState) -> CellStyle {
 }
 
 /// Returns the pane border style for focused or unfocused state (ux-spec §1.5).
+///
+/// Focused pane border uses `focus_border` (ux-spec §1.5).
+/// Unfocused pane border: ux-spec §1.5 mentions a "border" token, but the
+/// canonical 18-token table (ux-spec §8.1) contains no `border` entry. The
+/// closest semantic match for secondary chrome is `dim` — non-emphasized UI
+/// elements per §8.1. Using `dim` keeps unfocused borders visually recessed
+/// without importing a color that belongs to the `running` indicator.
 private func paneBorderStyle(_ theme: ThemeState, focused: Bool) -> CellStyle {
-    return focused ? tokenStyle(.focusBorder, theme: theme) : tokenStyle(.border, theme: theme)
+    return focused ? tokenStyle(.focusBorder, theme: theme) : tokenStyle(.dim, theme: theme)
 }
 
 /// Returns the cursor-line background style (`focus_bg` token, ux-spec §6.6).
+///
+/// ux-spec §6.6 table: "Cursor line ▶ gutter mark: `focus_bg` token".
+/// ux-spec §8.1: `focus_bg` = `#44475A` (Dracula selection) background.
 private func cursorLineStyle(_ theme: ThemeState) -> CellStyle {
-    return tokenStyle(.focusBorder, theme: theme)
+    return tokenStyle(.focusBg, theme: theme)
 }
 
 /// Resolves a `ThemeToken` to a `CellStyle` from the active theme table.
