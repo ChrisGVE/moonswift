@@ -3,7 +3,7 @@
 // Role: Maps tree-sitter capture names to ThemeToken values as specified in
 //       ux-spec.md §8.2. This is the BINDING mapping: every entry in the spec
 //       table appears here exactly; all unmapped captures fall back to
-//       ThemeToken.variable (the `identifier` token role) per the spec rule.
+//       ThemeToken.identifier (the `identifier` token role) per the spec rule.
 //
 // Spec reference: docs/internals/ux-spec.md §8.2
 //       "Tree-sitter capture-name → token mapping" (Lua grammar,
@@ -32,7 +32,7 @@ enum CaptureMapping {
     /// (e.g. `"keyword"`, `"keyword.function"`, `"variable.builtin"`).
     /// The lookup is exact — no prefix folding at this layer.
     ///
-    /// Unmapped names fall back to `.variable` (the `identifier` role) per
+    /// Unmapped names fall back to `.identifier` per
     /// ux-spec.md §8.2: "All unmapped captures fall back to `identifier`."
     static func token(for captureName: String) -> ThemeToken {
         switch captureName {
@@ -73,38 +73,37 @@ enum CaptureMapping {
             // nil, true, false — keyword per spec
             return .keyword
 
-        // MARK: function family → .function
+        // MARK: function family → .functionName (spec: function_name)
         case "function":
-            return .function
+            return .functionName
         case "method":
-            return .function
+            return .functionName
         case "constructor":
-            return .function
+            return .functionName
         case "type":
-            return .function
+            return .functionName
 
-        // MARK: variable / field / parameter → .variable (spec: identifier)
+        // MARK: variable / field / parameter → .identifier (spec: identifier)
         case "variable":
-            return .variable
+            return .identifier
         case "variable.builtin":
             // _G, _ENV, self — keyword per spec
             return .keyword
         case "field":
-            return .variable
+            return .identifier
         case "parameter":
-            return .variable
+            return .identifier
 
         // MARK: operator → .operatorToken
         case "operator":
             return .operatorToken
 
-        // MARK: punctuation → .variable (spec: identifier)
-        // ux-spec §8.2: punctuation.bracket/delimiter map to `identifier` token,
-        // which is represented as ThemeToken.variable in the Swift enum.
+        // MARK: punctuation → .identifier (spec: identifier)
+        // ux-spec §8.2: punctuation.bracket/delimiter map to the `identifier` token.
         case "punctuation.bracket":
-            return .variable
+            return .identifier
         case "punctuation.delimiter":
-            return .variable
+            return .identifier
 
         // MARK: label → .keyword (goto labels)
         case "label":
@@ -112,9 +111,8 @@ enum CaptureMapping {
 
         // MARK: fallback
         // ux-spec §8.2: "All unmapped captures fall back to `identifier`."
-        // ThemeToken uses `.variable` for the `identifier` token role.
         default:
-            return .variable
+            return .identifier
         }
     }
 }
