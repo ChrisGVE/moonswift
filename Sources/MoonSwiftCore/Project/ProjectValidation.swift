@@ -33,6 +33,10 @@ public enum ProjectValidation {
     ///
     /// - Parameters:
     ///   - projectFile: The decoded project file to validate.
+    ///   - projectRoot: The absolute URL of the project directory. When provided,
+    ///     symlink escape detection (CR-030) resolves candidate source paths
+    ///     against this root to detect symlinks that point outside the project.
+    ///     Pass `nil` in tests that do not need filesystem access.
     ///   - unknownKeyDiagnostics: Diagnostics collected by `ProjectFileCodec`
     ///     for unknown TOML keys (forwarded unchanged).
     ///   - extraModulesAllowList: Closure returning the set of valid `.optIn`
@@ -42,6 +46,7 @@ public enum ProjectValidation {
     /// - Returns: All collected diagnostics. Empty = the file is valid.
     public static func validate(
         _ projectFile: ProjectFile,
+        projectRoot: URL? = nil,
         unknownKeyDiagnostics: [Diagnostic] = [],
         extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> [Diagnostic] {
@@ -56,7 +61,7 @@ public enum ProjectValidation {
 
         // Rules 2-4 — sources (path presence handled by codec; we validate
         // absolute/escape and duplicates here).
-        validateSources(projectFile.sources, into: &diagnostics)
+        validateSources(projectFile.sources, projectRoot: projectRoot, into: &diagnostics)
 
         // Rule 5 — run.config.
         validateRunConfig(projectFile.run, into: &diagnostics)
@@ -97,10 +102,16 @@ public enum ProjectValidation {
     /// Validates all `[[source]]` entries:
     /// - Rule 2: `path` must not be absolute.
     /// - Rule 3: `path` must not escape the project root (leading `../`).
+    ///   When `projectRoot` is provided, also resolves symlinks to detect
+    ///   escaped paths that pass the lexical check (CWE-61, CR-030).
     /// - Rule 4: No duplicate source paths.
     /// - Rule 4b: `document` must be 0 for non-YAML files (JSON/TOML do not
     ///   support multi-document; validation is by extension).
-    static func validateSources(_ sources: [SourceEntry], into diagnostics: inout [Diagnostic]) {
+    static func validateSources(
+        _ sources: [SourceEntry],
+        projectRoot: URL?,
+        into diagnostics: inout [Diagnostic]
+    ) {
         var seenPaths: [String: Int] = [:]  // path → first-seen index
 
         for (index, entry) in sources.enumerated() {
@@ -117,7 +128,7 @@ public enum ProjectValidation {
             }
 
             // Rule 3: must not escape the project root.
-            if escapesProjectRoot(path) {
+            if escapesProjectRoot(path, projectRoot: projectRoot) {
                 diagnostics.append(
                     .projectError(
                         "source[\(index)].path \"\(path)\" escapes the project root — "
@@ -347,10 +358,22 @@ public enum ProjectValidation {
 
     /// Returns `true` if `path` traverses above the project root.
     ///
-    /// A path escapes the project root if any normalised component is `..`
-    /// and would ascend past the root. We check by simulating the stack.
-    private static func escapesProjectRoot(_ path: String) -> Bool {
-        // Split by path separator and simulate navigation.
+    /// Two complementary checks are performed:
+    ///
+    /// 1. **Lexical check** — simulates the path component stack to detect
+    ///    literal `../` traversals that would navigate above the root.
+    ///    This catches the simple case quickly without filesystem I/O.
+    ///
+    /// 2. **Symlink check** (CR-030) — when `projectRoot` is provided,
+    ///    resolves the candidate path with `resolvingSymlinksInPath` and
+    ///    verifies the canonical result is a descendant of the resolved
+    ///    project root. This catches symlinks that point outside the project
+    ///    even when the lexical path appears valid (CWE-61).
+    ///    The check uses `hasPrefix` on the standardised path strings plus a
+    ///    separator guard to avoid false positives from sibling directories
+    ///    that share a common prefix (e.g. `/proj` vs `/proj-other`).
+    private static func escapesProjectRoot(_ path: String, projectRoot: URL?) -> Bool {
+        // --- Lexical check (no I/O) ---
         let components = path.components(separatedBy: "/").filter { !$0.isEmpty && $0 != "." }
         var depth = 0
         for component in components {
@@ -361,6 +384,35 @@ public enum ProjectValidation {
                 depth += 1
             }
         }
+
+        // --- Symlink check (requires projectRoot) ---
+        // Walk each path component in turn, resolving symlinks for every
+        // prefix that exists on disk. Standard `resolvingSymlinksInPath()`
+        // only resolves symlinks in paths that fully exist; walking stepwise
+        // catches symlinks whose targets don't exist yet (the leaf may not
+        // exist, but the symlink directory component does).
+        if let root = projectRoot {
+            let canonicalRoot = root.resolvingSymlinksInPath().standardized.path
+            let components =
+                path
+                .components(separatedBy: "/")
+                .filter { !$0.isEmpty && $0 != "." }
+            var resolved = root.resolvingSymlinksInPath().standardized
+            for component in components {
+                resolved =
+                    resolved.appendingPathComponent(component)
+                    .resolvingSymlinksInPath()
+                    .standardized
+            }
+            let canonicalCandidate = resolved.path
+            // The candidate must equal the root or start with root + "/" to
+            // avoid matching a sibling directory with a shared name prefix.
+            let rootWithSep = canonicalRoot.hasSuffix("/") ? canonicalRoot : canonicalRoot + "/"
+            if canonicalCandidate != canonicalRoot && !canonicalCandidate.hasPrefix(rootWithSep) {
+                return true
+            }
+        }
+
         return false
     }
 }
@@ -374,8 +426,12 @@ extension ProjectValidation {
     ///
     /// `ProjectStore.load` calls this variant so that an unrecognised
     /// `run.config` value produces a diagnostic rather than silently defaulting.
+    ///
+    /// - Parameter projectRoot: Forwarded to `validate(_:projectRoot:…)` for
+    ///   symlink-escape detection (CR-030).
     public static func validate(
         _ projectFile: ProjectFile,
+        projectRoot: URL? = nil,
         rawRunConfig: String?,
         unknownKeyDiagnostics: [Diagnostic] = [],
         extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
@@ -383,6 +439,7 @@ extension ProjectValidation {
 
         var diagnostics = validate(
             projectFile,
+            projectRoot: projectRoot,
             unknownKeyDiagnostics: unknownKeyDiagnostics,
             extraModulesAllowList: extraModulesAllowList
         )

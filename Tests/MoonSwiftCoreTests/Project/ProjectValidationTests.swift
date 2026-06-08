@@ -5,6 +5,7 @@
 // Upstream: MoonSwiftCore/Project/ProjectValidation.swift
 // Downstream: (test target — nothing imports this)
 
+import Foundation
 import Testing
 
 @testable import MoonSwiftCore
@@ -654,5 +655,103 @@ struct ProjectValidationUnknownKeyForwardingTests {
         let preExisting = [Diagnostic.projectWarning("unrecognised key")]
         let diags = ProjectValidation.validate(file, unknownKeyDiagnostics: preExisting)
         #expect(diags.contains { $0.message == "unrecognised key" })
+    }
+}
+
+// MARK: - Symlink escape detection (CR-030)
+
+/// Tests that `escapesProjectRoot` (via `validateSources`) detects source paths
+/// that use a symlink to escape the project root even when the lexical path
+/// appears to stay within the project directory (CWE-61).
+@Suite("ProjectValidation — symlink escape detection (CR-030)")
+struct ProjectValidationSymlinkEscapeTests {
+
+    /// Create a temporary project directory containing:
+    ///   - `src/` — a normal subdirectory
+    ///   - `escape_link` — a symlink pointing to `/tmp` (outside the project)
+    ///
+    /// Returns the project root URL and cleans up on test exit via the defer block
+    /// in each test.
+    private func makeTempProject() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PVSymlinkTest-\(Int.random(in: 0..<Int.max))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // Normal subdir.
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("src"), withIntermediateDirectories: true
+        )
+        // Symlink pointing outside the project.
+        let linkURL = root.appendingPathComponent("escape_link")
+        try FileManager.default.createSymbolicLink(
+            atPath: linkURL.path, withDestinationPath: "/tmp"
+        )
+        return root
+    }
+
+    @Test("symlink source path that escapes project root produces an error diagnostic")
+    func symlinkEscapeProducesError() throws {
+        let root = try makeTempProject()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // "escape_link/something.lua" is lexically inside the project but
+        // resolves to /tmp/something.lua via the symlink.
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [SourceEntry(path: "escape_link/something.lua")]
+        )
+        let diags = ProjectValidation.validate(file, projectRoot: root)
+
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("escapes")
+            },
+            "Expected escape diagnostic for symlinked source path, got: \(diags)"
+        )
+    }
+
+    @Test("normal source path within project root produces no escape diagnostic")
+    func normalPathNoEscapeError() throws {
+        let root = try makeTempProject()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [SourceEntry(path: "src/init.lua")]
+        )
+        let diags = ProjectValidation.validate(file, projectRoot: root)
+
+        let escapeDiags = diags.filter { $0.message.contains("escapes") }
+        #expect(
+            escapeDiags.isEmpty,
+            "Expected no escape diagnostic for normal path, got: \(escapeDiags)"
+        )
+    }
+
+    @Test("dotdot path detected by lexical check (no projectRoot needed)")
+    func dotDotLexicalCheck() {
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [SourceEntry(path: "../outside.lua")]
+        )
+        // No projectRoot — lexical check fires.
+        let diags = ProjectValidation.validate(file, projectRoot: nil)
+        #expect(
+            diags.contains { $0.message.contains("escapes") },
+            "Expected escape diagnostic for ../outside.lua"
+        )
+    }
+
+    @Test("validate without projectRoot does not crash on symlink-checking path")
+    func validateWithoutProjectRootIsStable() {
+        // When projectRoot is nil, no symlink resolution happens — just lexical.
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [SourceEntry(path: "escape_link/something.lua")]
+        )
+        // Should not crash; lexical check passes (no ../).
+        let diags = ProjectValidation.validate(file, projectRoot: nil)
+        // The path looks lexically safe, so no escape diagnostic expected.
+        let escapeDiags = diags.filter { $0.message.contains("escapes") }
+        #expect(escapeDiags.isEmpty, "Lexical check should not flag a simple path without ..")
     }
 }

@@ -63,12 +63,18 @@ public enum ProjectStore {
         extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> LoadResult {
         let fileURL = projectDirectory.appendingPathComponent(fileName)
-        return load(from: fileURL, extraModulesAllowList: extraModulesAllowList)
+        return load(from: fileURL, projectRoot: projectDirectory, extraModulesAllowList: extraModulesAllowList)
     }
 
     /// Loads and validates the project file at an explicit `fileURL`.
+    ///
+    /// - Parameter projectRoot: The project root directory. When non-nil, the
+    ///   symlink-escape check in `ProjectValidation` resolves candidate source
+    ///   paths against this root (CR-030). Pass `nil` when the project root is
+    ///   unknown (e.g. in-memory loads from a raw TOML string).
     public static func load(
         from fileURL: URL,
+        projectRoot: URL? = nil,
         extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> LoadResult {
 
@@ -86,6 +92,7 @@ public enum ProjectStore {
 
         return loadFromString(
             tomlString,
+            projectRoot: projectRoot,
             extraModulesAllowList: extraModulesAllowList
         )
     }
@@ -95,10 +102,13 @@ public enum ProjectStore {
     ///
     /// - Parameters:
     ///   - tomlString: The raw TOML content.
+    ///   - projectRoot: Optional project root URL for symlink-escape validation
+    ///     (CR-030). Pass `nil` when no filesystem context is available.
     ///   - extraModulesAllowList: Allow-list for `lint.extra_modules` validation.
     ///     Defaults to `LuaModuleCatalog.v0.optInNames`.
     public static func loadFromString(
         _ tomlString: String,
+        projectRoot: URL? = nil,
         extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
     ) -> LoadResult {
 
@@ -134,6 +144,7 @@ public enum ProjectStore {
         // 3. Run full validation.
         let diagnostics = ProjectValidation.validate(
             projectFile,
+            projectRoot: projectRoot,
             rawRunConfig: rawRunConfig,
             unknownKeyDiagnostics: decoded.unknownKeyDiagnostics,
             extraModulesAllowList: extraModulesAllowList
