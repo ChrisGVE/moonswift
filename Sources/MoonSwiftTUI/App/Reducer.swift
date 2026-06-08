@@ -105,6 +105,10 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
 
     case .runFinished(let outcome):
         s.runState = .completed(outcome)
+        // Log engine-level failures (not script errors) for post-mortem diagnosis.
+        if case .engineError(let message) = outcome {
+            Logger.shared.error("Lua engine error during run: \(message)")
+        }
         return (s, tickEffectsAfterRunEnds(s))
 
     // MARK: Lint
@@ -115,6 +119,7 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
 
     case .lintEngineFailed(let message):
         s.lintState = .failed(message)
+        Logger.shared.error("Lint engine failed: \(message)")
         return (s, [])
 
     case .catalogProbed(let available):
@@ -270,6 +275,35 @@ private func reduceGlobalKey(
     modifiers: KeyModifiers
 ) -> (AppState, [Effect])? {
     var s = s
+
+    // ux-spec §4.2: when project is malformed, only C-p / C-r / q / ? are active.
+    // All other global keys are blocked with a transient message.
+    if case .malformed = s.project {
+        let allowed: [(KeyCode, KeyModifiers)] = [
+            (.char("q"), []),
+            (.char("?"), []),
+            (.char("p"), .ctrl),
+            (.char("r"), .ctrl),
+        ]
+        let isAllowed = allowed.contains { $0.0 == code && $0.1 == modifiers }
+        if !isAllowed {
+            // Return nil for unrecognised keys so they don't produce noise;
+            // only produce a transient when the key would normally do something.
+            let actionable: [(KeyCode, KeyModifiers)] = [
+                (.char("r"), []), (.char("x"), []), (.char("l"), []),
+                (.char("i"), []),
+                (.tab, []), (.backTab, []),
+                (.char("h"), .ctrl), (.char("l"), .ctrl), (.char("j"), .ctrl),
+                (.char("<"), []), (.char(">"), []),
+                (.char("{"), []), (.char("}"), []),
+            ]
+            if actionable.contains(where: { $0.0 == code && $0.1 == modifiers }) {
+                s.transient = TransientMessage(text: "Project file error — fix the file first (C-p)")
+                return (s, [armTickIfNeeded(s)].compactMap { $0 })
+            }
+            return nil
+        }
+    }
 
     switch (code, modifiers) {
 
