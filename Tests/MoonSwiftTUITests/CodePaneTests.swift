@@ -660,6 +660,187 @@ struct CodePaneHighlightBatchingTests {
     }
 }
 
+// MARK: - Diagnostic navigation scroll-to-center tests
+
+@Suite("Code pane — Diag navigation scroll-to-center (task 31)")
+struct CodePaneDiagNavScrollTests {
+
+    /// State with 30 lines of source and 3 diagnostics.
+    private func stateWithDeeperDiags() -> AppState {
+        var (state, _) = codePaneState(code: (1...30).map { "\($0)" }.joined(separator: "\n"))
+        state.bottomPane.diagnostics = [
+            Diagnostic(severity: .error, line: 20, message: "deep1", source: .luacheck),
+            Diagnostic(severity: .warning, line: 25, message: "deep2", source: .luacheck),
+        ]
+        return state
+    }
+
+    @Test("n sets scrollOffset to center target line (halfPageSize offset)")
+    func nScrollsToCenter() {
+        let state = stateWithDeeperDiags()
+        let (next, _) = reduce(state, .key(.char("n"), modifiers: []))
+        // First diagnostic at line 20 → 0-based index 19.
+        // Centered: max(0, 19 - 10) = 9.
+        #expect(next.codePane.cursorLine == 19, "n must set cursor to line 20 (0-based 19)")
+        #expect(next.codePane.scrollOffset == 9, "n must center by scrolling to cursorLine - halfPageSize")
+    }
+
+    @Test("]d sets scrollOffset to center target line")
+    func lastDiagScrollsToCenter() {
+        let state = stateWithDeeperDiags()
+        let (next, _) = reduce(state, .key(.char("]"), modifiers: []))
+        // Last diagnostic at line 25 → 0-based index 24.
+        // Centered: max(0, 24 - 10) = 14.
+        #expect(next.codePane.cursorLine == 24, "]d must set cursor to line 25 (0-based 24)")
+        #expect(next.codePane.scrollOffset == 14, "]d must center by scrolling to cursorLine - halfPageSize")
+    }
+
+    @Test("n near start of file does not produce negative scrollOffset")
+    func nNearStartNoNegativeScroll() {
+        var (state, _) = codePaneState(code: (1...20).map { "\($0)" }.joined(separator: "\n"))
+        state.bottomPane.diagnostics = [
+            Diagnostic(severity: .error, line: 3, message: "early", source: .luacheck)
+        ]
+        let (next, _) = reduce(state, .key(.char("n"), modifiers: []))
+        // Line 3 → 0-based 2. max(0, 2 - 10) = 0.
+        #expect(next.codePane.cursorLine == 2)
+        #expect(next.codePane.scrollOffset == 0, "scroll offset must not go below 0")
+    }
+}
+
+// MARK: - Highlight pulse lifecycle tests
+
+@Suite("Code pane — Highlight pulse lifecycle (ux-spec §3.5, task 31)")
+struct CodePaneHighlightPulseTests {
+
+    @Test("Tick clears jumpPulseLine (pulse expiry)")
+    func tickClearsPulseLine() {
+        var (state, _) = codePaneState(code: "a\nb\nc")
+        state.codePane.jumpPulseLine = 1  // simulate active pulse on line 2
+
+        let (next, _) = reduce(state, .tick)
+        #expect(next.codePane.jumpPulseLine == nil, "tick must clear jumpPulseLine to end the 500 ms pulse")
+    }
+
+    @Test("Tick emits stopTick when pulse is the only consumer (no run, no transient)")
+    func tickStopsWhenOnlyPulseWasActive() {
+        var (state, _) = codePaneState(code: "a\nb")
+        state.codePane.jumpPulseLine = 0  // pulse active
+        state.runState = .idle
+        state.transient = nil
+
+        let (_, effects) = reduce(state, .tick)
+        // After clearing jumpPulseLine, no consumer remains → stopTick expected.
+        let hasStop = effects.contains {
+            if case .stopTick = $0 { return true }
+            return false
+        }
+        #expect(hasStop, "tick must emit stopTick when pulse was the only active consumer")
+    }
+
+    @Test("jumpPulseLine set causes armTickIfNeeded to return highlightPulse interval")
+    func pulseArmsHighlightPulseTick() {
+        // Enter in bottom pane → jumpCodePaneFromBottomPane → sets jumpPulseLine + arms tick.
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.bottomPane.diagnostics = [
+            Diagnostic(severity: .error, line: 5, message: "err", source: .luacheck)
+        ]
+        state.bottomPane.scrollOffset = 0
+        let id = SourceID(path: "test.lua")
+        state.sources[id] = .loaded(makeFragment(code: (1...10).map { "\($0)" }.joined(separator: "\n")))
+        state.navigatorOrder = [id]
+        state.selection = id
+
+        let (next, effects) = reduce(state, .key(.enter, modifiers: []))
+        #expect(next.codePane.jumpPulseLine != nil, "Enter must set jumpPulseLine")
+
+        // Expect a startTick with interval ≤ highlightPulse (500 ms).
+        let hasHighlightPulseTick = effects.contains {
+            if case .startTick(let interval) = $0 {
+                return interval <= TickInterval.highlightPulse
+            }
+            return false
+        }
+        #expect(hasHighlightPulseTick, "Enter must arm a tick with interval ≤ 500 ms for pulse animation")
+    }
+}
+
+// MARK: - Renderer pulse style tests
+
+@Suite("Code pane — Renderer highlight pulse style (ux-spec §3.5, task 31)")
+struct CodePaneRendererPulseTests {
+
+    /// Returns a state with a loaded source, the pulse line set, and a distinctive
+    /// highlight_pulse token in the theme so the color is verifiable.
+    private func pulseState(pulseLine: Int) -> (AppState, SourceID) {
+        var (state, id) = codePaneState(code: (1...20).map { "line\($0)" }.joined(separator: "\n"))
+        state.codePane.jumpPulseLine = pulseLine
+        state.codePane.scrollOffset = 0
+        // Wire a recognisable highlight_pulse background (0xAA, 0xBB, 0xCC).
+        state.theme.tokens[.highlightPulse] = TokenStyle(bg: .rgb(0xAA, 0xBB, 0xCC))
+        return (state, id)
+    }
+
+    @Test("Pulse line has highlight_pulse background when jumpPulseLine matches")
+    func pulseLineUsesHighlightPulseBackground() {
+        let (state, _) = pulseState(pulseLine: 2)  // 0-based line 2 = source line 3
+        let cmds = render(state, size: stdSize)
+
+        // The expected bg for highlight_pulse: 0x00AABBCC.
+        let expectedBg: UInt32 = 0x00AA_BBCC
+
+        // Extract all cellRuns with their styles.
+        let styledRuns: [(col: UInt16, row: UInt16, text: String, style: CellStyle)] = cmds.compactMap {
+            if case .cellRun(let c, let r, let t, let s) = $0 { return (c, r, t, s) }
+            return nil
+        }
+        let pulseRuns = styledRuns.filter { $0.style.bg == expectedBg }
+        #expect(!pulseRuns.isEmpty, "Pulse line must have at least one cellRun with highlight_pulse background")
+    }
+
+    @Test("Non-pulse line does NOT have highlight_pulse background")
+    func nonPulseLineDoesNotHavePulseBackground() {
+        let (state, _) = pulseState(pulseLine: 2)
+        let cmds = render(state, size: stdSize)
+
+        let expectedBg: UInt32 = 0x00AA_BBCC
+        let styledRuns: [(col: UInt16, row: UInt16, text: String, style: CellStyle)] = cmds.compactMap {
+            if case .cellRun(let c, let r, let t, let s) = $0 { return (c, r, t, s) }
+            return nil
+        }
+        // Find rows that use the pulse bg but are NOT the pulse line's row.
+        // Pulse line 2 at scrollOffset 0 → terminal row = codePane.y + border + 2.
+        let layout = computeLayout(size: stdSize, paneLayout: state.paneLayout)
+        let pulseTermRow = layout.codePane.y + 1 + UInt16(2)  // 1 for border, 2 for line index
+        let spuriousPulse = styledRuns.filter { $0.style.bg == expectedBg && $0.row != pulseTermRow }
+        #expect(spuriousPulse.isEmpty, "Only the pulse line row must use highlight_pulse background")
+    }
+
+    @Test("Cursor line uses focus_bg even when jumpPulseLine == cursorLine")
+    func cursorLineTakesPriorityOverPulse() {
+        // When cursor is on the same line as the pulse, cursor style wins.
+        var (state, _) = codePaneState(code: "a\nb\nc")
+        state.codePane.jumpPulseLine = 0  // pulse on line 0
+        state.codePane.cursorLine = 0  // cursor also on line 0
+        state.codePane.scrollOffset = 0
+        state.theme.tokens[.highlightPulse] = TokenStyle(bg: .rgb(0xAA, 0xBB, 0xCC))
+        state.theme.tokens[.focusBg] = TokenStyle(bg: .rgb(0x44, 0x47, 0x5A))
+
+        let cmds = render(state, size: stdSize)
+        let pulseBg: UInt32 = 0x00AA_BBCC
+        let styledRuns: [(col: UInt16, row: UInt16, text: String, style: CellStyle)] = cmds.compactMap {
+            if case .cellRun(let c, let r, let t, let s) = $0 { return (c, r, t, s) }
+            return nil
+        }
+        // Cursor row must NOT use highlight_pulse bg.
+        let layout = computeLayout(size: stdSize, paneLayout: state.paneLayout)
+        let cursorRow = layout.codePane.y + 1  // border + line 0
+        let pulseOnCursor = styledRuns.filter { $0.row == cursorRow && $0.style.bg == pulseBg }
+        #expect(pulseOnCursor.isEmpty, "Cursor line must not use highlight_pulse background (focus_bg takes priority)")
+    }
+}
+
 // MARK: - Snapshot geometry test
 
 @Suite("Code pane — Snapshot geometry")

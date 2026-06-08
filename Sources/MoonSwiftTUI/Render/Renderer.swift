@@ -385,6 +385,11 @@ private func renderCodePane(
 ) -> [RenderCommand] {
     guard let inner = insetRect(rect) else { return [] }
 
+    // Picker modal: replace code pane with the tree browser (ux-spec §3.6).
+    if state.focus == .pickerModal, let picker = state.pickerState {
+        return renderPickerPane(picker: picker, rect: inner, theme: theme)
+    }
+
     // No selection: empty-state prompt (ux-spec §3.1).
     guard let selectionID = state.selection else {
         return renderCodePanePrompt(rect: inner, theme: theme)
@@ -426,6 +431,260 @@ private func paragraphLines(_ text: String, rect: Rect, style: CellStyle) -> [Re
     let lines = text.components(separatedBy: "\n")
         .map { [Span($0, style: style)] }
     return [.paragraph(rect: rect, lines: lines, block: nil)]
+}
+
+// MARK: - Picker pane renderer (ux-spec §3.6)
+
+/// Renders the structured-file picker in the code-pane area.
+///
+/// Layout (ux-spec §3.6, binding):
+///   Row 0       — title: "  Pick fields: <filename>"
+///   Rows 1…n-2  — tree rows with indentation, kind annotation, mark indicator
+///   Row n-1     — status line: cursor's normalized JSONPath, or discard prompt
+///
+/// Row format per tree entry:
+///   <indent> <▶/▽> <label>  <annotation>  [●]
+/// where:
+///   - indent    = 2 spaces per depth level
+///   - ▶/▽       = for obj/arr nodes (collapsed/expanded indicator)
+///   - annotation= str / int / bool / arr / obj in appropriate style
+///   - ●         = mark indicator in added color (only for marked str fields)
+///
+/// Non-markable rows (non-str) render their annotation in dim style.
+/// Pre-existing marks show ● in keyword color; newly added in added color.
+/// String rows show the value truncated to fit the line width.
+///
+/// When the tree is nil (loading): shows "Loading…".
+/// When parseError is set: shows "Cannot parse file: <error>" in error color.
+/// When awaitingDiscardConfirmation: status row shows the discard prompt.
+private func renderPickerPane(picker: PickerState, rect: Rect, theme: ThemeState) -> [RenderCommand] {
+    // Need at least 3 rows: title + 1 content row + status.
+    guard rect.height >= 3 else { return [] }
+
+    var commands: [RenderCommand] = []
+    let totalRows = Int(rect.height)
+
+    // Title row.
+    let titleText = "  Pick fields: \(picker.filePath)"
+    let titleStyle = tokenStyle(.keyword, theme: theme)
+    commands.append(
+        .cellRun(col: rect.x, row: rect.y, text: pickerPadded(titleText, width: Int(rect.width)), style: titleStyle))
+
+    // Status row (last row of the rect).
+    let statusRow = UInt16(Int(rect.y) + totalRows - 1)
+    let contentRows = totalRows - 2  // rows between title and status
+
+    // Content area rect (rows 1 … totalRows-2).
+    let contentY = Int(rect.y) + 1
+
+    // Parse error: show error message in the content area.
+    if let err = picker.parseError {
+        let errMsg = "Cannot parse file: \(err)"
+        let errStyle = tokenStyle(.error, theme: theme)
+        commands.append(
+            .cellRun(
+                col: rect.x,
+                row: UInt16(contentY),
+                text: pickerPadded(errMsg, width: Int(rect.width)),
+                style: errStyle
+            )
+        )
+        // Status row: Esc hint.
+        let statusText = "  <Esc> close"
+        commands.append(
+            .cellRun(
+                col: rect.x,
+                row: statusRow,
+                text: pickerPadded(statusText, width: Int(rect.width)),
+                style: dimStyle(theme)
+            )
+        )
+        return commands
+    }
+
+    // Loading state: tree not yet ready.
+    guard let tree = picker.tree else {
+        commands.append(
+            .cellRun(
+                col: rect.x,
+                row: UInt16(contentY),
+                text: pickerPadded("  Loading…", width: Int(rect.width)),
+                style: dimStyle(theme)
+            )
+        )
+        commands.append(
+            .cellRun(
+                col: rect.x,
+                row: statusRow,
+                text: pickerPadded("", width: Int(rect.width)),
+                style: dimStyle(theme)
+            )
+        )
+        return commands
+    }
+
+    let rows = tree.visibleRows()
+
+    // Compute the scroll window so the cursor is always visible.
+    let scrollStart = pickerScrollStart(cursor: picker.cursorRow, visible: contentRows, total: rows.count)
+
+    // Render tree rows in the content area.
+    for rowOffset in 0..<contentRows {
+        let rowIdx = scrollStart + rowOffset
+        let termRow = UInt16(contentY + rowOffset)
+        let width = Int(rect.width)
+
+        guard rows.indices.contains(rowIdx) else {
+            // Blank row below the tree.
+            commands.append(
+                .cellRun(
+                    col: rect.x, row: termRow, text: String(repeating: " ", count: width), style: normalStyle(theme)))
+            continue
+        }
+
+        let row = rows[rowIdx]
+        let isCursor = rowIdx == picker.cursorRow
+        let isMarked = picker.marks.contains(row.normalized)
+        let isPreExisting = picker.preExistingMarks.contains(row.normalized)
+
+        // Build the display line for this tree row.
+        let (lineSpans) = pickerRowSpans(
+            row: row,
+            isCursor: isCursor,
+            isMarked: isMarked,
+            isPreExisting: isPreExisting,
+            width: width,
+            theme: theme
+        )
+        commands.append(.cellSpans(col: rect.x, row: termRow, spans: lineSpans))
+    }
+
+    // Status row: discard confirmation prompt, or current cursor's JSONPath.
+    let statusText: String
+    if picker.awaitingDiscardConfirmation {
+        statusText = "  Discard unsaved field marks? [y/N]"
+    } else if rows.indices.contains(picker.cursorRow), rows[picker.cursorRow].kind.isMarkable {
+        statusText = "  \(rows[picker.cursorRow].normalized)"
+    } else if rows.indices.contains(picker.cursorRow) {
+        statusText = "  \(rows[picker.cursorRow].normalized)  (not markable)"
+    } else {
+        statusText = "  s save  Esc cancel"
+    }
+    let statusStyle = picker.awaitingDiscardConfirmation ? tokenStyle(.warning, theme: theme) : dimStyle(theme)
+    commands.append(
+        .cellRun(
+            col: rect.x,
+            row: statusRow,
+            text: pickerPadded(statusText, width: Int(rect.width)),
+            style: statusStyle
+        )
+    )
+
+    return commands
+}
+
+/// Computes the scroll-start index so the cursor row is always visible within
+/// the `visible`-row content window.
+///
+/// Simple cursor-follow: the window starts at max(0, cursor - visible + 1) when
+/// the cursor is below the window, or stays at min(scrollStart, cursor) when
+/// the cursor is above. For the first render, scrollStart starts at 0.
+private func pickerScrollStart(cursor: Int, visible: Int, total: Int) -> Int {
+    guard visible > 0, total > 0 else { return 0 }
+    // Clamp cursor to valid range.
+    let c = max(0, min(cursor, total - 1))
+    // Keep window: scroll forward when cursor is below bottom, scroll back when above.
+    // The simplest correct formula: centre the window around the cursor, biased to start.
+    let start = max(0, c - visible + 1)
+    return min(start, max(0, total - visible))
+}
+
+/// Builds the multi-span row for one picker tree entry.
+///
+/// Line layout: `<indent><node-prefix><label>  <annotation>  [●]  [value…]`
+///   indent       — 2 spaces per depth
+///   node-prefix  — "▶ " (collapsed obj/arr), "▽ " (expanded), "  " (scalar)
+///   label        — key name or index string
+///   annotation   — type tag in dim / normal style
+///   mark (●)     — in added or keyword color when marked
+///   value        — truncated string value for str rows (dim)
+///
+/// The cursor row uses the focus_bg background style.
+private func pickerRowSpans(
+    row: PickerRow,
+    isCursor: Bool,
+    isMarked: Bool,
+    isPreExisting: Bool,
+    width: Int,
+    theme: ThemeState
+) -> [Span] {
+    let baseStyle = isCursor ? cursorLineStyle(theme) : normalStyle(theme)
+    let dimmed = isCursor ? cursorLineStyle(theme) : dimStyle(theme)
+    let annotStyle = row.kind.isMarkable ? baseStyle : dimmed
+
+    // Indentation: 2 spaces per depth.
+    let indent = String(repeating: "  ", count: max(0, row.depth))
+
+    // Node prefix: ▶ collapsed, ▽ expanded, empty for scalars.
+    let prefix: String
+    switch row.kind {
+    case .obj, .arr:
+        prefix = row.isExpanded ? "▽ " : "▶ "
+    default:
+        prefix = "  "
+    }
+
+    // Mark indicator.
+    let markStr: String
+    let markStyle: CellStyle
+    if isMarked {
+        markStr = " ●"
+        markStyle = isPreExisting ? tokenStyle(.keyword, theme: theme) : tokenStyle(.added, theme: theme)
+    } else {
+        markStr = ""
+        markStyle = baseStyle
+    }
+
+    // Annotation tag.
+    let annotStr = "  \(row.kind.annotation)"
+
+    // Value snippet (str rows only, truncated to leave room for other parts).
+    let labelPart = indent + prefix + row.label
+    let fixedWidth = labelPart.count + annotStr.count + markStr.count
+    var valueSnippet = ""
+    if let sv = row.stringValue {
+        let remaining = width - fixedWidth - 2  // 2 for "  " separator
+        if remaining > 3 {
+            let truncated = sv.prefix(remaining - 1)
+            valueSnippet = "  \(truncated)"
+        }
+    }
+
+    // Pad to fill the full width so cursor-line background covers the row.
+    let totalContent = labelPart.count + annotStr.count + markStr.count + valueSnippet.count
+    let padding = String(repeating: " ", count: max(0, width - totalContent))
+
+    var spans: [Span] = [
+        Span(labelPart, style: baseStyle),
+        Span(annotStr, style: annotStyle),
+    ]
+    if !markStr.isEmpty {
+        spans.append(Span(markStr, style: markStyle))
+    }
+    if !valueSnippet.isEmpty {
+        spans.append(Span(valueSnippet, style: dimmed))
+    }
+    if !padding.isEmpty {
+        spans.append(Span(padding, style: baseStyle))
+    }
+    return spans
+}
+
+/// Pads or truncates `text` to exactly `width` characters for a single cell-run.
+private func pickerPadded(_ text: String, width: Int) -> String {
+    guard width > 0 else { return "" }
+    if text.count >= width { return String(text.prefix(width)) }
+    return text + String(repeating: " ", count: width - text.count)
 }
 
 /// Entry point that resolves the hover diagnostic and delegates to the core renderer.
@@ -510,6 +769,10 @@ private func renderCodePaneSourceWithHover(
         let lineNumber = lineIdx + 1
         let mark = codePane.gutterMarks[lineIdx]
         let isCursor = lineIdx == cursorLineIdx
+        // Highlight-pulse line: true while `jumpPulseLine` is set and matches this
+        // line index. The cursor line takes priority so ▶ always appears on focus_bg
+        // (ux-spec §3.5 — discrete single-tick pulse; see design note below).
+        let isPulseLine = !isCursor && (codePane.jumpPulseLine == lineIdx)
 
         // Gutter cell: 1 mark character + 3 right-aligned line-number digits.
         let gutterText = formatGutterCell(
@@ -518,12 +781,24 @@ private func renderCodePaneSourceWithHover(
             isCursor: isCursor,
             noColor: theme.capability == .noColor
         )
-        let gutterStyle = gutterCellStyle(mark: mark, isCursor: isCursor, theme: theme)
+        let gutterStyle = gutterCellStyle(mark: mark, isCursor: isCursor, isPulseLine: isPulseLine, theme: theme)
         commands.append(.cellRun(col: rect.x, row: row, text: gutterText, style: gutterStyle))
 
         // Source line content (right of gutter).
+        // Design note: ux-spec §3.5 describes a "transition" from highlight_pulse
+        // to normal over 500 ms. The current TickSource fires one 500 ms tick; on
+        // that tick `reduceTick` clears `jumpPulseLine`. This gives a discrete
+        // highlight_pulse color for ~500 ms then snaps to normal — one step rather
+        // than a gradient. A gradient would require sub-500 ms ticks and color
+        // interpolation; the spec's word "transitions" is interpreted as a temporal
+        // change (not necessarily a smooth gradient) at this scope level.
         if contentWidth > 0 {
-            let baseStyle = isCursor ? cursorLineStyle(theme) : normalStyle(theme)
+            let baseStyle =
+                isCursor
+                ? cursorLineStyle(theme)
+                : isPulseLine
+                    ? pulseLineStyle(theme)
+                    : normalStyle(theme)
             let lineSpans = spansByLine[lineIdx] ?? []
             commands += renderCodeLine(
                 text: lineText,
@@ -635,14 +910,17 @@ private func formatGutterCell(
 
 /// Returns the gutter cell style for a line.
 ///
-/// Priority order (ux-spec §6.6):
+/// Priority order (ux-spec §6.6, §3.5):
 /// 1. Cursor line: `focus_bg` background — cursor mark (`▶`/`>`) uses this style.
-/// 2. Error mark: `error` color for the `E` character.
-/// 3. Warning mark: `warning` color for the `W` character.
-/// 4. No mark: `gutter_bg` — the gutter background color (ux-spec §8.1).
-private func gutterCellStyle(mark: GutterMark?, isCursor: Bool, theme: ThemeState) -> CellStyle {
+/// 2. Pulse line: `highlight_pulse` background while a 500 ms jump pulse is active.
+/// 3. Error mark: `error` color for the `E` character.
+/// 4. Warning mark: `warning` color for the `W` character.
+/// 5. No mark: `gutter_bg` — the gutter background color (ux-spec §8.1).
+private func gutterCellStyle(mark: GutterMark?, isCursor: Bool, isPulseLine: Bool, theme: ThemeState) -> CellStyle {
     // Cursor line takes priority so the ▶ mark appears on focus_bg.
     if isCursor { return cursorLineStyle(theme) }
+    // Pulse line: jump-target highlighted with highlight_pulse during animation.
+    if isPulseLine { return pulseLineStyle(theme) }
     if let mark {
         switch mark {
         case .error: return tokenStyle(.error, theme: theme)
@@ -1256,6 +1534,8 @@ private let helpNavigatorKeys: [(String, String)] = [
     ("g",       "Jump to first entry"),
     ("G",       "Jump to last entry"),
     ("<Enter>", "Load selected source"),
+    ("o",       "Load selected source (alias)"),
+    ("<Space>", "Load selected source (alias)"),
     ("/",       "Filter entries"),
     ("m",       "Open structured-file picker"),
 ]
@@ -1313,6 +1593,15 @@ private func paneBorderStyle(_ theme: ThemeState, focused: Bool) -> CellStyle {
 /// ux-spec §8.1: `focus_bg` = `#44475A` (Dracula selection) background.
 private func cursorLineStyle(_ theme: ThemeState) -> CellStyle {
     return tokenStyle(.focusBg, theme: theme)
+}
+
+/// Returns the 500 ms highlight-pulse line style (`highlight_pulse` token, ux-spec §3.5, §8.1).
+///
+/// Applied to the jump-target line while `codePane.jumpPulseLine` is set. The reducer
+/// clears `jumpPulseLine` on the first 500 ms tick, reverting the line to `normalStyle`.
+/// ux-spec §8.1: `highlight_pulse` = `#6272A4` (Dracula comment blue) background.
+private func pulseLineStyle(_ theme: ThemeState) -> CellStyle {
+    return tokenStyle(.highlightPulse, theme: theme)
 }
 
 /// Resolves a `ThemeToken` to a `CellStyle` from the active theme table.
