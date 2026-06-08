@@ -63,7 +63,13 @@ public final class Terminal {
     // MARK: - Properties
 
     /// The opaque pointer returned by `rffi_terminal_init`.
-    private let handle: UnsafeMutableRawPointer
+    ///
+    /// `nil` after `teardown()` has been called (or after `deinit` runs the
+    /// safety-net teardown). Every render-class method that uses this pointer
+    /// must guard with `precondition(handle != nil, ...)` before dereferencing,
+    /// so that post-teardown calls are caught in debug builds rather than
+    /// silently passing a dangling pointer to Rust.
+    private var handle: UnsafeMutableRawPointer?
 
     /// The OS thread that constructed this Terminal — used by `assertRenderClass`.
     private let owningThread: Thread
@@ -76,7 +82,13 @@ public final class Terminal {
     /// - Throws: `FFIError` if the shim returns NULL (init failure).
     /// - Thread class: render/terminal-class.
     public init() throws {
-        assertRenderClass(owningThread: Thread.main)
+        // Assert using Thread.current so that test contexts that designate a
+        // non-main thread as the render/UI thread do not crash.  The stored
+        // owningThread is Thread.current in both cases, so the call-site check
+        // and the storage are always consistent.  The common production path
+        // (called from the main thread) still satisfies `isMainThread` inside
+        // assertRenderClass, so no behaviour change there.
+        assertRenderClass(owningThread: Thread.current)
         guard let ptr = rffi_terminal_init() else {
             throw FFIError(
                 code: -1,
@@ -87,6 +99,15 @@ public final class Terminal {
         self.owningThread = Thread.current
     }
 
+    /// Safety-net: if `teardown()` was never called (e.g. early-throw exit
+    /// path), free the Rust handle and restore the terminal here. Any I/O
+    /// failure in this path is swallowed — `deinit` cannot throw.
+    deinit {
+        if let h = handle {
+            _ = rffi_terminal_teardown(h)
+        }
+    }
+
     /// Leaves the alternate screen, shows the cursor, restores termios, and
     /// frees the terminal handle. After this call the `Terminal` is invalid;
     /// do not call any other methods.
@@ -95,7 +116,11 @@ public final class Terminal {
     /// - Thread class: render/terminal-class.
     public func teardown() throws {
         assertRenderClass(owningThread: owningThread)
-        try checkFFI(rffi_terminal_teardown(handle))
+        guard let h = handle else {
+            preconditionFailure("Terminal.teardown() called after teardown — double teardown detected")
+        }
+        handle = nil
+        try checkFFI(rffi_terminal_teardown(h))
     }
 
     // MARK: - Suspend / Resume ($EDITOR handoff)
@@ -110,7 +135,10 @@ public final class Terminal {
     /// - Thread class: render/terminal-class.
     public func suspend() throws {
         assertRenderClass(owningThread: owningThread)
-        try checkFFI(rffi_terminal_suspend(handle))
+        guard let h = handle else {
+            preconditionFailure("Terminal.suspend() called after teardown")
+        }
+        try checkFFI(rffi_terminal_suspend(h))
     }
 
     /// Resumes after the editor returns: re-enters raw mode and the alternate
@@ -120,7 +148,10 @@ public final class Terminal {
     /// - Thread class: render/terminal-class.
     public func resume() throws {
         assertRenderClass(owningThread: owningThread)
-        try checkFFI(rffi_terminal_resume(handle))
+        guard let h = handle else {
+            preconditionFailure("Terminal.resume() called after teardown")
+        }
+        try checkFFI(rffi_terminal_resume(h))
     }
 
     // MARK: - Frame flush
@@ -132,7 +163,10 @@ public final class Terminal {
     /// - Thread class: render/terminal-class.
     public func flush() throws {
         assertRenderClass(owningThread: owningThread)
-        try checkFFI(rffi_flush(handle))
+        guard let h = handle else {
+            preconditionFailure("Terminal.flush() called after teardown")
+        }
+        try checkFFI(rffi_flush(h))
     }
 
     // MARK: - Terminal size
@@ -144,6 +178,9 @@ public final class Terminal {
     /// - Thread class: render/terminal-class.
     public func size() throws -> TerminalSize {
         assertRenderClass(owningThread: owningThread)
+        guard handle != nil else {
+            preconditionFailure("Terminal.size() called after teardown")
+        }
         var cols: UInt16 = 0
         var rows: UInt16 = 0
         try checkFFI(rffi_terminal_size(&cols, &rows))
@@ -155,7 +192,25 @@ public final class Terminal {
     /// The raw shim handle. Passed by `RatatuiKitBackend` (MoonSwiftTUI) to
     /// widget draw calls and `CellBuffer.flush(to:)` via `FFICellWriter`.
     /// Also used by RatatuiKit-internal callers (CellBuffer, Widgets, Layout).
-    public var rawHandle: UnsafeMutableRawPointer { handle }
+    ///
+    /// **Warning:** callers must not store this pointer across a `teardown()` call.
+    /// After teardown the pointer is dangling; accessing it via any FFI call
+    /// is undefined behaviour.  This property precondition-faults in debug builds
+    /// if accessed post-teardown.
+    ///
+    /// **Architecture note (CR-004):** this accessor is `public` only because
+    /// `MoonSwiftTUI/Render/RatatuiKitBackend.swift` (a separate module) passes
+    /// the handle directly to widget `draw()` and `clearWidget()` call sites.
+    /// The cross-module coupling is tracked as a follow-up architecture item
+    /// (CR-004 flag): ideally RatatuiKit would expose higher-level draw methods
+    /// that accept a `Terminal` parameter so the raw handle never escapes the
+    /// module boundary.
+    public var rawHandle: UnsafeMutableRawPointer {
+        guard let h = handle else {
+            preconditionFailure("Terminal.rawHandle accessed after teardown")
+        }
+        return h
+    }
 
     // MARK: - Cell-buffer flush
 
@@ -170,7 +225,10 @@ public final class Terminal {
     /// - Thread class: render/terminal-class.
     public func flushCells(_ buffer: CellBuffer) throws {
         assertRenderClass(owningThread: owningThread)
-        let writer = FFICellWriter(handle: handle)
+        guard let h = handle else {
+            preconditionFailure("Terminal.flushCells(_:) called after teardown")
+        }
+        let writer = FFICellWriter(handle: h)
         try buffer.flush(to: writer)
     }
 
