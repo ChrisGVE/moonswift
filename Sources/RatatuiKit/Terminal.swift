@@ -152,9 +152,27 @@ public final class Terminal {
 
     // MARK: - Opaque handle access
 
-    /// The raw shim handle. Package-internal: passed by CellBuffer, Widgets,
-    /// and Layout when issuing render-class FFI calls.
-    var rawHandle: UnsafeMutableRawPointer { handle }
+    /// The raw shim handle. Passed by `RatatuiKitBackend` (MoonSwiftTUI) to
+    /// widget draw calls and `CellBuffer.flush(to:)` via `FFICellWriter`.
+    /// Also used by RatatuiKit-internal callers (CellBuffer, Widgets, Layout).
+    public var rawHandle: UnsafeMutableRawPointer { handle }
+
+    // MARK: - Cell-buffer flush
+
+    /// Flushes a `CellBuffer`'s accumulated cell runs to the terminal surface.
+    ///
+    /// Constructs an `FFICellWriter` (package-internal) and calls
+    /// `buffer.flush(to:)`, issuing one FFI call per contiguous same-style run
+    /// (ARCHITECTURE.md §3b). Called once per frame from `RatatuiKitBackend`.
+    ///
+    /// - Parameter buffer: The per-frame cell accumulator to flush and reset.
+    /// - Throws: `FFIError` if any shim write call fails.
+    /// - Thread class: render/terminal-class.
+    public func flushCells(_ buffer: CellBuffer) throws {
+        assertRenderClass(owningThread: owningThread)
+        let writer = FFICellWriter(handle: handle)
+        try buffer.flush(to: writer)
+    }
 
     // MARK: - Emergency restore (crash path)
 
