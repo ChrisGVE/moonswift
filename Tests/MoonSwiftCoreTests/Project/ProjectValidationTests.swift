@@ -232,9 +232,13 @@ struct ProjectValidationDocumentIndexTests {
     }
 }
 
-// MARK: - Rule: JSONPath syntax (stub seam)
+// MARK: - Rule: JSONPath syntax (real parser — CR-005)
 
-@Suite("ProjectValidation — JSONPath syntax (stub seam)")
+/// CR-005 remediation: `validateJSONPathSyntax` now calls
+/// `JSONPathExpression(parsing:)` instead of accepting any non-empty string.
+/// Invalid expressions produce a project-config error whose message contains
+/// the JSONPath string and the parser's `diagnosticMessage`.
+@Suite("ProjectValidation — JSONPath syntax")
 struct ProjectValidationJSONPathSyntaxTests {
 
     @Test("empty jsonpath produces error")
@@ -255,8 +259,8 @@ struct ProjectValidationJSONPathSyntaxTests {
             })
     }
 
-    @Test("non-empty jsonpath passes stub validation")
-    func nonEmptyJsonPathPasses() {
+    @Test("valid jsonpath $.foo produces no error")
+    func validJsonPathProducesNoError() {
         let file = ProjectFile(
             luaVersion: "5.4",
             sources: [
@@ -267,7 +271,94 @@ struct ProjectValidationJSONPathSyntaxTests {
             ]
         )
         let diags = ProjectValidation.validate(file)
-        #expect(!diags.contains { $0.message.contains("jsonpath") })
+        #expect(!diags.contains { $0.message.contains("not a valid JSONPath") })
+    }
+
+    @Test("valid jsonpath with array index and wildcard produces no error")
+    func validComplexJsonPathProducesNoError() {
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [
+                SourceEntry(
+                    path: "config.yaml",
+                    fields: [FieldDesignation(jsonpath: "$.scripts[0].*", document: 0)]
+                )
+            ]
+        )
+        let diags = ProjectValidation.validate(file)
+        #expect(!diags.contains { $0.message.contains("not a valid JSONPath") })
+    }
+
+    @Test("filter selector ?() produces a validation error (CR-005)")
+    func filterSelectorProducesError() {
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [
+                SourceEntry(
+                    path: "config.yaml",
+                    fields: [FieldDesignation(jsonpath: "$[?()]", document: 0)]
+                )
+            ]
+        )
+        let diags = ProjectValidation.validate(file)
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("not a valid JSONPath")
+                    && d.message.contains("$[?()]")
+            })
+    }
+
+    @Test("slice selector [1:3] produces a validation error (CR-005)")
+    func sliceSelectorProducesError() {
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [
+                SourceEntry(
+                    path: "config.yaml",
+                    fields: [FieldDesignation(jsonpath: "$.a[1:3]", document: 0)]
+                )
+            ]
+        )
+        let diags = ProjectValidation.validate(file)
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("not a valid JSONPath")
+            })
+    }
+
+    @Test("expression missing root $ produces a validation error (CR-005)")
+    func missingRootProducesError() {
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [
+                SourceEntry(
+                    path: "config.yaml",
+                    fields: [FieldDesignation(jsonpath: "scripts.init", document: 0)]
+                )
+            ]
+        )
+        let diags = ProjectValidation.validate(file)
+        #expect(
+            diags.contains { d in
+                d.severity == .error && d.message.contains("not a valid JSONPath")
+                    && d.message.contains("scripts.init")
+            })
+    }
+
+    @Test("invalid jsonpath error source is projectConfig (CR-005)")
+    func invalidJsonPathErrorSource() {
+        let file = ProjectFile(
+            luaVersion: "5.4",
+            sources: [
+                SourceEntry(
+                    path: "config.yaml",
+                    fields: [FieldDesignation(jsonpath: "$[?()]", document: 0)]
+                )
+            ]
+        )
+        let diags = ProjectValidation.validate(file)
+        let jsonPathDiag = diags.first { $0.message.contains("not a valid JSONPath") }
+        #expect(jsonPathDiag?.source == .projectConfig)
     }
 }
 

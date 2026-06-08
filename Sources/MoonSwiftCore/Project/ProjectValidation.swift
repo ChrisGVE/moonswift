@@ -152,11 +152,7 @@ public enum ProjectValidation {
                 }
             }
 
-            // Rule: JSONPath syntax validation (integration point).
-            // Full JSONPath parsing lives in JSONPath/JSONPathParser.swift (not yet
-            // built in task 12). This seam calls validateJSONPathSyntax which is a
-            // stub that accepts any non-empty string. Task 13 (JSONPath subset) wires
-            // the real parser here.
+            // Rule: JSONPath syntax — parsed and validated via JSONPathExpression.
             for (fieldIndex, field) in entry.fields.enumerated() {
                 validateJSONPathSyntax(
                     field.jsonpath,
@@ -295,21 +291,22 @@ public enum ProjectValidation {
         }
     }
 
-    // MARK: - JSONPath syntax seam
+    // MARK: - JSONPath syntax validation
 
-    /// Validates JSONPath syntax for a field designation.
+    /// Validates JSONPath syntax for a field designation using the RFC 9535
+    /// subset parser (`JSONPathExpression(parsing:)`).
     ///
-    /// **Integration point:** Full RFC 9535 subset parsing lives in
-    /// `JSONPath/JSONPathParser.swift` (task 13). Until that task is complete,
-    /// this stub accepts any non-empty string and rejects empty strings.
-    /// Task 13 replaces this body with a call to `JSONPathExpression(parsing:)`.
+    /// An empty string is rejected with a guidance-style message. A non-empty
+    /// but syntactically invalid expression (filter selector, slice, negative
+    /// index, etc.) is rejected by the parser and the `JSONPathError`'s
+    /// `diagnosticMessage` is surfaced as a project-config error. A valid
+    /// expression produces no diagnostic.
     static func validateJSONPathSyntax(
         _ jsonpath: String,
         sourceIndex: Int,
         fieldIndex: Int,
         into diagnostics: inout [Diagnostic]
     ) {
-        // STUB (task 13 integration point): accept non-empty strings.
         if jsonpath.isEmpty {
             diagnostics.append(
                 .projectError(
@@ -317,10 +314,18 @@ public enum ProjectValidation {
                         + "a valid RFC 9535 JSONPath expression is required (e.g. \"$.scripts.init\")"
                 )
             )
+            return
         }
-        // TODO(task-13): replace with JSONPathExpression(parsing:) and surface
-        // parse errors as diagnostics. Marked as the catalog/parser integration
-        // point, not a permanent stub.
+        do {
+            _ = try JSONPathExpression(parsing: jsonpath)
+        } catch let error {
+            diagnostics.append(
+                .projectError(
+                    "source[\(sourceIndex)].field[\(fieldIndex)].jsonpath \"\(jsonpath)\" "
+                        + "is not a valid JSONPath expression — \(error.diagnosticMessage)"
+                )
+            )
+        }
     }
 
     // MARK: - #22 availability (compile-time condition)
