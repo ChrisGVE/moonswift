@@ -491,6 +491,25 @@ public final class AppDriver: @unchecked Sendable {
             return
         }
 
+        // CR-011: validate that $EDITOR names an absolute, existing, executable
+        // file before passing it to Process.executableURL. A relative, non-existent,
+        // or non-executable value would otherwise allow arbitrary code execution
+        // with the permissions of the moonswift process.
+        let editorURL = URL(fileURLWithPath: editor)
+        guard editorURL.path.hasPrefix("/") else {
+            state.transient = TransientMessage(text: "$EDITOR must be an absolute path.")
+            tickSource.arm(interval: TickInterval.transientExpiry)
+            return
+        }
+        guard FileManager.default.fileExists(atPath: editorURL.path),
+            FileManager.default.isExecutableFile(atPath: editorURL.path)
+        else {
+            state.transient = TransientMessage(
+                text: "$EDITOR '\(editorURL.lastPathComponent)' is not executable.")
+            tickSource.arm(interval: TickInterval.transientExpiry)
+            return
+        }
+
         // 1. Park the pump — guaranteed no input-class call in flight after this.
         pump.parkAndWait()
 
@@ -508,8 +527,9 @@ public final class AppDriver: @unchecked Sendable {
 
         // 3 + 4. Spawn the editor with the file path as a direct argument vector
         //         (no shell — no word splitting, no glob expansion, no injection).
+        //         editorURL was validated above (absolute + executable).
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: editor)
+        process.executableURL = editorURL
         process.arguments = [url.path]
         do {
             try process.run()

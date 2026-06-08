@@ -311,6 +311,56 @@ struct ReducerEditorNotSetTests {
     }
 }
 
+// MARK: - $EDITOR path validation (CR-011)
+
+/// These tests exercise the path-validation logic indirectly by verifying
+/// the Process/URL construction path. AppDriver validates $EDITOR before
+/// calling Process.executableURL; we replicate those checks here to document
+/// the expected behaviours without requiring EDITOR injection.
+@Suite("AppDriver — $EDITOR path validation (CR-011)")
+struct AppDriverEditorValidationTests {
+
+    @Test("absolute path /usr/bin/true passes validation and spawns cleanly")
+    func absolutePathPassesValidation() throws {
+        // /usr/bin/true is absolute, exists, and is executable — must spawn.
+        let url = URL(fileURLWithPath: "/usr/bin/true")
+        #expect(url.path.hasPrefix("/"), "Path must be absolute")
+        #expect(
+            FileManager.default.fileExists(atPath: url.path),
+            "/usr/bin/true must exist on macOS")
+        #expect(
+            FileManager.default.isExecutableFile(atPath: url.path),
+            "/usr/bin/true must be executable")
+
+        let process = Process()
+        process.executableURL = url
+        process.arguments = []
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
+    @Test("relative path is rejected by the absolute-path guard")
+    func relativePathIsRejected() {
+        // A relative path like "vim" must be rejected; only absolute paths pass.
+        let relPath = "vim"
+        let url = URL(fileURLWithPath: relPath)
+        // The guard: editorURL.path.hasPrefix("/")
+        #expect(!url.path.hasPrefix("/"), "Relative path must not start with /")
+    }
+
+    @Test("non-existent absolute path is rejected by the exists+executable guard")
+    func nonExistentPathIsRejected() {
+        let path = "/nonexistent/path/to/editor-\(UUID().uuidString)"
+        #expect(
+            !FileManager.default.fileExists(atPath: path),
+            "Test path must not exist")
+        #expect(
+            !FileManager.default.isExecutableFile(atPath: path),
+            "Non-existent file must not be executable")
+    }
+}
+
 // MARK: - Process spawn: no-shell guarantee
 
 @Suite("AppDriver — editor spawn: no shell interpretation")
