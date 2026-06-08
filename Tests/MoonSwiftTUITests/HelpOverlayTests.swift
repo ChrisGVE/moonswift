@@ -296,6 +296,14 @@ struct HelpOverlayContentTests {
         #expect(anyLine(lines, contains: "Load"), "Load description must appear")
     }
 
+    @Test("Navigator o and <Space> load aliases listed")
+    func navigatorLoadAliases() {
+        let lines = paragraphText(render(helpOverlayState(), size: termSize(80, 24)))
+        #expect(anyLine(lines, contains: "o"), "o alias must appear in the overlay")
+        #expect(anyLine(lines, contains: "<Space>"), "<Space> alias must appear in the overlay")
+        #expect(anyLine(lines, contains: "(alias)"), "Alias description must appear")
+    }
+
     @Test("Navigator / filter listed")
     func navigatorFilter() {
         let lines = paragraphText(render(helpOverlayState(), size: termSize(80, 24)))
