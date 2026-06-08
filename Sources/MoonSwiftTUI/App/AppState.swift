@@ -240,10 +240,12 @@ public struct BottomPaneState: Sendable, Equatable {
         outputBuffer.append(contentsOf: lines)
         let cap = 1_000
         if outputBuffer.count > cap {
+            // `excess` = number of content lines over the cap. We evict `excess + 1`
+            // old lines to make room for the notice itself, keeping the total at `cap`.
             let excess = outputBuffer.count - cap
-            outputBuffer.removeFirst(excess)
+            outputBuffer.removeFirst(excess + 1)
             // Insert the cleared notice at position 0 so it appears at the top
-            // of the visible buffer, matching ux-spec §6.4.
+            // of the visible buffer (ux-spec §6.4 exact format).
             let notice = "[cleared — \(excess) lines discarded]"
             outputBuffer.insert(notice, at: 0)
             clearedNoticeInserted = true
