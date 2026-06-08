@@ -761,6 +761,10 @@ private func reduceHelpOverlayKey(
     switch (code, modifiers) {
     case (.escape, []), (.char("?"), []):
         s.focus = .pane(.navigator)
+    case (.char("q"), []):
+        // `q` quits from the help overlay (ux-spec §2.5 — overlay must not
+        // trap the global quit shortcut).
+        return (s, [.quit(exitCode: 0)])
     default:
         break
     }

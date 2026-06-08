@@ -449,6 +449,18 @@ struct HelpOverlayDismissTests {
         #expect(next.focus == .helpOverlay, "? must set focus to .helpOverlay")
     }
 
+    @Test("q quits from help overlay (produces quit effect, code 0)")
+    func qQuitsFromHelpOverlay() {
+        var state = helpOverlayState()
+        state.focus = .helpOverlay
+        let (_, effects) = reduce(state, .key(.char("q"), modifiers: []))
+        let hasQuit = effects.contains {
+            if case .quit(let code) = $0 { return code == 0 }
+            return false
+        }
+        #expect(hasQuit, "q in help overlay must produce .quit(exitCode: 0) effect")
+    }
+
     @Test("Other keys do not dismiss the overlay")
     func otherKeyNoOp() {
         var state = helpOverlayState()

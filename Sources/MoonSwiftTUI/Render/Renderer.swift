@@ -1644,8 +1644,10 @@ private func buildRightHints(state: AppState, cols: Int) -> String {
             fullHints = "j/k scroll  Enter jump  y yank  1/2 tabs  C-l clear"
             shortHints = "j/k  Enter  1/2"
         case .diagnostics:
-            fullHints = "j/k scroll  Enter jump  n/N diag  1/2 tabs"
-            shortHints = "j/k  Enter  n/N  1/2"
+            // n/N diagnostic navigation is wired to the code pane (ux-spec §2.3),
+            // not the bottom pane — removed misleading hint.
+            fullHints = "j/k scroll  Enter jump  1/2 tabs"
+            shortHints = "j/k  Enter  1/2"
         }
     default:
         return ""
