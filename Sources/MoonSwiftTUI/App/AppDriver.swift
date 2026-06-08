@@ -494,12 +494,18 @@ public final class AppDriver: @unchecked Sendable {
         // file before passing it to Process.executableURL. A relative, non-existent,
         // or non-executable value would otherwise allow arbitrary code execution
         // with the permissions of the moonswift process.
-        let editorURL = URL(fileURLWithPath: editor)
-        guard editorURL.path.hasPrefix("/") else {
+        //
+        // IMPORTANT: check the raw `editor` string — not `URL(fileURLWithPath:).path`
+        // — because URL(fileURLWithPath:) resolves relative paths against the
+        // process working directory, producing an absolute path even for a bare
+        // name like "vim". The guard must reject anything that is not already
+        // written as an absolute path by the user.
+        guard editor.hasPrefix("/") else {
             state.transient = TransientMessage(text: "$EDITOR must be an absolute path.")
             tickSource.arm(interval: TickInterval.transientExpiry)
             return
         }
+        let editorURL = URL(fileURLWithPath: editor)
         guard FileManager.default.fileExists(atPath: editorURL.path),
             FileManager.default.isExecutableFile(atPath: editorURL.path)
         else {

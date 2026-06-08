@@ -342,11 +342,17 @@ struct AppDriverEditorValidationTests {
 
     @Test("relative path is rejected by the absolute-path guard")
     func relativePathIsRejected() {
-        // A relative path like "vim" must be rejected; only absolute paths pass.
-        let relPath = "vim"
-        let url = URL(fileURLWithPath: relPath)
-        // The guard: editorURL.path.hasPrefix("/")
-        #expect(!url.path.hasPrefix("/"), "Relative path must not start with /")
+        // AppDriver validates the raw $EDITOR string with `editor.hasPrefix("/")`.
+        // URL(fileURLWithPath:) is NOT used for this check because it resolves
+        // relative names against CWD, producing absolute paths for bare names
+        // like "vim". The guard operates on the raw string so relative editor
+        // names are rejected regardless of CWD.
+        let relPaths = ["vim", "nano", "editor", "./bin/editor", "../vi"]
+        for relPath in relPaths {
+            #expect(
+                !relPath.hasPrefix("/"),
+                "Relative editor path '\(relPath)' must be rejected by the absolute-path guard")
+        }
     }
 
     @Test("non-existent absolute path is rejected by the exists+executable guard")
