@@ -23,8 +23,9 @@
 // What this file MUST NOT do (ARCHITECTURE.md §2 Main/CLI row):
 //   - Contain domain or UI logic.
 //   - Render anything itself.
-//   - Call SourceStore (source loading is Effect.loadSources, dispatched by the
-//     AppDriver after the first reduce of .appStarted).
+//   - Invoke source loading directly (Main constructs the engine services and
+//     injects them, but the AppDriver dispatches Effect.loadSources after the
+//     first reduce of .appStarted — Main never calls loadAll itself).
 //   - Touch the AppDriver loop after handoff.
 
 import Darwin
@@ -84,8 +85,8 @@ private func run(launchMode: LaunchMode) {
 
     // ── 3. Load project file ──────────────────────────────────────────────────
     // ProjectStore.load is synchronous; source loading is always asynchronous
-    // (Effect.loadSources, dispatched after .appStarted by the AppDriver).
-    // Main never calls SourceStore.
+    // (Effect.loadSources, dispatched after .appStarted by the AppDriver via the
+    // injected SourceStore). Main constructs the services but never loads itself.
     let projectState = loadProject(for: launchMode)
 
     // ── 4. Initialise the terminal ────────────────────────────────────────────
@@ -119,13 +120,33 @@ private func run(launchMode: LaunchMode) {
         lintState: .initializing
     )
 
+    // ── Engine services ───────────────────────────────────────────────────────
+    // Constructed here so their callbacks close over the channel; MoonSwiftCore
+    // services never import a TUI type (ARCHITECTURE.md §5.1). The AppDriver
+    // dispatches Effect.run/.lint/.loadSources etc. to these.
+    let runService = RunService(onTransient: { message in
+        channel.post(.transient(message))
+    })
+    let lintService = LintService()
+    let sourceStore = SourceStore(callback: { event in
+        switch event {
+        case .loaded(let id, let fragment):
+            channel.post(.sourceLoaded(id: id, fragment: fragment))
+        case .failed(let id, let state):
+            channel.post(.sourceFailed(id: id, state: state))
+        }
+    })
+
     let driver = AppDriver(
         channel: channel,
         pump: pump,
         tickSource: tickSource,
         suspender: suspender,
         backend: backend,
-        seed: seed
+        seed: seed,
+        runService: runService,
+        lintService: lintService,
+        sourceStore: sourceStore
     )
 
     // ── 6. Enter the loop ─────────────────────────────────────────────────────
