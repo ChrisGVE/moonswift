@@ -72,7 +72,7 @@ public func decodeYAML(_ text: String, document: Int = 0) throws -> TreeValue {
 /// - Parameters:
 ///   - node:  The Yams node to convert.
 ///   - depth: Current recursion depth. Throws `nestingTooDeep` when it
-///            exceeds `treeDecoderMaxDepth` (512) to prevent stack overflow
+///            exceeds `treeDecoderMaxDepth` (128) to prevent stack overflow
 ///            on pathologically nested documents (CWE-674).
 private func nodeToTreeValue(_ node: Node, depth: Int) throws -> TreeValue {
     guard depth <= treeDecoderMaxDepth else {

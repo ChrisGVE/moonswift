@@ -61,8 +61,8 @@ public enum TreeDecoderError: Error, Equatable {
     case yamlDocumentIndexOutOfRange(requested: Int, available: Int)
     /// The document nesting depth exceeds the safe limit (CWE-674).
     ///
-    /// The limit is `TreeDecoderDepthLimit.max` (512). Files deeper than this
-    /// are rejected with this error rather than overflowing the call stack.
+    /// The limit is `treeDecoderMaxDepth` (128). Files deeper than this are
+    /// rejected with this error rather than overflowing the call stack.
     case nestingTooDeep
 }
 
