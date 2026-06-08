@@ -243,7 +243,7 @@ public enum SpanSplicer {
     /// If `byteRange` extends past `originalData.count`, the out-of-range
     /// portion is treated as an empty suffix (no crash, but validation (2)
     /// will subsequently detect the leak).
-    private static func buildSplicedData(
+    static func buildSplicedData(
         original: Data,
         byteRange: Range<Int>,
         encodedBody: String
