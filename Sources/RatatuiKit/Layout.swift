@@ -124,6 +124,15 @@ public func layout(
     constraints: [Constraint],
     spacing: UInt16 = 0
 ) throws -> [Rect] {
+    // Thread class: render/terminal-class.
+    //
+    // NOTE (CR-021): a hard assertRenderClass cannot be placed here without
+    // a Terminal/owning-thread parameter (adding one would be a public API
+    // change).  Structural enforcement: layout() is only called from
+    // Renderer.swift, which runs exclusively on the UI thread — the surrounding
+    // Terminal.flush/flushCells guards provide the effective barrier.  A
+    // follow-up architecture item (code_review.md CR-021) would introduce a
+    // higher-level API that accepts a Terminal parameter.
     let count = constraints.count
     guard count > 0 else { return [] }
 

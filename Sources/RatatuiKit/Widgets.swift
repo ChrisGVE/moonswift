@@ -144,6 +144,11 @@ public final class ListWidget {
         self.ptr = p
     }
 
+    // NOTE (CR-021): rffi_list_free is a render-class FFI call.  Swift provides
+    // no guarantee that deinit runs on any specific thread, so we cannot add a
+    // hard precondition here without risking false failures in test teardown.
+    // Callers are responsible for ensuring that the last strong reference to a
+    // ListWidget is released on the render/UI thread.
     deinit {
         _ = rffi_list_free(ptr)
     }
@@ -222,6 +227,13 @@ public final class ListWidget {
     ///
     /// Thread class: render/terminal-class.
     public func draw(handle: UnsafeMutableRawPointer, rect: Rect) throws {
+        // Thread class: render/terminal-class.
+        //
+        // NOTE (CR-021): a hard assertRenderClass cannot be placed here without
+        // a Terminal/owning-thread parameter (public API change).  Structural
+        // enforcement: draw() is called only from RatatuiKitBackend which runs
+        // exclusively on the UI thread, guarded by the surrounding Terminal
+        // method asserts.  Follow-up: code_review.md CR-021.
         try checkFFI(rffi_list_draw(handle, ptr, rect.rffi))
     }
 }
@@ -247,6 +259,7 @@ public final class ParagraphWidget {
         self.ptr = p
     }
 
+    // NOTE (CR-021): see ListWidget.deinit — same constraint applies.
     deinit {
         _ = rffi_paragraph_free(ptr)
     }
@@ -319,6 +332,7 @@ public final class ParagraphWidget {
     ///
     /// Thread class: render/terminal-class.
     public func draw(handle: UnsafeMutableRawPointer, rect: Rect) throws {
+        // Thread class: render/terminal-class. See ListWidget.draw for CR-021 note.
         try checkFFI(rffi_paragraph_draw(handle, ptr, rect.rffi))
     }
 }
@@ -344,6 +358,7 @@ public final class TabsWidget {
         self.ptr = p
     }
 
+    // NOTE (CR-021): see ListWidget.deinit — same constraint applies.
     deinit {
         _ = rffi_tabs_free(ptr)
     }
@@ -394,6 +409,7 @@ public final class TabsWidget {
     ///
     /// Thread class: render/terminal-class.
     public func draw(handle: UnsafeMutableRawPointer, rect: Rect) throws {
+        // Thread class: render/terminal-class. See ListWidget.draw for CR-021 note.
         try checkFFI(rffi_tabs_draw(handle, ptr, rect.rffi))
     }
 }
@@ -405,5 +421,6 @@ public final class TabsWidget {
 ///
 /// Thread class: render/terminal-class.
 public func clearWidget(handle: UnsafeMutableRawPointer, rect: Rect) throws {
+    // Thread class: render/terminal-class. See ListWidget.draw for CR-021 note.
     try checkFFI(rffi_clear_rect_widget(handle, rect.rffi))
 }
