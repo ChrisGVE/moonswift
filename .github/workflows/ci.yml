@@ -355,5 +355,18 @@ jobs:
           exit 1
 
       # MoonSwiftTUITests: TUI app model tests.
+      #
+      # --no-parallel is REQUIRED here (not a speed knob). The DriverIntegration
+      # tests spawn a real AppDriver run loop on a background Thread and assert
+      # that pressing `r`/`l` dispatches an engine effect, which the driver runs
+      # as a `Task {}` on the global cooperative executor. Under Swift Testing's
+      # default cross-suite parallelism on a 2-core CI runner, that pool is
+      # saturated by other concurrent test tasks and the driver's run Task can
+      # be starved past the 30 s poll deadline — a non-deterministic failure
+      # (capturedCode == nil). Running this leg serially keeps the pool free when
+      # the driver dispatches, making the dispatch observable promptly. The
+      # per-suite `.serialized` trait only orders tests *within* the suite; it
+      # cannot prevent the rest of the package from starving the pool. Serial
+      # execution of this leg is ~11 s — determinism over marginal wall-clock.
       - name: Test MoonSwiftTUITests
-        run: swift test --filter MoonSwiftTUITests
+        run: swift test --filter MoonSwiftTUITests --no-parallel

@@ -94,7 +94,12 @@ test:
 	@echo "==> Resetting SPM manifest cache"
 	swift package reset
 	@echo "==> Running Swift tests (source mode, toml enabled)"
-	swift test
+	# --no-parallel mirrors CI: the DriverIntegration tests spawn an AppDriver
+	# run loop whose engine effects run as Tasks on the global cooperative pool;
+	# Swift Testing's default cross-suite parallelism can starve that pool and
+	# flake the dispatch assertions. Serial execution keeps it deterministic so
+	# a local `make test` reproduces the CI result. See ci.yml (TUI leg note).
+	swift test --no-parallel
 
 # ── reset ─────────────────────────────────────────────────────────────────────
 # Clear SPM's manifest-evaluation cache (.build directory).
