@@ -1582,7 +1582,11 @@ struct CrossCuttingSequenceTests {
 
         let (next, _) = reduce(state, .key(.char("l"), modifiers: .ctrl))
 
-        #expect(next.bottomPane.outputBuffer.isEmpty, "C-l in bottom pane must clear the output buffer (ux-spec §2.3)")
+        // C-l inserts the ux-spec §6.4 "[cleared]" notice as the sole buffer line
+        // rather than emptying the buffer, so the user sees the clear confirmation.
+        #expect(
+            next.bottomPane.outputBuffer == ["[cleared]"],
+            "C-l in bottom pane must clear to '[cleared]' notice (ux-spec §6.4)")
         #expect(next.bottomPane.scrollOffset == 0, "Clear resets scroll offset")
         #expect(next.focus == .pane(.bottomPane), "Focus stays on the bottom pane")
     }

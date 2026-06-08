@@ -609,13 +609,18 @@ struct RendererStructureTests {
         #expect(blockCount == 3, "Must emit exactly 3 border blocks (navigator, code pane, bottom pane)")
     }
 
-    @Test("Tab bar command exists in every normal render")
+    @Test("Tab bar labels exist in every normal render")
     func tabBarCommandExists() {
+        // The bottom pane tab bar is rendered as cell runs (not a .tabBar widget)
+        // so that per-label underline styling can be applied (ux-spec §6.1, §8.5).
         let cmds = render(blankState(), size: termSize(80, 24))
-        let hasTabBar = cmds.contains {
-            if case .tabBar = $0 { return true }
-            return false
+        let cellTexts = cmds.compactMap { cmd -> String? in
+            if case .cellRun(_, _, let text, _) = cmd { return text }
+            return nil
         }
-        #expect(hasTabBar, "Every normal frame must emit a .tabBar command")
+        let hasOutputLabel = cellTexts.contains("[ Output ]")
+        let hasDiagLabel = cellTexts.contains("[ Diagnostics ]")
+        #expect(hasOutputLabel, "Every normal frame must emit a '[ Output ]' cell run for the tab bar")
+        #expect(hasDiagLabel, "Every normal frame must emit a '[ Diagnostics ]' cell run for the tab bar")
     }
 }
