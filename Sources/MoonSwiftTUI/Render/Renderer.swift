@@ -215,6 +215,10 @@ private func renderPaneBorders(
 
 // MARK: - Navigator content (ux-spec.md §4)
 
+/// Spinner character sets (ux-spec §4.1): braille for truecolor, ASCII for 256/NO_COLOR.
+private let spinnerBraille: [Character] = ["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"]
+private let spinnerAscii: [Character] = ["|", "/", "-", "\\"]
+
 private func renderNavigator(
     state: AppState,
     rect: Rect,
@@ -223,38 +227,152 @@ private func renderNavigator(
     // Inner rect (inside the 1-cell border).
     guard let inner = insetRect(rect) else { return [] }
 
-    var items: [Span] = []
+    let navFocused = state.focus == .pane(.navigator)
 
-    if state.navigatorOrder.isEmpty {
-        items.append(Span("(empty)", style: dimStyle(theme)))
+    // Determine the filter-active rect (inner minus 1 row for the filter bar)
+    // and the content rect available for the list entries.
+    let filterActive = state.navigator.filterText != nil
+    let listRect: Rect
+    let filterBarRow: UInt16?
+    if filterActive, inner.height >= 2 {
+        // Reserve the last row of the inner rect for the filter bar.
+        listRect = Rect(x: inner.x, y: inner.y, width: inner.width, height: inner.height - 1)
+        filterBarRow = inner.y + inner.height - 1
     } else {
-        for id in state.navigatorOrder {
-            let (label, style) = navigatorEntry(id: id, sources: state.sources, theme: theme)
+        listRect = inner
+        filterBarRow = nil
+    }
+
+    // Build the filtered entry list.
+    let filteredIDs = filteredNavigatorIDs(order: state.navigatorOrder, filterText: state.navigator.filterText)
+
+    // Build display items, applying the spinner for loading entries.
+    var items: [Span] = []
+    if filteredIDs.isEmpty {
+        let msg = state.navigatorOrder.isEmpty ? "(empty)" : "(no match)"
+        items.append(Span(msg, style: dimStyle(theme)))
+    } else {
+        for id in filteredIDs {
+            let (label, style) = navigatorEntry(
+                id: id,
+                sources: state.sources,
+                spinnerPhase: state.navigator.spinnerPhase,
+                theme: theme
+            )
             items.append(Span(label, style: style))
         }
     }
 
-    let selectedIdx = state.navigatorOrder.isEmpty ? nil : state.navigator.selectedIndex
-    return [.navigatorList(rect: inner, items: items, selectedIndex: selectedIdx, title: [])]
+    // Map the logical selectedIndex (over the full order) to a position in the
+    // filtered list so the highlight follows the selection correctly.
+    let selectedInFiltered: Int?
+    if filteredIDs.isEmpty {
+        selectedInFiltered = nil
+    } else {
+        let selectedID =
+            state.navigatorOrder.indices.contains(state.navigator.selectedIndex)
+            ? state.navigatorOrder[state.navigator.selectedIndex]
+            : nil
+        if let sid = selectedID, let pos = filteredIDs.firstIndex(of: sid) {
+            selectedInFiltered = pos
+        } else {
+            // Selected entry is filtered out — no highlight.
+            selectedInFiltered = nil
+        }
+    }
+
+    // Highlight style for the selected row depends on navigator focus.
+    let highlightStyle = navFocused ? tokenStyle(.focusBg, theme: theme) : dimStyle(theme)
+
+    var commands: [RenderCommand] = [
+        .navigatorList(
+            rect: listRect,
+            items: items,
+            selectedIndex: selectedInFiltered,
+            title: []
+        )
+    ]
+
+    // Filter bar: shown at the bottom of the navigator when filter is active.
+    if let row = filterBarRow {
+        let query = state.navigator.filterText ?? ""
+        let prefix = "/"
+        let barText = prefix + query
+        // Pad or truncate to fit the inner width.
+        let width = Int(inner.width)
+        let padded: String
+        if barText.count < width {
+            padded = barText + String(repeating: " ", count: width - barText.count)
+        } else {
+            padded = String(barText.prefix(width))
+        }
+        commands.append(.cellRun(col: inner.x, row: row, text: padded, style: highlightStyle))
+    }
+
+    return commands
+}
+
+/// Returns the source IDs in `order` that match the current `filterText`.
+///
+/// When `filterText` is nil or empty the full order is returned unchanged.
+/// Matching is case-insensitive substring on the entry's display label
+/// (filename for whole-lua files; `filename:jsonpath` for structured fields).
+func filteredNavigatorIDs(order: [SourceID], filterText: String?) -> [SourceID] {
+    guard let query = filterText, !query.isEmpty else { return order }
+    let lower = query.lowercased()
+    return order.filter { id in
+        id.description.lowercased().contains(lower)
+    }
 }
 
 /// Returns the display label and style for one navigator entry.
+///
+/// Error state prefixes follow ux-spec §4.2:
+/// - `.missing`             → `✖ <filename>`         in error color
+/// - `.failed(.error)`      → `✖ <filename>`         in error color (malformed file)
+/// - `.failed(.warning)`    → `⚠ <filename>:<path>` in warning color (unresolved/non-string)
+/// - `.loading`             → spinner + `<filename>` in dim color
+/// - `.loaded`              → `<displayName>`        in normal color
 private func navigatorEntry(
     id: SourceID,
     sources: [SourceID: SourceState],
+    spinnerPhase: Int,
     theme: ThemeState
 ) -> (String, CellStyle) {
     switch sources[id] {
     case .loaded(let fragment):
         return (fragment.provenance.displayName, normalStyle(theme))
     case .loading:
-        return (id.path, dimStyle(theme))
+        // Show spinner character next to path; spinner phase drives the frame.
+        let spinChar = spinnerCharacter(phase: spinnerPhase, capability: theme.capability)
+        return ("\(spinChar) \(id.path)", dimStyle(theme))
     case .missing:
         return ("✖ \(id.path)", tokenStyle(.error, theme: theme))
     case .failed(let diagnostic):
-        return ("✖ \(id.path): \(diagnostic.message)", tokenStyle(.error, theme: theme))
+        // Severity determines prefix and color (ux-spec §4.2, §8.5).
+        if diagnostic.severity == .warning {
+            // Unresolved path or non-string field: ⚠ in warning color.
+            return ("⚠ \(id.description)", tokenStyle(.warning, theme: theme))
+        } else {
+            // Malformed structured file: ✖ in error color.
+            return ("✖ \(id.path)", tokenStyle(.error, theme: theme))
+        }
     case nil:
         return (id.path, normalStyle(theme))
+    }
+}
+
+/// Returns the appropriate spinner character for the current phase and terminal capability.
+///
+/// Braille set (`⠁⠂⠄⡀⢀⠠⠐⠈`) for truecolor; ASCII `|/-\` for 256-color and NO_COLOR.
+/// Phase wraps at the set length via modulo (ux-spec §4.1).
+private func spinnerCharacter(phase: Int, capability: ColorCapability) -> Character {
+    if capability == .truecolor {
+        let idx = phase % spinnerBraille.count
+        return spinnerBraille[idx]
+    } else {
+        let idx = phase % spinnerAscii.count
+        return spinnerAscii[idx]
     }
 }
 

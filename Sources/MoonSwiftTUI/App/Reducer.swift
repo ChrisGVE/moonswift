@@ -203,6 +203,13 @@ private func reduceKey(
         return reduceColonCommand(s, code: code, modifiers: modifiers)
     }
 
+    // Filter interception: when the navigator is focused and a filter is active,
+    // character keys and backspace feed the filter query before global dispatch.
+    // Esc and Enter are also intercepted here to clear / commit the filter.
+    if case .pane(.navigator) = s.focus, s.navigator.filterText != nil {
+        return reduceNavigatorFilter(s, code: code, modifiers: modifiers)
+    }
+
     // Global keys — active in all panes when no modal is open.
     if let result = reduceGlobalKey(s, code: code, modifiers: modifiers) {
         return result
@@ -342,45 +349,132 @@ private func reduceNavigatorKey(
     switch (code, modifiers) {
 
     case (.char("j"), []):
-        s.navigator.selectedIndex = min(
-            s.navigator.selectedIndex + 1,
-            max(0, s.navigatorOrder.count - 1)
-        )
+        // Navigate within the filtered list, then map back to the full order index.
+        let filtered = filteredIDs(from: s)
+        if !filtered.isEmpty {
+            let currentPos = filteredPosition(
+                selectedIndex: s.navigator.selectedIndex, filtered: filtered, order: s.navigatorOrder)
+            let nextPos = min((currentPos ?? 0) + 1, filtered.count - 1)
+            s.navigator.selectedIndex = fullOrderIndex(
+                filteredPos: nextPos, filtered: filtered, order: s.navigatorOrder)
+        }
         return (s, [])
 
     case (.char("k"), []):
-        s.navigator.selectedIndex = max(s.navigator.selectedIndex - 1, 0)
+        let filtered = filteredIDs(from: s)
+        if !filtered.isEmpty {
+            let currentPos = filteredPosition(
+                selectedIndex: s.navigator.selectedIndex, filtered: filtered, order: s.navigatorOrder)
+            let prevPos = max((currentPos ?? 0) - 1, 0)
+            s.navigator.selectedIndex = fullOrderIndex(
+                filteredPos: prevPos, filtered: filtered, order: s.navigatorOrder)
+        }
         return (s, [])
 
     case (.char("g"), []):
-        s.navigator.selectedIndex = 0
+        // Jump to the first entry in the filtered list.
+        let filtered = filteredIDs(from: s)
+        if !filtered.isEmpty {
+            s.navigator.selectedIndex = fullOrderIndex(
+                filteredPos: 0, filtered: filtered, order: s.navigatorOrder)
+        }
         return (s, [])
 
     case (.char("G"), []):
-        s.navigator.selectedIndex = max(0, s.navigatorOrder.count - 1)
+        // Jump to the last entry in the filtered list.
+        let filtered = filteredIDs(from: s)
+        if !filtered.isEmpty {
+            s.navigator.selectedIndex = fullOrderIndex(
+                filteredPos: filtered.count - 1,
+                filtered: filtered,
+                order: s.navigatorOrder
+            )
+        }
         return (s, [])
 
     case (.enter, []), (.char("o"), []), (.char(" "), []):
         return selectNavigatorEntry(s)
 
     case (.char("/"), []):
-        // Start inline filter (P1: just open filter mode; editing is basic).
+        // Activate inline filter mode with an empty query. Pressing / again
+        // when filter is already active closes it (toggle, ux-spec §2.2).
         s.navigator.filterText = s.navigator.filterText == nil ? "" : nil
         return (s, [])
 
     case (.escape, []):
+        // Esc clears the filter when active; otherwise it is a no-op.
         if s.navigator.filterText != nil {
             s.navigator.filterText = nil
         }
         return (s, [])
 
     case (.char("m"), []):
-        // Open structured-file picker for the selected entry (P1 stub: only
-        // available for structured files; show transient otherwise).
-        s.transient = TransientMessage(text: "Picker available for structured files only")
-        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+        // Open the structured-file picker for the selected entry.
+        // Only meaningful for structured-file sources (SourceID has a jsonpath).
+        return openPickerOrTransient(s)
 
     default:
+        return (s, [])
+    }
+}
+
+// MARK: - Navigator filter input handler
+
+/// Handles keyboard input while the navigator inline filter is active.
+///
+/// All printable characters are appended to the filter query; `<Backspace>`
+/// deletes the last character; `<Esc>` cancels and clears the filter; `<Enter>`
+/// commits the filter (loads the current selection). Navigation keys (`j`/`k`/
+/// `g`/`G`) are NOT intercepted here — typing any letter including 'j' and 'k'
+/// appends to the query (ux-spec §2.2: typing chars feeds the query).
+private func reduceNavigatorFilter(
+    _ s: AppState,
+    code: KeyCode,
+    modifiers: KeyModifiers
+) -> (AppState, [Effect]) {
+    var s = s
+
+    switch (code, modifiers) {
+
+    case (.escape, []):
+        // Clear the filter and return to normal navigator mode.
+        s.navigator.filterText = nil
+        return (s, [])
+
+    case (.enter, []):
+        // Commit: load the currently highlighted filtered entry.
+        return selectNavigatorEntry(s)
+
+    case (.backspace, []):
+        // Delete the last character from the query.
+        if var query = s.navigator.filterText, !query.isEmpty {
+            query.removeLast()
+            s.navigator.filterText = query
+        }
+        return (s, [])
+
+    case (.char("/"), []):
+        // Second press of / closes the filter (toggle, ux-spec §2.2).
+        s.navigator.filterText = nil
+        return (s, [])
+
+    case (.char(let scalar), []) where !CharacterSet.controlCharacters.contains(scalar):
+        // Append a printable character to the filter query (ux-spec §2.2: typing feeds
+        // the query; navigation is via arrow keys or after Enter commit). This catch-all
+        // intentionally matches every printable character including 'j', 'k', 'g', 'G'
+        // so the user can search for entries whose names contain those letters.
+        let ch = String(scalar)
+        s.navigator.filterText = (s.navigator.filterText ?? "") + ch
+        // Re-anchor selection to the first matching entry when the query grows.
+        let filtered = filteredIDs(from: s)
+        if !filtered.isEmpty {
+            s.navigator.selectedIndex =
+                fullOrderIndex(filteredPos: 0, filtered: filtered, order: s.navigatorOrder)
+        }
+        return (s, [])
+
+    default:
+        // All other keys (modifiers, function keys, etc.) are ignored in filter mode.
         return (s, [])
     }
 }
@@ -737,6 +831,22 @@ private func armTickIfNeeded(_ s: AppState) -> Effect? {
         minimum = TickInterval.run
     }
 
+    // Spinner tick (100 ms) while any source is loading (ux-spec §4.1).
+    // The same interval as the run tick so there is no extra overhead when both
+    // are active simultaneously — `startTick` always replaces the previous timer.
+    let anyLoading = s.sources.values.contains {
+        if case .loading = $0 { return true }
+        return false
+    }
+    if anyLoading {
+        let candidate = TickInterval.run
+        if let m = minimum {
+            minimum = m < candidate ? m : candidate
+        } else {
+            minimum = candidate
+        }
+    }
+
     // Transient expiry (1.5 s) while a transient message is showing.
     if s.transient != nil {
         let candidate = TickInterval.transientExpiry
@@ -808,6 +918,59 @@ private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
         effects.append(.syntaxPrePass(fragment))
     }
     return (s, effects)
+}
+
+// MARK: - Navigator filter helpers
+
+/// Returns the filtered source IDs using the navigator's current filter text.
+///
+/// Delegates to `filteredNavigatorIDs` in Renderer.swift (the same logic drives
+/// both the display list and navigation so the two stay in sync).
+private func filteredIDs(from s: AppState) -> [SourceID] {
+    filteredNavigatorIDs(order: s.navigatorOrder, filterText: s.navigator.filterText)
+}
+
+/// Returns the position of the selected entry within the filtered list, or nil
+/// if the currently selected source ID is not present in `filtered`.
+private func filteredPosition(
+    selectedIndex: Int,
+    filtered: [SourceID],
+    order: [SourceID]
+) -> Int? {
+    guard order.indices.contains(selectedIndex) else { return nil }
+    let id = order[selectedIndex]
+    return filtered.firstIndex(of: id)
+}
+
+/// Maps a position in the filtered list back to an index in the full `order` array.
+///
+/// Returns the last valid index as a fallback so `selectedIndex` never goes out of range.
+private func fullOrderIndex(filteredPos: Int, filtered: [SourceID], order: [SourceID]) -> Int {
+    guard filtered.indices.contains(filteredPos) else { return max(0, order.count - 1) }
+    let id = filtered[filteredPos]
+    return order.firstIndex(of: id) ?? max(0, order.count - 1)
+}
+
+/// Opens the structured-file picker when the selected entry has a JSONPath, or
+/// shows a 1.5 s transient if the selected source is not a structured file.
+///
+/// Only structured-file entries (ux-spec §3.6: those with a `jsonpath` in their
+/// SourceID) can open the picker. Whole `.lua` file entries are not eligible.
+private func openPickerOrTransient(_ s: AppState) -> (AppState, [Effect]) {
+    var s = s
+    guard s.navigator.selectedIndex < s.navigatorOrder.count else {
+        return (s, [])
+    }
+    let id = s.navigatorOrder[s.navigator.selectedIndex]
+    if id.jsonpath != nil {
+        // Structured-file entry — open the picker modal (ux-spec §3.6).
+        s.focus = .pickerModal
+        return (s, [])
+    } else {
+        // Whole .lua file or unknown — picker is not applicable.
+        s.transient = TransientMessage(text: "Picker available for structured files only")
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+    }
 }
 
 // MARK: - Diagnostic navigation
