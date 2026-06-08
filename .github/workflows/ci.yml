@@ -243,8 +243,23 @@ jobs:
       # MoonSwiftCoreTests: pure Swift logic, Lua engine (LuacheckSpikeTests),
       # YAML/JSON/TOML decoders, JSONPath evaluator, project validation.
       # LuacheckSpikeTests is the required CI gate (PRD F4.0).
+      # --enable-code-coverage is required so the ≥85% coverage gate below can
+      # extract profdata; without this flag no .profdata is written to .build/.
       - name: Test MoonSwiftCoreTests
-        run: swift test --filter MoonSwiftCoreTests
+        run: swift test --filter MoonSwiftCoreTests --enable-code-coverage
+
+      # ≥85% MoonSwiftCore line-coverage gate (PRD F4.0 / CLAUDE.md).
+      # Runs on the blocking intel leg only (x86_64, experimental:false) so it
+      # gates the PR.  The arm64 leg is advisory (continue-on-error:true) and
+      # skips coverage enforcement to avoid duplicate gate noise.
+      # scripts/check-coverage.sh locates .build/debug/codecov/default.profdata
+      # and the MoonSwiftPackageTests.xctest bundle produced by the step above,
+      # uses `xcrun llvm-cov export` to aggregate per-file line coverage for
+      # every file under Sources/MoonSwiftCore/, and exits 1 if the result is
+      # below 85%.
+      - name: Enforce MoonSwiftCore ≥85% line-coverage gate (CR-034)
+        if: ${{ !matrix.experimental }}
+        run: bash scripts/check-coverage.sh --threshold 85
 
       # RatatuiKitTests: FFI bindings — links the Rust dylib.
       # Run with continue-on-error so the crash-report step runs even on signal.
