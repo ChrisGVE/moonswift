@@ -713,19 +713,36 @@ struct CodePaneDiagNavScrollTests {
 @Suite("Code pane — Highlight pulse lifecycle (ux-spec §3.5, task 31)")
 struct CodePaneHighlightPulseTests {
 
-    @Test("Tick clears jumpPulseLine (pulse expiry)")
+    @Test("Tick clears jumpPulseLine once the expiry deadline has passed")
     func tickClearsPulseLine() {
         var (state, _) = codePaneState(code: "a\nb\nc")
-        state.codePane.jumpPulseLine = 1  // simulate active pulse on line 2
+        state.codePane.jumpPulseLine = 1
+        state.codePane.jumpPulseExpiry = Date().addingTimeInterval(-0.01)  // already expired
 
         let (next, _) = reduce(state, .tick)
-        #expect(next.codePane.jumpPulseLine == nil, "tick must clear jumpPulseLine to end the 500 ms pulse")
+        #expect(next.codePane.jumpPulseLine == nil, "tick after the deadline must end the 500 ms pulse")
+        #expect(next.codePane.jumpPulseExpiry == nil)
+    }
+
+    @Test("Early tick (faster concurrent consumer) does NOT clear an unexpired pulse")
+    func earlyTickPreservesPulse() {
+        // Regression (QA-31): with the 100 ms run tick armed, ticks arrive well
+        // before the 500 ms pulse deadline — those must not end the animation.
+        var (state, _) = codePaneState(code: "a\nb\nc")
+        state.codePane.jumpPulseLine = 1
+        state.codePane.jumpPulseExpiry = Date().addingTimeInterval(0.4)  // still active
+        state.runState = .running(id: UUID(), startedAt: Date())  // concurrent 100 ms tick consumer
+
+        let (next, _) = reduce(state, .tick)
+        #expect(next.codePane.jumpPulseLine == 1, "tick before the deadline must preserve the pulse")
+        #expect(next.codePane.jumpPulseExpiry != nil)
     }
 
     @Test("Tick emits stopTick when pulse is the only consumer (no run, no transient)")
     func tickStopsWhenOnlyPulseWasActive() {
         var (state, _) = codePaneState(code: "a\nb")
         state.codePane.jumpPulseLine = 0  // pulse active
+        state.codePane.jumpPulseExpiry = Date().addingTimeInterval(-0.01)  // expired
         state.runState = .idle
         state.transient = nil
 

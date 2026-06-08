@@ -124,6 +124,12 @@ public struct CodePaneState: Sendable, Equatable {
     /// When non-nil, the code pane is showing a 500 ms highlight pulse on this
     /// line (posted after a diagnostic jump — ux-spec.md §3.5).
     public var jumpPulseLine: Int?
+    /// Wall-clock deadline for the pulse. The tick handler clears the pulse
+    /// only once this has passed — ticks may arrive earlier than 500 ms when a
+    /// faster consumer (e.g. the 100 ms run tick) is also armed, and those
+    /// early ticks must not end the animation (same pattern as
+    /// `TransientMessage.expiry`).
+    public var jumpPulseExpiry: Date?
     /// Gutter diagnostic marks by line (0-based fragment-relative lines).
     public var gutterMarks: [Int: GutterMark]
     /// Digit accumulator for the `:N<Enter>` jump command (ux-spec §2.3).
@@ -144,6 +150,7 @@ public struct CodePaneState: Sendable, Equatable {
         scrollOffset: Int = 0,
         cursorLine: Int = 0,
         jumpPulseLine: Int? = nil,
+        jumpPulseExpiry: Date? = nil,
         gutterMarks: [Int: GutterMark] = [:],
         colonCommand: String? = nil,
         diagnosticIndex: Int? = nil
@@ -151,6 +158,7 @@ public struct CodePaneState: Sendable, Equatable {
         self.scrollOffset = scrollOffset
         self.cursorLine = cursorLine
         self.jumpPulseLine = jumpPulseLine
+        self.jumpPulseExpiry = jumpPulseExpiry
         self.gutterMarks = gutterMarks
         self.colonCommand = colonCommand
         self.diagnosticIndex = diagnosticIndex
