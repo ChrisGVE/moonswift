@@ -1159,6 +1159,16 @@ private func buildStatusBarLine(left: String, right: String, width: Int) -> Stri
 
 // MARK: - Help overlay (ux-spec.md §2.5)
 
+/// Renders the centered help overlay modal (ux-spec §2.5).
+///
+/// Layout: `Clear` widget behind a bordered content box, centered, max 60 × 20.
+/// Sections: global keys, navigator keys, code pane keys, bottom pane keys, then
+/// the explicit Tab context-sensitivity note (ux-spec §2.5, §2.2 — binding exact string).
+///
+/// Styling (ux-spec §8.1 token assignments):
+///   - Section headers: `dim` color (secondary labels).
+///   - Key names: `keyword` color (matches Lua keyword pink — reused for UI keys).
+///   - Descriptions: `identifier` color (Dracula foreground — readable body text).
 private func renderHelpOverlay(size: TerminalSize, theme: ThemeState) -> [RenderCommand] {
     // Centered modal, max 60 × 20 (ux-spec §2.5).
     let overlayW: UInt16 = min(60, size.cols)
@@ -1167,20 +1177,42 @@ private func renderHelpOverlay(size: TerminalSize, theme: ThemeState) -> [Render
     let overlayY = (size.rows - overlayH) / 2
     let overlayRect = Rect(x: overlayX, y: overlayY, width: overlayW, height: overlayH)
 
+    let headerStyle = dimStyle(theme)
+    let keyStyle = tokenStyle(.keyword, theme: theme)
+    let descStyle = tokenStyle(.identifier, theme: theme)
+    let noteStyle = dimStyle(theme)
+
     var lines: [[Span]] = []
-    let n = normalStyle(theme)
-    let d = dimStyle(theme)
 
-    lines.append([Span("Global keys", style: n)])
-    // swift-format-ignore
+    // Each keybinding section: header, then one line per binding.
+    // A binding row is two spans: key name (keyword color) + description (identifier color).
+    lines.append([Span("Global", style: headerStyle)])
     for (key, action) in helpGlobalKeys {
-        lines.append([Span("  \(key.padding(toLength: 10, withPad: " ", startingAt: 0))  \(action)", style: n)])
+        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
     }
-    lines.append([Span("", style: n)])
 
-    // Explicit note required by ux-spec §2.5.
+    lines.append([Span("", style: headerStyle)])
+    lines.append([Span("Navigator", style: headerStyle)])
+    for (key, action) in helpNavigatorKeys {
+        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
+    }
+
+    lines.append([Span("", style: headerStyle)])
+    lines.append([Span("Code pane", style: headerStyle)])
+    for (key, action) in helpCodePaneKeys {
+        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
+    }
+
+    lines.append([Span("", style: headerStyle)])
+    lines.append([Span("Bottom pane", style: headerStyle)])
+    for (key, action) in helpBottomPaneKeys {
+        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
+    }
+
+    // Explicit Tab note — exact string required by ux-spec §2.5, §2.2.
+    lines.append([Span("", style: noteStyle)])
     lines.append(
-        [Span("<Tab>: cycles panes globally; cycles tabs when the bottom pane is focused.", style: d)]
+        [Span("<Tab>: cycles panes globally; cycles tabs when the bottom pane is focused.", style: noteStyle)]
     )
 
     return [
@@ -1189,8 +1221,19 @@ private func renderHelpOverlay(size: TerminalSize, theme: ThemeState) -> [Render
     ]
 }
 
+/// Builds one two-span help row: key name left-padded to 10 chars, then description.
+///
+/// The split into two `Span`s lets the production renderer apply distinct colors
+/// without any post-processing: key names use `keyword`, descriptions `identifier`.
+private func helpRow(key: String, action: String, keyStyle: CellStyle, descStyle: CellStyle) -> [Span] {
+    // Pad key name to 10 characters for column-aligned display.
+    let paddedKey = "  " + key.padding(toLength: 10, withPad: " ", startingAt: 0)
+    let description = "  " + action
+    return [Span(paddedKey, style: keyStyle), Span(description, style: descStyle)]
+}
+
 // swift-format-ignore
-/// Global keybinding rows displayed in the help overlay (ux-spec §2.3).
+/// Global keybinding rows for the help overlay (ux-spec §2.3 global table).
 private let helpGlobalKeys: [(String, String)] = [
     ("r",       "Run selected source"),
     ("x",       "Cancel run"),
@@ -1204,6 +1247,40 @@ private let helpGlobalKeys: [(String, String)] = [
     ("<C-h>",   "Jump focus to navigator"),
     ("<C-l>",   "Jump focus to code pane"),
     ("<C-j>",   "Jump focus to bottom pane"),
+]
+
+// swift-format-ignore
+/// Navigator keybinding rows for the help overlay (ux-spec §2.3 navigator table).
+private let helpNavigatorKeys: [(String, String)] = [
+    ("j/k",     "Move selection down/up"),
+    ("g",       "Jump to first entry"),
+    ("G",       "Jump to last entry"),
+    ("<Enter>", "Load selected source"),
+    ("/",       "Filter entries"),
+    ("m",       "Open structured-file picker"),
+]
+
+// swift-format-ignore
+/// Code pane keybinding rows for the help overlay (ux-spec §2.3 code pane table).
+private let helpCodePaneKeys: [(String, String)] = [
+    ("j/k",     "Scroll down/up one line"),
+    ("d/u",     "Scroll down/up half-page"),
+    ("f/b",     "Scroll down/up full page"),
+    ("g/G",     "Jump to top/bottom"),
+    (":N",      "Jump to line N"),
+    ("n/N",     "Jump to next/previous diagnostic"),
+    ("[d",      "Jump to first diagnostic"),
+    ("]d",      "Jump to last diagnostic"),
+]
+
+// swift-format-ignore
+/// Bottom pane keybinding rows for the help overlay (ux-spec §2.3 bottom pane table).
+private let helpBottomPaneKeys: [(String, String)] = [
+    ("j/k",     "Scroll down/up"),
+    ("<Enter>", "Jump code pane to error line"),
+    ("y",       "Yank focused line to clipboard"),
+    ("1/2",     "Quick-jump to Output/Diagnostics tab"),
+    ("<C-l>",   "Clear output buffer"),
 ]
 
 // MARK: - Style helpers
