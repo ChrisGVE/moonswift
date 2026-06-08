@@ -1,9 +1,0 @@
-## moonswift.toml — lint-clean fixture
-##
-## Drives: IntegrationTests / LintService — zero diagnostics for clean code
-## Script: Syntactically valid and style-clean Lua; luacheck must emit no warnings.
-
-lua_version = "5.4"
-
-[[source]]
-path = "clean.lua"

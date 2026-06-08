@@ -1,7 +1,0 @@
-## malformed.yaml — error-malformed-yaml fixture
-##
-## Intentionally invalid YAML: the tab character in a mapping value is illegal
-## and causes a parse error in the Yams decoder.
-scripts:
-  init: "print('ok')"
-  bad_tab:	[broken

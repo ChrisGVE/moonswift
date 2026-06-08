@@ -1,7 +1,0 @@
-{
-  "handlers": {
-    "onCreate": "print('json create')",
-    "onDelete": "print('json delete')"
-  },
-  "version": 2
-}

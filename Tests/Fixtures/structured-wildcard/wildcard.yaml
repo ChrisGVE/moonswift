@@ -1,7 +1,0 @@
-## wildcard.yaml — structured-wildcard fixture
-##
-## All values under "handlers" are Lua string fragments.
-## $.handlers.* (wildcard) must yield two .loaded events.
-handlers:
-  onCreate: "print('wildcard created')"
-  onDelete: "print('wildcard deleted')"

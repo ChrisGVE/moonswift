@@ -1,8 +1,0 @@
-## config.yaml — structured-yaml fixture
-##
-## A YAML document with embedded Lua fragments as string fields.
-## $.scripts.init and $.scripts.run are both designated in moonswift.toml.
-scripts:
-  init: "print('yaml init')"
-  run: "return 99"
-version: 1
