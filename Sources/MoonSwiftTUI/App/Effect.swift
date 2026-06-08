@@ -95,6 +95,20 @@ public enum Effect: Sendable {
     /// no pending highlight pulse.
     case stopTick
 
+    // MARK: Clipboard
+
+    /// Copy `text` to the system clipboard via pbcopy (ux-spec §2.3 bottom-pane `y`).
+    ///
+    /// The AppDriver executes this by spawning `pbcopy` and writing `text` to its
+    /// stdin. The reducer requests the effect; the driver executes it. This is a
+    /// purely additive case: no other driver logic is modified.
+    ///
+    /// **Scope note (task 21):** The driver execution arm (`case .yank`) is wired
+    /// in AppDriver.executeSingle because it is a trivial additive single case with
+    /// no conflict risk. If AppDriver is out-of-scope for a future task, add the arm
+    /// at the call site in that task's pass.
+    case yank(String)
+
     // MARK: Process lifecycle
 
     /// Break the AppDriver loop, run teardown, and `exit(exitCode)`.
