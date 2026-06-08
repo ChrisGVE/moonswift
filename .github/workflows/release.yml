@@ -373,15 +373,29 @@ jobs:
       # bumps Formula/moonswift.rb (version + checksum) and opens a PR.  The
       # tap's update-moonswift workflow listens for the repository_dispatch
       # event below.  Runs last so it only fires once the release succeeded.
+      #
+      # NON-BLOCKING (continue-on-error): the tap publish is a downstream
+      # convenience, not part of the core release contract (tag + artifacts +
+      # attestation + clean-build verify).  A dispatch failure — e.g.
+      # TAP_DISPATCH_TOKEN missing homebrew-tap from its repository scope, which
+      # surfaces as "Resource not accessible by personal access token" — must
+      # NOT fail the build job (that would skip the verify job and leave the
+      # release unvalidated).  On failure, publish the formula manually:
+      #   gh workflow run update-moonswift.yml -R ChrisGVE/homebrew-tap \
+      #     -f version=<X.Y.Z> -f darwin_universal_sha256=<sha>
+      # See RELEASING.md §3 (PAT scope) and §6 (recovery).
 
       - name: Compute moonswift_universal.zip sha256 (for Homebrew)
         id: brew-sha
         run: echo "sha256=$(shasum -a 256 moonswift_universal.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch release to the Homebrew tap
+        id: tap-dispatch
+        continue-on-error: true
         uses: peter-evans/repository-dispatch@v3
         with:
-          # Cross-repo PAT with write access to ChrisGVE/homebrew-tap.
+          # Cross-repo PAT with Contents:write on ChrisGVE/homebrew-tap AND
+          # homebrew-tap listed in the (fine-grained) token's repository scope.
           token: ${{ secrets.TAP_DISPATCH_TOKEN }}
           repository: ChrisGVE/homebrew-tap
           event-type: moonswift-release-published
@@ -391,6 +405,13 @@ jobs:
               "version": "${{ steps.update-package.outputs.tag }}",
               "darwin_universal_sha256": "${{ steps.brew-sha.outputs.sha256 }}"
             }
+
+      - name: Note tap-dispatch outcome
+        if: steps.tap-dispatch.outcome == 'failure'
+        run: |
+          echo "::warning::Homebrew tap dispatch FAILED (likely TAP_DISPATCH_TOKEN scope)."
+          echo "::warning::Publish the formula manually:"
+          echo "::warning::  gh workflow run update-moonswift.yml -R ChrisGVE/homebrew-tap -f version=${{ steps.update-package.outputs.tag }} -f darwin_universal_sha256=${{ steps.brew-sha.outputs.sha256 }}"
 
   # ── job 2: verify ─────────────────────────────────────────────────────────
   # Clean-machine verification: check out the tagged commit and run a plain

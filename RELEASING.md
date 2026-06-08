@@ -85,8 +85,25 @@ The build job's final step sends a cross-repo `repository_dispatch`, which
 - Secret name: **`TAP_DISPATCH_TOKEN`** (repository secret on
   `ChrisGVE/moonswift`).
 - Scope: a fine-grained PAT with **Contents: write** on `ChrisGVE/homebrew-tap`
-  (or a classic PAT with `repo`).
+  **and `homebrew-tap` selected in the token's *repository access* list**
+  (fine-grained PATs are deny-by-default per repo — Contents:write alone is not
+  enough if the target repo is not in scope), or a classic PAT with `repo`.
 - This is the same token convention used by the `codesize` release pipeline.
+
+> **If the dispatch fails with `Resource not accessible by personal access
+> token`:** the PAT does not cover `homebrew-tap` (wrong repository scope or
+> insufficient permission). The dispatch step is **non-blocking**
+> (`continue-on-error`) so this does not fail the release — the tag, artifacts,
+> attestation, and verify job still complete. Publish the formula manually:
+>
+> ```sh
+> SHA=$(gh release download vX.Y.Z -R ChrisGVE/moonswift \
+>   --pattern moonswift_universal.zip -O - | shasum -a 256 | cut -d' ' -f1)
+> gh workflow run update-moonswift.yml -R ChrisGVE/homebrew-tap \
+>   -f version=X.Y.Z -f darwin_universal_sha256="$SHA"
+> ```
+>
+> Then merge the formula-bump PR the workflow opens on the tap.
 
 The tap side (`Formula/moonswift.rb` + `.github/workflows/update-moonswift.yml`)
 must exist on the tap's `main` before the first release dispatch, or the
