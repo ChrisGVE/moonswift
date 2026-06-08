@@ -1,0 +1,15 @@
+## moonswift.toml — lint-opt-in-modules fixture
+##
+## Drives: IntegrationTests / LintService — extra_modules opt-in
+## Script: Uses luaswift.iox, which is an opt-in catalog entry.
+## Expected:
+##   - Without iox in extra_modules: W1xx warning present.
+##   - With    iox in extra_modules: fewer W1xx warnings (luaswift.iox recognised).
+
+lua_version = "5.4"
+
+[[source]]
+path = "opt-in-modules.lua"
+
+[lint]
+extra_modules = ["iox"]

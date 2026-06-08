@@ -1,0 +1,13 @@
+## moonswift.toml — run-instruction-limit fixture
+##
+## Drives: IntegrationTests / RunService — instruction limit trip with output
+## Script: Prints a line, then enters an infinite loop.
+## Expected: output ["before limit"], outcome .limitExceeded(.instructions)
+
+lua_version = "5.4"
+
+[[source]]
+path = "instruction-limit.lua"
+
+[run]
+instruction_limit = 5000

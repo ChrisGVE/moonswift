@@ -1,0 +1,13 @@
+## moonswift.toml — error-malformed-yaml fixture
+##
+## Drives: IntegrationTests / SourceStore — malformed YAML parse error
+## References a YAML file with invalid syntax.
+## Expected: SourceLoadEvent.failed with state .failed(Diagnostic) and message starting "✖"
+
+lua_version = "5.4"
+
+[[source]]
+path = "malformed.yaml"
+
+  [[source.field]]
+  jsonpath = "$.scripts.init"

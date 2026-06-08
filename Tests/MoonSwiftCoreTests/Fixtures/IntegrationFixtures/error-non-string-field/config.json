@@ -1,0 +1,4 @@
+{
+  "script": "print('hello')",
+  "version": 42
+}

@@ -1,0 +1,8 @@
+## multi-doc.yaml — structured-multi-doc fixture
+##
+## A YAML stream with two documents separated by "---".
+## Document 0: $.script = "print('doc0')"
+## Document 1: $.script = "print('doc1')"
+script: "print('doc0')"
+---
+script: "print('doc1')"

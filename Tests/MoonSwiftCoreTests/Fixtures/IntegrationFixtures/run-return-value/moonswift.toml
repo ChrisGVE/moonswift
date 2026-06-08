@@ -1,0 +1,18 @@
+## moonswift.toml — run-return-value fixture
+##
+## Drives: IntegrationTests / RunService — return value types
+## Scripts: Three scripts covering the main return-value shapes:
+##   - return-string.lua: returns a string
+##   - return-number.lua: returns a number
+##   - return-nil.lua:    no explicit return (implicit nil)
+
+lua_version = "5.4"
+
+[[source]]
+path = "return-string.lua"
+
+[[source]]
+path = "return-number.lua"
+
+[[source]]
+path = "return-nil.lua"

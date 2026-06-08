@@ -1,0 +1,10 @@
+## moonswift.toml — run-print-and-error fixture
+##
+## Drives: IntegrationTests / RunService — print then runtime error
+## Script: Prints one line to stdout, then raises a runtime error.
+## Expected: output ["before error"], outcome .error
+
+lua_version = "5.4"
+
+[[source]]
+path = "print-and-error.lua"

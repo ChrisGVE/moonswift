@@ -1,0 +1,10 @@
+## moonswift.toml — lint-luaswift-modules fixture
+##
+## Drives: IntegrationTests / LintService — luaswift.* catalog globals
+## Script: Uses luaswift.json.decode and luaswift root; with catalog globals
+##         injected there must be zero W1xx undefined-global warnings.
+
+lua_version = "5.4"
+
+[[source]]
+path = "luaswift-modules.lua"
