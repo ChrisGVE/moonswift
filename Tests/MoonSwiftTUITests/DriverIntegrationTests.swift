@@ -171,6 +171,44 @@ struct DriverIntegrationTests {
         )
     }
 
+    /// CR-019: EventPump posts resize(0,0) when the terminal I/O source throws.
+    /// The AppDriver must exit its run loop immediately (clean quit, code 0) rather
+    /// than looping forever on an unresponsive channel.
+    @Test("resize(0,0) sentinel causes driver to exit cleanly (CR-019)")
+    func zeroSizeResizeCausesCleanQuit() {
+        let channel = EventChannel()
+        let pump = EventPump(source: ScriptedEventSource([]), channel: channel)
+        let tick = TickSource(channel: channel)
+        let seed = AppState()
+
+        let driver = AppDriver(
+            channel: channel,
+            pump: pump,
+            tickSource: tick,
+            seed: seed
+        )
+
+        let exitCode = OSAllocatedUnfairLock<Int32?>(initialState: nil)
+        let driverThread = Thread {
+            let code = driver.run()
+            exitCode.withLock { $0 = code }
+        }
+        driverThread.start()
+
+        // Let the driver boot.
+        Thread.sleep(forTimeInterval: 0.1)
+        // Post the zero-size sentinel that EventPump emits on I/O error.
+        channel.post(.resize(TerminalSize(cols: 0, rows: 0)))
+
+        // The driver must exit within a generous deadline.
+        let exited = waitUntil(timeout: 3.0) { exitCode.withLock { $0 } != nil }
+        pump.stop()
+        tick.stop()
+
+        #expect(exited, "Driver must exit when resize(0,0) sentinel is posted (was hanging)")
+        #expect(exitCode.withLock { $0 } == 0, "Clean EOF must produce exit code 0")
+    }
+
     @Test("l dispatches Effect.lint to the injected LintService with the selected fragment")
     func lintDispatchedToService() {
         let channel = EventChannel()

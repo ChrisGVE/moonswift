@@ -169,7 +169,16 @@ public final class AppDriver: @unchecked Sendable {
                 // Track terminal size from resize events so renderNow() always
                 // has the current dimensions. Updated before the reduce call so
                 // the renderer sees the new size immediately on the same frame.
+                //
+                // CR-019: EventPump posts resize(0,0) as a sentinel when the
+                // terminal source throws (closed TTY / SIGHUP). Treat it as a
+                // clean EOF quit so the loop exits gracefully instead of
+                // looping forever on an unresponsive channel.
                 if case .resize(let size) = event {
+                    if size.cols == 0 && size.rows == 0 {
+                        quitCode = 0
+                        break
+                    }
                     currentSize = size
                 }
 
