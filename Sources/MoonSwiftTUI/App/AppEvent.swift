@@ -30,6 +30,10 @@ public enum RunOutcome: Sendable {
     case cancelled
     /// An instruction or wall-clock limit was exceeded.
     case limitExceeded(kind: LimitKind)
+    /// The Lua engine itself failed (not a script error) — e.g. state corruption,
+    /// sandboxing failure, or LuaSwift internal error. Distinct from `.error`
+    /// which is a script-level runtime error (ux-spec §4.2 "Lua engine error").
+    case engineError(String)
 }
 
 extension RunOutcome: Equatable {
@@ -43,6 +47,8 @@ extension RunOutcome: Equatable {
             return true
         case (.limitExceeded(let lk), .limitExceeded(let rk)):
             return lk == rk
+        case (.engineError(let lm), .engineError(let rm)):
+            return lm == rm
         default:
             return false
         }
