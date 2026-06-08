@@ -161,7 +161,7 @@ calls.
 | **LuaErrorLineParser** | Extract **only the line number** from `LuaError` string payloads. Two formats: `[string "<truncated user source>"]:N: message` (run/lint path — `luaL_loadstring` makes the chunk name the source text itself, truncated to `LUA_IDSIZE` ≈ 60 bytes; the quoted part may contain `"]:` and the *message* may contain `]:N:`, so the parser anchors on the **last** `]:N:` pattern **within the first ~70 bytes** — the bounded-anchor rule, handling both hostile classes; PRD F3) and `bytecode:N: message` (precompile path — the engine hardcodes `=bytecode`). Display names come from `FragmentProvenance` client-side (§4.3), **never** from the engine string | Isolated single file behind the `Diagnostic.from(luaError:provenance:)` helper seam (§6); deleted in P2 when #19 ships | Leak into consumers' types (callers consume `Diagnostic` via the helper, never raw parse results); attempt to extract a name from the engine string |
 | **RatatuiKit** | Safe Swift overlay: status-code → thrown error translation, event struct decoding, widget/cell-buffer wrappers, terminal lifecycle incl. suspend/resume for `$EDITOR`; batches cell writes into per-run FFI calls (§3b) | The only FFI-touching target; exposes the two thread-class API groups (§5.2) with debug thread assertions | Contain domain types; expose raw pointers upward; issue per-cell FFI calls |
 | **CRatatuiFFI** | C module map + cbindgen-generated umbrella header + linkage to the static lib (binaryTarget or source-mode C target, §5.4) | Pure interface target (one stub `.c` in source mode) | Contain logic |
-| **rust/ratatui-ffi (fork)** | ratatui + crossterm behind the restructured C ABI (PRD §4.5 keep/trim/add lists): terminal lifecycle, poll-based event stream, List/Paragraph/Tabs/Block/layout/Clear, first-class cell API, `ffi_guard`, error protocol, emergency restore (§3f) | Everything behind `extern "C"`; `panic = "unwind"` + `catch_unwind` at every entry | Let a panic unwind across the ABI (UB); allocate or take locks in the emergency-restore path |
+| **rust/ratatui-ffi (fork)** | ratatui + crossterm behind the restructured C ABI (PRD §4.5 keep/trim/add lists): terminal lifecycle, poll-based event stream, List/Paragraph/Tabs/Block/layout/Clear, first-class cell API, `ffi_guard`, error protocol, emergency restore (§3f) | Everything behind `extern "C"`; dev/test builds use `panic = "unwind"` + `catch_unwind` in `ffi_guard!`; the `--features swift_ffi` static lib omits `catch_unwind` and uses `panic = "abort"` (arm64e TLS mitigation — §5.2, §5.4) | Let a panic unwind across the ABI (UB); allocate or take locks in the emergency-restore path |
 | **Run engine** | Fresh `LuaEngine` per run, configured sandboxed/unrestricted | Created and discarded inside one `RunService.run` call | Outlive its run (P1; the P2 "session engine" is a separate, gated design — §9 A2) |
 | **Lint engine** | One long-lived `LuaEngine` per app session hosting vendored luacheck via a custom loader | Confined to LintService's serial executor; may be `unrestricted` (trusted code only) | Ever execute user scripts |
 
@@ -787,11 +787,24 @@ from scripted event sources with **no FFI link** in the test process.
 Every `extern "C"` entry point follows the fork invariants (PRD §4.3/§4.5):
 
 - **Error protocol.** Return `i32`: `0` = ok, nonzero = error code. Detail
-  via thread-local last-error string: `rffi_last_error(buf, cap) -> i32`.
+  via **process-global** last-error string: `rffi_last_error(buf, cap) -> i32`.
+  The slot is a single `Mutex<String>` (not per-thread) — see §5.4 arm64-TLS
+  and `guard.rs` for why TLS is deliberately avoided.
   `RatatuiKit` translates nonzero into a thrown `FFIError(code, message)`.
-- **Panic safety.** `panic = "unwind"` + `ffi_guard(catch_unwind)` wraps
-  every body; a panic becomes an error code, never UB across the ABI. A
-  deliberately-panicking test entry point keeps this honest in cargo tests.
+- **Panic safety (profile-dependent — see §5.4 arm64-TLS and `guard.rs`).**
+  - *Dev / `cargo test` (no `swift_ffi` feature):* `panic = "unwind"` +
+    `ffi_guard!(catch_unwind)` wraps every body; a panic becomes an error
+    code, never UB across the ABI. A deliberately-panicking test entry keeps
+    this honest in cargo tests.
+  - *Release static lib (`--features swift_ffi`):* `catch_unwind` is **omitted**
+    from `ffi_guard!` so Rust's unwind TLS (`LOCAL_PANIC_COUNT`) is never
+    referenced from compiled objects — eliminating arm64e SIGBUS from
+    PAC-unsigned `tlv_bootstrap` pointers. `panic = "abort"` in
+    `[profile.release]` ensures a Rust panic aborts the process rather than
+    unwinding; this is intentional for a terminal library (a panic is a bug,
+    not a recoverable condition).
+  See §5.4 for the full arm64e TLS mitigation rationale and `guard.rs`
+  §note for the implementation detail.
 - **Threading contract (refined here [ARCH]).** Shim entry points are
   partitioned into two documented classes in the generated header — the two
   `RatatuiKit` API groups of §2:
@@ -830,6 +843,13 @@ Every `extern "C"` entry point follows the fork invariants (PRD §4.3/§4.5):
   return value), is a **guarded no-op until the atomic `initialized` flag
   set by `rffi_terminal_init` is observed** (async-signal-safe read, §3f),
   and is callable only from crash handlers, documented as such.
+
+**See also:** §5.4 (arm64e TLS mitigation — why `catch_unwind` is omitted
+with `--features swift_ffi`, why `panic = "abort"` is used in release, and
+why the last-error slot is a process-global `Mutex<String>` rather than
+thread-local); `docs/internals/ffi-boundary.md` (full FFI contract
+reference, including the `swift_ffi` feature flag, error-slot design, and
+thread-class partition detail).
 
 ### 5.3 LuaSwift consumed surface (verified against the tag)
 
@@ -1225,7 +1245,7 @@ file per PRD §4.1 component, split if a budget is threatened).
 ```
 lib.rs          ~100  module wiring + exports (crate-type: staticlib added
                       to upstream's cdylib — §6)
-guard.rs        ~120  ffi_guard (catch_unwind), thread-local last-error, rffi_last_error
+guard.rs        ~120  ffi_guard (catch_unwind in dev; omitted with swift_ffi), process-global last-error (single Mutex<String>), rffi_last_error
 terminal.rs     ~300  init/teardown, raw mode, alt screen, suspend/resume,
                       saved termios + fd in static storage, rffi_emergency_restore (§3f)
 events.rs       ~350  crossterm poll-with-timeout, EINTR retry, FfiEvent encoding
