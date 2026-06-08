@@ -527,18 +527,17 @@ private func renderPickerPane(picker: PickerState, rect: Rect, theme: ThemeState
 
     // Compute the scroll window so the cursor is always visible.
     let scrollStart = pickerScrollStart(cursor: picker.cursorRow, visible: contentRows, total: rows.count)
+    let width = Int(rect.width)
 
-    // Render tree rows in the content area.
+    // Build the paragraph lines for the content area. Paragraph renders all
+    // lines within the rect, one line per entry, trimming at the rect boundary.
+    var contentLines: [[Span]] = []
     for rowOffset in 0..<contentRows {
         let rowIdx = scrollStart + rowOffset
-        let termRow = UInt16(contentY + rowOffset)
-        let width = Int(rect.width)
 
         guard rows.indices.contains(rowIdx) else {
             // Blank row below the tree.
-            commands.append(
-                .cellRun(
-                    col: rect.x, row: termRow, text: String(repeating: " ", count: width), style: normalStyle(theme)))
+            contentLines.append([Span(String(repeating: " ", count: width), style: normalStyle(theme))])
             continue
         }
 
@@ -547,8 +546,7 @@ private func renderPickerPane(picker: PickerState, rect: Rect, theme: ThemeState
         let isMarked = picker.marks.contains(row.normalized)
         let isPreExisting = picker.preExistingMarks.contains(row.normalized)
 
-        // Build the display line for this tree row.
-        let (lineSpans) = pickerRowSpans(
+        let spans = pickerRowSpans(
             row: row,
             isCursor: isCursor,
             isMarked: isMarked,
@@ -556,8 +554,17 @@ private func renderPickerPane(picker: PickerState, rect: Rect, theme: ThemeState
             width: width,
             theme: theme
         )
-        commands.append(.cellSpans(col: rect.x, row: termRow, spans: lineSpans))
+        contentLines.append(spans)
     }
+
+    // Emit tree rows as a paragraph in the content rect.
+    let contentRect = Rect(
+        x: rect.x,
+        y: UInt16(contentY),
+        width: rect.width,
+        height: UInt16(max(0, contentRows))
+    )
+    commands.append(.paragraph(rect: contentRect, lines: contentLines, block: nil))
 
     // Status row: discard confirmation prompt, or current cursor's JSONPath.
     let statusText: String
