@@ -68,20 +68,38 @@ fn last_error() -> &'static Mutex<String> {
 ///
 /// Called from ffi_guard! when the body returns an error code, so that
 /// rffi_last_error can retrieve the description.
+///
+/// # Single-slot trade-off
+///
+/// LAST_ERROR is a process-global (not per-thread) slot. This is a deliberate
+/// trade-off to avoid std TLS on arm64e (ARCHITECTURE.md §5.4): per-thread
+/// HashMap requires RandomState TLS; thread::current() requires std::thread
+/// TLS — both trigger PAC-unsigned tlv_bootstrap SIGBUS on arm64e.
+///
+/// Consequence: if two threads (render class + pump class) both encounter an
+/// error concurrently, the last writer wins and the other's message is lost.
+/// The contract is therefore that callers read rffi_last_error immediately
+/// after the failing call, on the same thread. This is enforced by the
+/// `--test-threads=1` requirement and by the documented single-UI-thread usage
+/// model. The broader redesign (e.g. per-call out-parameter error strings)
+/// is out of scope for this shim.
+///
+/// Poisoned-mutex handling: we recover from poison (a panicking thread left
+/// the mutex locked) rather than silently dropping the message — a silent drop
+/// would make errors invisible after any test panic.
 pub(crate) fn set_last_error(msg: impl Into<String>) {
-    if let Ok(mut s) = last_error().lock() {
-        *s = msg.into();
-    }
+    let mut s = last_error().lock().unwrap_or_else(|e| e.into_inner());
+    *s = msg.into();
 }
 
 /// Clear the last-error slot.
 ///
 /// Called at the entry of every ffi_guard! body so a successful call leaves
-/// an empty error slot.
+/// an empty error slot. Recovers from mutex poison for the same reason as
+/// set_last_error.
 pub(crate) fn clear_last_error() {
-    if let Ok(mut s) = last_error().lock() {
-        s.clear();
-    }
+    let mut s = last_error().lock().unwrap_or_else(|e| e.into_inner());
+    s.clear();
 }
 
 // ---------------------------------------------------------------------------
