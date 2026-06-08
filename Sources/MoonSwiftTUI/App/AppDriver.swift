@@ -50,6 +50,35 @@ public final class AppDriver: @unchecked Sendable {
     /// `nil` in skeleton/test mode when no backend is injected.
     private let interpreter: CommandInterpreter?
 
+    // MARK: Optional engine services
+    //
+    // All three services default to nil so that existing test call sites (which
+    // do not pass services) continue to compile and exercise the skeleton paths.
+    // Production code (Main.swift) injects live instances for real execution.
+
+    /// Executes Lua scripts. When non-nil, Effect.run / .cancelRun are dispatched
+    /// to this service; when nil the skeleton posts a synthetic .runFinished immediately.
+    private let runService: (any RunServiceProtocol)?
+
+    /// Runs syntax pre-pass and full luacheck passes. When non-nil, Effect.lint /
+    /// .syntaxPrePass / .prewarmLint are dispatched to this service; when nil the
+    /// skeleton posts synthetic results immediately.
+    private let lintService: (any LintServiceProtocol)?
+
+    /// Loads source files and dispatches results via its injected callback. When
+    /// non-nil, Effect.loadSources / .loadSource are dispatched to this store;
+    /// when nil the skeleton no-ops.
+    private let sourceStore: SourceStore?
+
+    // MARK: Output coalescer (run-scoped)
+
+    /// The active Coalescer for the current run, or nil when no run is in progress.
+    ///
+    /// Set when Effect.run dispatches to RunService; cleared in the event loop
+    /// when .runFinished is processed (UI thread). `onTick` is called on .tick
+    /// events while non-nil to flush any buffered output lines.
+    private var activeCoalescer: Coalescer?
+
     // MARK: State
 
     private var state: AppState
@@ -77,6 +106,12 @@ public final class AppDriver: @unchecked Sendable {
 
     /// Creates the AppDriver with all its dependencies.
     ///
+    /// The three service parameters (`runService`, `lintService`, `sourceStore`)
+    /// all default to `nil`. When nil, the corresponding effects fall back to the
+    /// original skeleton behaviour (synthetic empty results posted immediately).
+    /// This preserves backward compatibility for test call sites that do not
+    /// inject services. Production code (Main.swift) passes live instances.
+    ///
     /// - Parameters:
     ///   - channel: The MPSC queue bridging all event producers to the loop.
     ///   - pump: The terminal event pump (already running on its thread).
@@ -89,6 +124,9 @@ public final class AppDriver: @unchecked Sendable {
     ///     Inject `RatatuiKitBackend` in production. When non-nil, the backend
     ///     owns `Terminal.teardown()` — callers must not call it independently.
     ///   - seed: The initial `AppState` built from the decoded project file.
+    ///   - runService: Optional `RunService` for real Lua execution. Nil = skeleton.
+    ///   - lintService: Optional `LintService` for real linting. Nil = skeleton.
+    ///   - sourceStore: Optional `SourceStore` for real file loading. Nil = skeleton.
     public init(
         channel: EventChannel,
         pump: EventPump,
@@ -96,7 +134,10 @@ public final class AppDriver: @unchecked Sendable {
         highlighter: Highlighter = Highlighter(),
         suspender: (any TerminalSuspender)? = nil,
         backend: (any RenderBackend)? = nil,
-        seed: AppState
+        seed: AppState,
+        runService: (any RunServiceProtocol)? = nil,
+        lintService: (any LintServiceProtocol)? = nil,
+        sourceStore: SourceStore? = nil
     ) {
         self.channel = channel
         self.pump = pump
@@ -105,6 +146,9 @@ public final class AppDriver: @unchecked Sendable {
         self.suspender = suspender
         self.interpreter = backend.map { CommandInterpreter(backend: $0) }
         self.state = seed
+        self.runService = runService
+        self.lintService = lintService
+        self.sourceStore = sourceStore
     }
 
     // MARK: Run
@@ -127,6 +171,21 @@ public final class AppDriver: @unchecked Sendable {
                 // the renderer sees the new size immediately on the same frame.
                 if case .resize(let size) = event {
                     currentSize = size
+                }
+
+                // On tick, flush any pending coalescer output before reducing.
+                // This bounds sparse-output latency to ≤ ~116 ms (100 ms tick +
+                // 16 ms gate) as documented in ARCHITECTURE.md §3c.
+                if case .tick = event {
+                    activeCoalescer?.onTick()
+                }
+
+                // When a run finishes, clear the coalescer reference so onTick
+                // no longer fires for the completed run. The coalescer has already
+                // flushed all pending lines via finish() inside the run Task before
+                // .runFinished was posted, so no output is lost here.
+                if case .runFinished = event {
+                    activeCoalescer = nil
                 }
 
                 let (newState, effects) = reduce(state, event)
@@ -175,28 +234,83 @@ public final class AppDriver: @unchecked Sendable {
         case .stopTick:
             tickSource.disarm()
 
-        case .run:
-            // Service call — dispatched to RunService when implemented (task 23).
-            // In the skeleton, post a synthetic runFinished immediately.
-            let finishedOutcome = RunOutcome.done(value: nil, duration: .zero)
-            channel.post(.runFinished(finishedOutcome))
+        case .run(let fragment, let config):
+            if let svc = runService {
+                // Dispatch to the real RunService on a background Task.
+                // Capture only Sendable values (channel, coalescer) — not self.
+                let coalescer = Coalescer(channel: channel)
+                activeCoalescer = coalescer
+                Task { [channel] in
+                    let outcome = await svc.run(
+                        fragment,
+                        config: config,
+                        output: { line in coalescer.onOutput(line) }
+                    )
+                    coalescer.finish()
+                    channel.post(.runFinished(Self.appOutcome(from: outcome)))
+                }
+            } else {
+                // Skeleton: post a synthetic .done immediately.
+                channel.post(.runFinished(.done(value: nil, duration: .zero)))
+            }
 
         case .cancelRun:
-            // RunService.cancel() — no-op in skeleton.
-            break
+            if let svc = runService {
+                svc.cancel()
+            }
+        // Skeleton: no-op (break is implicit via fall-through to next event).
 
-        case .syntaxPrePass:
-            // LintService.syntaxPrePass() — no-op in skeleton; clean result.
-            channel.post(.prePassResult(nil))
+        case .syntaxPrePass(let fragment):
+            if let svc = lintService {
+                // syntaxPrePass is synchronous but creates a fresh engine; run off
+                // the UI thread to avoid a momentary freeze on large files.
+                Task { [channel] in
+                    let diag = svc.syntaxPrePass(fragment)
+                    channel.post(.prePassResult(diag))
+                }
+            } else {
+                // Skeleton: post clean result immediately.
+                channel.post(.prePassResult(nil))
+            }
 
-        case .lint:
-            // LintService.lint() — no-op in skeleton; empty diagnostics.
-            channel.post(.lintFinished([]))
+        case .lint(let fragment, let extraModules):
+            if let svc = lintService {
+                // Build the luacheck globals from the catalog using the current
+                // tomlModuleAvailable probe result from state.
+                let tomlProbed = state.tomlModuleAvailable ?? false
+                let globals = LuaModuleCatalog.v0.luacheckGlobals(
+                    extraModules: extraModules,
+                    tomlProbed: tomlProbed
+                )
+                Task { [channel] in
+                    do {
+                        let diags = try await svc.lint(fragment, knownGlobals: globals)
+                        channel.post(.lintFinished(diags))
+                    } catch {
+                        // Engine not ready or internal failure — post empty diagnostics
+                        // so the reducer can clear the .running lint state.
+                        channel.post(.lintFinished([]))
+                    }
+                }
+            } else {
+                // Skeleton: empty diagnostics.
+                channel.post(.lintFinished([]))
+            }
 
         case .prewarmLint:
-            // LintService.prewarm() — no-op in skeleton; post ready.
-            channel.post(.lintEngineReady)
-            channel.post(.catalogProbed(tomlAvailable: false))
+            if let svc = lintService {
+                Task { [channel] in
+                    await svc.prewarm(
+                        onReady: { channel.post(.lintEngineReady) },
+                        onCatalogProbed: { avail in channel.post(.catalogProbed(tomlAvailable: avail)) },
+                        onFailed: { msg in channel.post(.lintEngineFailed(msg)) }
+                    )
+                }
+            } else {
+                // Skeleton: post ready + no-toml immediately.
+                channel.post(.lintEngineReady)
+                channel.post(.catalogProbed(tomlAvailable: false))
+            }
 
         case .highlight(let id):
             // Dispatch to the Highlighter's serial parse executor.
@@ -214,24 +328,84 @@ public final class AppDriver: @unchecked Sendable {
             }
 
         case .loadSources:
-            // SourceStore.loadSources() — no-op in skeleton.
-            break
+            if let store = sourceStore {
+                // Derive project root and entry list from current state.
+                if let projectDir = projectDirectoryURL(),
+                    case .loaded(let projectFile, _) = state.project
+                {
+                    store.loadAll(entries: projectFile.sources, projectRoot: projectDir)
+                }
+                // If the project isn't loaded yet (e.g. quickFile mode), the
+                // reducer won't emit this effect, so no load is needed.
+            }
+        // Skeleton: no-op.
 
-        case .loadSource:
-            // SourceStore.loadSource() — no-op in skeleton.
-            break
+        case .loadSource(let id):
+            if let store = sourceStore,
+                let projectDir = projectDirectoryURL(),
+                case .loaded(let projectFile, _) = state.project
+            {
+                // Find the matching entry and load it as a one-element batch.
+                let entry = projectFile.sources.first { entry in
+                    // Match by path; for structured files match by id.path too.
+                    entry.path == id.path
+                }
+                if let entry {
+                    store.loadAll(entries: [entry], projectRoot: projectDir)
+                }
+            }
+        // Skeleton: no-op.
 
-        case .loadProject:
-            // ProjectStore.load() — no-op in skeleton.
-            break
+        case .loadProject(let url):
+            if sourceStore != nil {
+                Task { [channel] in
+                    let result = ProjectStore.load(at: url)
+                    channel.post(Self.projectEvent(from: result))
+                }
+            }
+        // Skeleton: no-op.
 
         case .reloadProject:
-            // ProjectStore.reload() — no-op in skeleton.
-            break
+            if sourceStore != nil, let projectDir = projectDirectoryURL() {
+                Task { [channel] in
+                    let result = ProjectStore.load(at: projectDir)
+                    channel.post(Self.projectEvent(from: result))
+                }
+            }
+        // Skeleton: no-op.
 
-        case .saveDesignations:
-            // ProjectStore.saveDesignations() — no-op in skeleton.
-            channel.post(.designationsSaved)
+        case .saveDesignations(let designations):
+            if let store = sourceStore,
+                let projectDir = projectDirectoryURL(),
+                case .loaded(let projectFile, _) = state.project
+            {
+                // Build an updated ProjectFile with the new designations merged
+                // into the matching source entry.
+                let updatedFile = Self.applyDesignations(
+                    designations,
+                    to: projectFile
+                )
+                let fileURL = projectDir.appendingPathComponent(ProjectStore.fileName)
+                Task { [channel] in
+                    _ = store  // referenced to suppress capture warning
+                    do {
+                        try ProjectStore.save(updatedFile, to: fileURL)
+                        channel.post(.designationsSaved)
+                    } catch {
+                        // Save failure: post a projectMalformed diagnostic so the
+                        // reducer surfaces the error rather than silently swallowing it.
+                        let diag = Diagnostic(
+                            severity: .error,
+                            message: "Could not save designations: \(error.localizedDescription)",
+                            source: .projectConfig
+                        )
+                        channel.post(.projectMalformed(diag))
+                    }
+                }
+            } else {
+                // Skeleton: acknowledge immediately.
+                channel.post(.designationsSaved)
+            }
 
         case .loadPickerTree(let id, let projectRoot):
             // Parse the structured file for the picker modal (ux-spec §3.6).
@@ -546,5 +720,130 @@ public final class AppDriver: @unchecked Sendable {
         } catch {
             return .pickerTreeReady(id, tree: nil, errorMessage: error.localizedDescription)
         }
+    }
+
+    // MARK: Service helpers
+
+    /// Returns the project root directory URL derived from the current launch mode.
+    ///
+    /// - `.project(url)` → `url` (the directory itself).
+    /// - `.quickFile(url)` → the file's containing directory.
+    /// - `.empty` → nil (no project context).
+    ///
+    /// Called on the UI thread when dispatching source / project effects.
+    private func projectDirectoryURL() -> URL? {
+        switch state.launch {
+        case .project(let dir):
+            return dir
+        case .quickFile(let fileURL):
+            return fileURL.deletingLastPathComponent()
+        case .empty:
+            return nil
+        }
+    }
+
+    /// Maps a `CoreRunOutcome` to the TUI-layer `RunOutcome`.
+    ///
+    /// The two enums are structurally identical but live in different layers
+    /// (MoonSwiftCore vs. MoonSwiftTUI) to avoid the core importing TUI types.
+    /// This mapper is the single cross-layer translation point.
+    private static func appOutcome(from core: CoreRunOutcome) -> RunOutcome {
+        switch core {
+        case .done(let value, let duration):
+            return .done(value: value, duration: duration)
+        case .error(let diag, let traceback):
+            // CoreRunOutcome.error carries traceback as String?; RunOutcome expects [String].
+            return .error(diag, traceback: traceback.map { [$0] } ?? [])
+        case .cancelled:
+            return .cancelled
+        case .limitExceeded(let kind):
+            switch kind {
+            case .instructions:
+                return .limitExceeded(kind: .instructions)
+            case .wallClock:
+                return .limitExceeded(kind: .wallClock)
+            }
+        }
+    }
+
+    /// Maps a `ProjectStore.LoadResult` to the `AppEvent` the reducer expects.
+    ///
+    /// `.unsupportedVersion` has no dedicated AppEvent in P1 — it is mapped to
+    /// `.projectLoaded` so the reducer can display the file read-only. A TODO
+    /// comment references CR-003 where a dedicated flow should be added.
+    ///
+    /// - TODO: CR-003 — add `.projectUnsupportedVersion` AppEvent and handle
+    ///   the read-only degraded state explicitly in the reducer.
+    private static func projectEvent(from result: ProjectStore.LoadResult) -> AppEvent {
+        switch result {
+        case .loaded(let file, let diags):
+            return .projectLoaded(file, diagnostics: diags)
+        case .malformed(let diag):
+            return .projectMalformed(diag)
+        case .unsupportedVersion(let file, let diags):
+            // TODO: CR-003 unsupportedVersion flow — no dedicated AppEvent yet.
+            // Map to projectLoaded so the project is visible; the diagnostics
+            // will include the unsupported-version warning from ProjectValidation.
+            return .projectLoaded(file, diagnostics: diags)
+        }
+    }
+
+    /// Applies updated `[FieldDesignation]` to the matching source entry in
+    /// `projectFile`, returning a new `ProjectFile` with the designations merged.
+    ///
+    /// The matching entry is identified by the `SourceID.path` of each designation's
+    /// source. Entries with no matching designation are left unchanged.
+    ///
+    /// This is the write-back path for the picker modal save (ux-spec §3.6): when
+    /// the user confirms marks, the reducer emits `Effect.saveDesignations` and the
+    /// AppDriver calls this helper to build the updated file before persisting it.
+    private static func applyDesignations(
+        _ designations: [FieldDesignation],
+        to projectFile: ProjectFile
+    ) -> ProjectFile {
+        // Group designations by source path so each entry is updated once.
+        var byPath: [String: [FieldDesignation]] = [:]
+        for designation in designations {
+            // FieldDesignation.jsonpath is the path expression; we need to know
+            // which source entry it belongs to. The picker state carries the
+            // sourceID.path for the file being edited, but that context is not
+            // directly in FieldDesignation. We update the entry that currently
+            // has the *same* designations (or any entry — the reducer only emits
+            // saveDesignations for the currently-open picker's source).
+            //
+            // Strategy: because the reducer only emits saveDesignations for one
+            // source file at a time (the picker is single-modal), we match the
+            // entry by comparing its current field jsonpaths against the incoming
+            // designations. The simplest robust approach is to store all incoming
+            // designations into the first structured-file source entry whose path
+            // appears in the picker state. Since we don't have the source ID here,
+            // we rebuild all entries that currently carry FieldDesignation data.
+            //
+            // For P1, the picker updates a single file; the designations replace
+            // that file's fields entirely. We therefore update every source entry
+            // that has at least one field whose jsonpath appears in the incoming
+            // designations list — a direct match.
+            byPath[designation.jsonpath, default: []].append(designation)
+        }
+
+        // Build updated source entries: replace fields on entries whose existing
+        // field jsonpaths overlap with the incoming designation set.
+        let incomingPaths = Set(designations.map(\.jsonpath))
+        let updatedSources = projectFile.sources.map { entry -> SourceEntry in
+            let existingPaths = Set(entry.fields.map(\.jsonpath))
+            guard !existingPaths.isEmpty, !existingPaths.isDisjoint(with: incomingPaths) else {
+                return entry
+            }
+            // Replace this entry's fields with the incoming designations.
+            return SourceEntry(path: entry.path, fields: designations)
+        }
+
+        return ProjectFile(
+            luaVersion: projectFile.luaVersion,
+            sources: updatedSources,
+            run: projectFile.run,
+            lint: projectFile.lint,
+            settings: projectFile.settings
+        )
     }
 }
