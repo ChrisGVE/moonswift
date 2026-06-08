@@ -503,15 +503,63 @@ struct RunFlowSequenceTests {
         let (s3, _) = reduce(s2, .runOutput(["line 3"]))
         #expect(s3.bottomPane.outputBuffer == ["line 1", "line 2", "line 3"])
 
-        // Step 4: runFinished transitions state
+        // Step 4: runFinished transitions state and appends footer (ux-spec §6.3)
         let (s4, e4) = reduce(s3, .runFinished(.done(value: nil, duration: .milliseconds(42))))
         #expect(isCompleted(s4, .done(value: nil, duration: .milliseconds(42))))
         #expect(
             !isRunning(s4),
             "After runFinished: runState must not be .running"
         )
+        // Footer must be appended to the output buffer so the Output tab shows it.
+        #expect(
+            s4.bottomPane.outputBuffer.last == "done — 42ms",
+            "runFinished must append footer to outputBuffer; got \(s4.bottomPane.outputBuffer)"
+        )
         // No transient is active so tick must stop
         #expect(hasStopTick(e4), "After runFinished with no transient: must stop tick")
+    }
+
+    // MARK: runFinished footer (ux-spec §6.3)
+
+    @Test("runFinished(.done, value:nil) appends done footer to outputBuffer")
+    func runFinishedDoneFooter() {
+        let (state, _) = loadedSourceState()
+        let (s1, _) = reduce(state, .key(.char("r"), modifiers: []))
+        let (s2, _) = reduce(s1, .runOutput(["hello"]))
+
+        let (s3, _) = reduce(s2, .runFinished(.done(value: nil, duration: .milliseconds(10))))
+
+        #expect(
+            s3.bottomPane.outputBuffer.last == "done — 10ms",
+            "done outcome with nil value must append done footer"
+        )
+        // No → line when value is nil.
+        let hasReturnLine = s3.bottomPane.outputBuffer.contains { $0.hasPrefix("→ ") }
+        #expect(!hasReturnLine, "done outcome with nil value must not append return-value line")
+    }
+
+    @Test("runFinished(.done, value:non-nil) appends return-value line then footer")
+    func runFinishedDoneWithValueFooter() {
+        let (state, _) = loadedSourceState()
+        let (s1, _) = reduce(state, .key(.char("r"), modifiers: []))
+
+        let (s2, _) = reduce(s1, .runFinished(.done(value: "42", duration: .milliseconds(5))))
+
+        let buf = s2.bottomPane.outputBuffer
+        // Last two entries: return-value line then footer.
+        #expect(buf.count >= 2, "buffer must contain at least the value line and footer")
+        #expect(buf[buf.count - 2] == "→ 42", "second-to-last line must be return-value line")
+        #expect(buf[buf.count - 1] == "done — 5ms", "last line must be done footer")
+    }
+
+    @Test("runFinished(.cancelled) appends cancelled footer")
+    func runFinishedCancelledFooter() {
+        let (state, _) = loadedSourceState()
+        let (s1, _) = reduce(state, .key(.char("r"), modifiers: []))
+
+        let (s2, _) = reduce(s1, .runFinished(.cancelled))
+
+        #expect(s2.bottomPane.outputBuffer.last == "cancelled", "cancelled outcome must append cancelled footer")
     }
 
     // MARK: Concurrent-run guard
@@ -1432,9 +1480,16 @@ struct CrossCuttingSequenceTests {
 
     // MARK: projectLoaded and projectMalformed
 
-    @Test("projectLoaded stores project state")
+    @Test("projectLoaded stores project state and emits loadSources")
     func projectLoaded() {
-        let state = AppState()
+        let id = SourceID(path: "old.lua")
+        var state = AppState()
+        // Pre-populate stale sources/navigator so we can verify they are cleared.
+        let fragment = makeFragment(code: "-- old", path: "old.lua")
+        state.sources = [id: .loaded(fragment)]
+        state.navigatorOrder = [id]
+        state.selection = id
+
         let project = ProjectFile(luaVersion: "5.4")
         let diag = Diagnostic(severity: .warning, message: "unknown key", source: .projectConfig)
 
@@ -1446,7 +1501,12 @@ struct CrossCuttingSequenceTests {
         } else {
             Issue.record("Expected .loaded project state")
         }
-        #expect(effects.isEmpty, "projectLoaded must emit no effects")
+        // Stale state must be cleared to prevent ghost navigator entries.
+        #expect(next.sources.isEmpty, "projectLoaded must clear stale sources")
+        #expect(next.navigatorOrder.isEmpty, "projectLoaded must clear stale navigatorOrder")
+        #expect(next.selection == nil, "projectLoaded must clear stale selection")
+        // Must re-trigger source loading from the fresh project.
+        #expect(hasLoadSources(effects), "projectLoaded must emit .loadSources")
     }
 
     @Test("projectMalformed stores malformed state")

@@ -80,7 +80,13 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
 
     case .projectLoaded(let file, let diagnostics):
         s.project = .loaded(file, diagnostics: diagnostics)
-        return (s, [])
+        // Clear stale sources and navigator order so entries from the previous
+        // project file do not persist after a C-r reload.
+        s.sources = [:]
+        s.navigatorOrder = []
+        s.selection = nil
+        // Re-load sources from the freshly loaded project.
+        return (s, [.loadSources])
 
     case .projectMalformed(let diag):
         s.project = .malformed(diag)
@@ -119,6 +125,13 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         if case .engineError(let message) = outcome {
             Logger.shared.error("Lua engine error during run: \(message)")
         }
+        // Append the return-value line and run footer to the output buffer so
+        // the Output tab always shows the run result (ux-spec §6.3). The renderer
+        // reads outputBuffer as-is and expects these lines to already be present.
+        if case .done(let value, _) = outcome, let v = value {
+            s.bottomPane.appendOutputLines(["→ \(v)"])
+        }
+        s.bottomPane.appendOutputLines([buildRunFooter(outcome: outcome)])
         return (s, tickEffectsAfterRunEnds(s))
 
     case .transient(let message):
@@ -891,7 +904,10 @@ private func reducePickerKey(
         let designations = picker.marks.sorted().map { FieldDesignation(jsonpath: $0) }
         s.pickerState = picker
         // .designationsSaved handler closes picker and reloads sources.
-        return (s, [.saveDesignations(designations)])
+        // Pass picker.filePath so applyDesignations can match the entry by path
+        // (not by field overlap), which correctly handles the first-use case
+        // where the entry has zero prior fields.
+        return (s, [.saveDesignations(designations, sourcePath: picker.filePath)])
 
     // Esc — cancel with dirty-state confirmation prompt
     case (.escape, []):
