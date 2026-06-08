@@ -83,9 +83,9 @@ struct TickSourceTests {
 
         // Count ticks over a 1s window. At the replaced 50ms interval ~19 ticks
         // fire; if the replacement were ignored (still 200ms) at most 5 could.
-        // The ≥ 8 threshold separates the two by ~2× in both directions, which
-        // absorbs CI-runner scheduling starvation (a 130ms window flaked on
-        // shared runners where only 1 tick landed instead of 2).
+        // The ≥ 6 threshold still excludes the 200ms case (max 5) while leaving
+        // headroom for CI-runner scheduling starvation (a ≥8 threshold flaked
+        // at 7 ticks on a shared runner).
         Thread.sleep(forTimeInterval: 1.0)
         tick.stop()
 
@@ -96,8 +96,8 @@ struct TickSourceTests {
             return false
         }.count
         #expect(
-            tickCount >= 8,
-            "After interval replacement to 50ms, must see ≥ 8 ticks in 1s (200ms interval could yield at most 5)")
+            tickCount >= 6,
+            "After interval replacement to 50ms, must see ≥ 6 ticks in 1s (200ms interval could yield at most 5)")
     }
 
     @Test("stop terminates the background thread cleanly")

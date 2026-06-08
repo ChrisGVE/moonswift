@@ -184,6 +184,30 @@ private final class CellGridBackend: RenderBackend {
 
 // MARK: - Snapshot serialization
 
+/// Masks volatile substrings so goldens are stable across machines and CI.
+///
+/// The run-header time (`── Run N · HH:MM:SS ──` / `· HH:MM ──`) is rendered
+/// in the runner's local timezone (`Calendar.current`, which is correct for
+/// users). Snapshots therefore replaced the digits with `·` so a golden
+/// recorded in CEST still matches a UTC CI runner. Applied symmetrically at
+/// serialization, so both recorded goldens and fresh renders are masked.
+private func normalizeVolatile(_ row: String) -> String {
+    var s = row
+    // Same-width dot masking preserves the fixed grid geometry (border
+    // alignment depends on exact column counts). `· HH:MM:SS ` → `· ··:··:·· `
+    // and `· HH:MM ─` → `· ··:·· ─`.
+    let rules: [(String, String)] = [
+        (#"(· )\d{2}:\d{2}:\d{2}( )"#, "$1··:··:··$2"),
+        (#"(· )\d{2}:\d{2}( ─)"#, "$1··:··$2"),
+    ]
+    for (pattern, template) in rules {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { continue }
+        let range = NSRange(s.startIndex..<s.endIndex, in: s)
+        s = re.stringByReplacingMatches(in: s, range: range, withTemplate: template)
+    }
+    return s
+}
+
 /// A serialised snapshot: character content rows plus an optional style section.
 private struct Snapshot {
 
@@ -197,7 +221,7 @@ private struct Snapshot {
         var styleLines: [String] = []
 
         for r in 0..<grid.rows {
-            charRows.append(grid.rowText(r))
+            charRows.append(normalizeVolatile(grid.rowText(r)))
             for c in 0..<grid.cols {
                 let cell = grid.cells[r][c]
                 if cell.style != .default {
