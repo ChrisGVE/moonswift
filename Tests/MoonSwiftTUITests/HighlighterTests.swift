@@ -269,7 +269,12 @@ struct HighlighterLuaTests {
 
 // MARK: - LRU eviction tests
 
-@Suite("Highlighter — LRU cache")
+// .serialized prevents the two LRU tests from running in parallel with the rest
+// of the highlighter suite and from competing with each other. Under CI thread
+// starvation the cooperative pool that delivers .highlightReady events was
+// delayed past the 5 s deadline; serialisation gives each test the full thread
+// budget. Each test also uses a 20 s per-highlight deadline for the same reason.
+@Suite("Highlighter — LRU cache", .serialized)
 struct HighlighterLRUTests {
 
     @Test("evicting 10 sources (beyond capacity 8) does not lose results")
@@ -279,11 +284,12 @@ struct HighlighterLRUTests {
 
         // Submit requests sequentially, one at a time, to keep the test simple.
         // The LRU capacity is 8; after 8 distinct IDs the oldest is evicted.
+        // 20 s deadline absorbs CI thread starvation on the cooperative pool.
         for i in 0..<10 {
             let id = SourceID(path: "evict\(i).lua")
             let channel = EventChannel()
             highlighter.highlight(id, text: "local x = \(i)", via: channel)
-            let spans = await waitForHighlight(channel: channel, id: id, deadline: 5)
+            let spans = await waitForHighlight(channel: channel, id: id, deadline: 20)
             results.append((id, spans))
         }
 
@@ -298,9 +304,10 @@ struct HighlighterLRUTests {
         let target = SourceID(path: "target.lua")
 
         // Initial parse — caches the tree.
+        // 20 s deadline absorbs CI thread starvation on the cooperative pool.
         let ch1 = EventChannel()
         highlighter.highlight(target, text: "local x = 1", via: ch1)
-        let first = await waitForHighlight(channel: ch1, id: target, deadline: 5)
+        let first = await waitForHighlight(channel: ch1, id: target, deadline: 20)
         #expect(first != nil, "First highlight must complete")
 
         // Fill cache to evict 'target' (capacity = 8, push 8 more distinct IDs).
@@ -308,13 +315,13 @@ struct HighlighterLRUTests {
             let id = SourceID(path: "filler\(i).lua")
             let ch = EventChannel()
             highlighter.highlight(id, text: "local y = \(i)", via: ch)
-            _ = await waitForHighlight(channel: ch, id: id, deadline: 5)
+            _ = await waitForHighlight(channel: ch, id: id, deadline: 20)
         }
 
         // Re-highlight target after eviction — full re-parse, no cached tree.
         let ch2 = EventChannel()
         highlighter.highlight(target, text: "local x = 2", via: ch2)
-        let second = await waitForHighlight(channel: ch2, id: target, deadline: 5)
+        let second = await waitForHighlight(channel: ch2, id: target, deadline: 20)
         #expect(second != nil, "Re-highlight after eviction must complete")
         #expect(second?.isEmpty == false, "Re-highlight must produce spans")
     }
