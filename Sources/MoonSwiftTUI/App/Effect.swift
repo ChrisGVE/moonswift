@@ -71,6 +71,14 @@ public enum Effect: Sendable {
     /// `.designationsSaved` when complete.
     case saveDesignations([FieldDesignation])
 
+    /// Parse the structured file for the given `SourceID` into a `TreeValue`
+    /// tree and post `.pickerTreeReady` when complete. Used by the picker modal
+    /// to load the tree the user wants to browse (ux-spec §3.6).
+    ///
+    /// The file path is derived from `SourceID.path` (project-relative). The
+    /// project root URL is passed along so the AppDriver can resolve it.
+    case loadPickerTree(SourceID, projectRoot: URL)
+
     // MARK: Editor
 
     /// Suspend the pump, leave the alternate screen, spawn `$EDITOR` on the

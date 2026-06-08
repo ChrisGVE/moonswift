@@ -119,6 +119,14 @@ public enum AppEvent: Sendable {
     /// Designations were saved to the project file.
     case designationsSaved
 
+    /// The structured-file picker tree has been parsed and is ready to display.
+    ///
+    /// Posted by the AppDriver after `Effect.loadPickerTree` completes. On
+    /// success, `tree` is non-nil. On parse failure, `tree` is nil and
+    /// `errorMessage` carries the human-readable parse error — the picker
+    /// shows "Cannot parse file: <errorMessage>" (ux-spec §3.6).
+    case pickerTreeReady(SourceID, tree: TreeValue?, errorMessage: String?)
+
     // MARK: Run service (RunService callbacks)
 
     /// One or more output lines from the running script (batched by Coalescer).

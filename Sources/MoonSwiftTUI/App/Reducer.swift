@@ -87,7 +87,14 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         return (s, [])
 
     case .designationsSaved:
+        // Close the picker (if open) and reload sources so the navigator
+        // reflects the newly saved designations.
+        s.pickerState = nil
+        s.focus = .pane(.navigator)
         return (s, [.loadSources])
+
+    case .pickerTreeReady(let id, let tree, let errorMessage):
+        return reducePickerTreeReady(s, id: id, tree: tree, errorMessage: errorMessage)
 
     // MARK: Run
 
@@ -161,6 +168,14 @@ private func reduceTick(_ s: AppState) -> (AppState, [Effect]) {
     // Expire the transient message if its deadline has passed.
     if let t = s.transient, Date() >= t.expiry {
         s.transient = nil
+    }
+
+    // Expire the 500 ms highlight pulse: the tick fires once after 500 ms,
+    // which marks the end of the pulse animation (ux-spec §3.5). Clearing
+    // `jumpPulseLine` causes the renderer to revert to the normal line style
+    // on the next frame.
+    if s.codePane.jumpPulseLine != nil {
+        s.codePane.jumpPulseLine = nil
     }
 
     // Advance spinner phase (wraps at 8 — braille set has 8 frames).
@@ -683,15 +698,169 @@ private func reduceHelpOverlayKey(
     return (s, [])
 }
 
+// MARK: - Picker key dispatch (ux-spec §3.6, §2.3 picker table)
+
+/// Handles all keyboard input while the structured-file picker modal is open.
+///
+/// Key routing (ux-spec §2.3 picker table):
+///   j / k          — move tree cursor down / up
+///   Space/Right/l  — expand node
+///   Left/h         — collapse node
+///   Enter / m      — mark/unmark string field
+///   s              — save all marks and close picker
+///   Esc            — cancel with optional dirty confirmation
+///   y              — confirm discard (when awaitingDiscardConfirmation)
+///
+/// When the picker has no tree yet (loading), only Esc is active. When a parse
+/// error occurred, only Esc exits (ux-spec §3.6 error case).
 private func reducePickerKey(
     _ s: AppState,
     code: KeyCode,
     modifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
     var s = s
-    if case (.escape, []) = (code, modifiers) {
+
+    // If picker state is nil (unexpected), reset focus.
+    guard var picker = s.pickerState else {
         s.focus = .pane(.navigator)
+        return (s, [])
     }
+
+    // When awaiting discard confirmation, only y and any other key (→ N) matter.
+    if picker.awaitingDiscardConfirmation {
+        switch (code, modifiers) {
+        case (.char("y"), []):
+            // Discard confirmed — close without saving.
+            s.pickerState = nil
+            s.focus = .pane(.navigator)
+            return (s, [])
+        default:
+            // Any other key returns to the picker (N or anything else).
+            picker.awaitingDiscardConfirmation = false
+            s.pickerState = picker
+            return (s, [])
+        }
+    }
+
+    // Parse error state: only Esc exits (ux-spec §3.6).
+    if picker.parseError != nil {
+        if case (.escape, []) = (code, modifiers) {
+            s.pickerState = nil
+            s.focus = .pane(.navigator)
+        }
+        return (s, [])
+    }
+
+    // Tree still loading: only Esc is active.
+    guard var tree = picker.tree else {
+        if case (.escape, []) = (code, modifiers) {
+            s.pickerState = nil
+            s.focus = .pane(.navigator)
+        }
+        return (s, [])
+    }
+
+    let rows = tree.visibleRows()
+
+    switch (code, modifiers) {
+
+    // j — cursor down
+    case (.char("j"), []):
+        if !rows.isEmpty {
+            picker.cursorRow = min(picker.cursorRow + 1, rows.count - 1)
+        }
+
+    // k — cursor up
+    case (.char("k"), []):
+        picker.cursorRow = max(picker.cursorRow - 1, 0)
+
+    // Space / Right / l — expand node
+    case (.char(" "), []), (.right, []), (.char("l"), []):
+        if rows.indices.contains(picker.cursorRow) {
+            let row = rows[picker.cursorRow]
+            if row.kind == .obj || row.kind == .arr {
+                tree.expanded.insert(row.nodeID)
+                picker.tree = tree
+            }
+        }
+
+    // Left / h — collapse node
+    case (.left, []), (.char("h"), []):
+        if rows.indices.contains(picker.cursorRow) {
+            let row = rows[picker.cursorRow]
+            if row.kind == .obj || row.kind == .arr {
+                tree.expanded.remove(row.nodeID)
+                picker.tree = tree
+                // Clamp cursor after collapse shrinks the visible list.
+                let newRows = tree.visibleRows()
+                picker.cursorRow = min(picker.cursorRow, max(0, newRows.count - 1))
+            }
+        }
+
+    // Enter / m — mark or unmark a string field
+    case (.enter, []), (.char("m"), []):
+        if rows.indices.contains(picker.cursorRow) {
+            let row = rows[picker.cursorRow]
+            if row.kind == .str {
+                if picker.marks.contains(row.normalized) {
+                    picker.marks.remove(row.normalized)
+                } else {
+                    picker.marks.insert(row.normalized)
+                }
+            }
+        }
+
+    // s — save all marks to project file and close picker
+    case (.char("s"), []):
+        let designations = picker.marks.sorted().map { FieldDesignation(jsonpath: $0) }
+        s.pickerState = picker
+        // .designationsSaved handler closes picker and reloads sources.
+        return (s, [.saveDesignations(designations)])
+
+    // Esc — cancel with dirty-state confirmation prompt
+    case (.escape, []):
+        if picker.isDirty {
+            picker.awaitingDiscardConfirmation = true
+            s.pickerState = picker
+        } else {
+            s.pickerState = nil
+            s.focus = .pane(.navigator)
+        }
+        return (s, [])
+
+    default:
+        break
+    }
+
+    s.pickerState = picker
+    return (s, [])
+}
+
+/// Handles the .pickerTreeReady event: populates the PickerState tree on
+/// success or records the parse error for the renderer to display.
+private func reducePickerTreeReady(
+    _ s: AppState,
+    id: SourceID,
+    tree: TreeValue?,
+    errorMessage: String?
+) -> (AppState, [Effect]) {
+    var s = s
+    // Only apply if the picker is still open for this SourceID.
+    guard var picker = s.pickerState, picker.sourceID == id else {
+        return (s, [])
+    }
+
+    if let error = errorMessage {
+        picker.parseError = error
+        picker.tree = nil
+    } else if let treeValue = tree {
+        picker.tree = PickerTree(root: treeValue)
+        // Clamp cursor to the first visible row (safe: cursor starts at 0).
+        let rowCount = picker.tree?.visibleRows().count ?? 0
+        picker.cursorRow = min(picker.cursorRow, max(0, rowCount - 1))
+    }
+
+    s.pickerState = picker
     return (s, [])
 }
 
@@ -864,6 +1033,17 @@ private func armTickIfNeeded(_ s: AppState) -> Effect? {
         }
     }
 
+    // Highlight pulse (500 ms) while a jump-target pulse is animating (ux-spec §3.5).
+    // One tick fires after 500 ms; the tick handler clears `jumpPulseLine`.
+    if s.codePane.jumpPulseLine != nil {
+        let candidate = TickInterval.highlightPulse
+        if let m = minimum {
+            minimum = m < candidate ? m : candidate
+        } else {
+            minimum = candidate
+        }
+    }
+
     guard let interval = minimum else { return nil }
     return .startTick(interval: interval)
 }
@@ -958,26 +1138,67 @@ private func fullOrderIndex(filteredPos: Int, filtered: [SourceID], order: [Sour
     return order.firstIndex(of: id) ?? max(0, order.count - 1)
 }
 
-/// Opens the structured-file picker when the selected entry has a JSONPath, or
-/// shows a 1.5 s transient if the selected source is not a structured file.
+/// Opens the structured-file picker for the selected navigator entry, or shows
+/// a 1.5 s transient when the entry is not a structured file (ux-spec §3.6).
 ///
-/// Only structured-file entries (ux-spec §3.6: those with a `jsonpath` in their
-/// SourceID) can open the picker. Whole `.lua` file entries are not eligible.
+/// Structured files are `.json`, `.yaml`, `.yml`, and `.toml` entries — either
+/// whole-file entries (jsonpath == nil) or individual field entries (jsonpath
+/// != nil). In both cases the picker browses the entire file; pre-existing
+/// designations are pre-filled from the project state.
+///
+/// The picker requires the project root URL to load the file; if the app is
+/// not in project mode (LaunchMode.project), the picker is unavailable.
 private func openPickerOrTransient(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
     guard s.navigator.selectedIndex < s.navigatorOrder.count else {
         return (s, [])
     }
     let id = s.navigatorOrder[s.navigator.selectedIndex]
-    if id.jsonpath != nil {
-        // Structured-file entry — open the picker modal (ux-spec §3.6).
-        s.focus = .pickerModal
-        return (s, [])
-    } else {
-        // Whole .lua file or unknown — picker is not applicable.
+    let ext = (id.path as NSString).pathExtension.lowercased()
+    let isStructured = ext == "json" || ext == "yaml" || ext == "yml" || ext == "toml"
+
+    guard isStructured else {
+        // Whole .lua file or unknown extension — picker is not applicable.
         s.transient = TransientMessage(text: "Picker available for structured files only")
         return (s, [armTickIfNeeded(s)].compactMap { $0 })
     }
+
+    guard case .project(let root) = s.launch else {
+        s.transient = TransientMessage(text: "Picker requires a project")
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+    }
+
+    // Collect pre-existing designations for this file so the picker can
+    // pre-fill marks and detect dirtiness on close.
+    let preExisting = existingDesignations(for: id.path, project: s.project)
+
+    // Seed picker state — tree is nil until .pickerTreeReady arrives.
+    s.pickerState = PickerState(
+        sourceID: id,
+        filePath: id.path,
+        tree: nil,
+        parseError: nil,
+        cursorRow: 0,
+        marks: preExisting,
+        preExistingMarks: preExisting,
+        awaitingDiscardConfirmation: false
+    )
+    s.focus = .pickerModal
+
+    return (s, [.loadPickerTree(id, projectRoot: root)])
+}
+
+/// Returns the set of normalized JSONPath strings already designated for `filePath`
+/// in the current project state.
+private func existingDesignations(for filePath: String, project: ProjectState) -> Set<String> {
+    guard case .loaded(let file, _) = project else { return [] }
+    var paths: Set<String> = []
+    for entry in file.sources where entry.path == filePath {
+        for field in entry.fields {
+            paths.insert(field.jsonpath)
+        }
+    }
+    return paths
 }
 
 // MARK: - Diagnostic navigation
@@ -1016,8 +1237,12 @@ private func jumpToDiagnostic(
 
     s.codePane.diagnosticIndex = newIndex
     let targetLine = diags[newIndex].line
-    s.codePane.cursorLine = max(0, targetLine - 1)
-    s.codePane.scrollOffset = max(0, targetLine - 1)
+    let targetIdx = max(0, targetLine - 1)
+    s.codePane.cursorLine = targetIdx
+    // Center the target line in the visible area when possible (ux-spec §3.5,
+    // task 31). `halfPageSize` approximates half the code-pane height; the
+    // renderer clips any over-scroll to the last line automatically.
+    s.codePane.scrollOffset = max(0, targetIdx - halfPageSize)
     return (s, [])
 }
 

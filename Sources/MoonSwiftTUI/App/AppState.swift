@@ -8,6 +8,10 @@
 // Upstream: MoonSwiftCore (ProjectFile, SourceID, SourceState, Diagnostic,
 //           LuaSourceFragment), AppEvent (HighlightSpan, ThemeToken, RunOutcome)
 // Downstream: Reducer.swift (produces AppState), Renderer.swift (reads AppState)
+//
+// Picker state (PickerState): holds the tree-browse state while the picker
+// modal is open. Populated by reducePickerKey when .pickerTreeReady arrives;
+// cleared on save or cancel.
 
 import Foundation
 import MoonSwiftCore
@@ -407,6 +411,95 @@ public struct NavigatorState: Sendable, Equatable {
     }
 }
 
+// MARK: - PickerState
+
+/// The state of the structured-file picker modal (ux-spec.md §3.6).
+///
+/// Held as an Optional in AppState — non-nil only while the picker is open.
+/// Populated by the reducer when .pickerTreeReady arrives, cleared on save or
+/// cancel. The picker shows the parsed TreeValue of the selected structured file
+/// as an interactive tree; users navigate to string fields and mark them for
+/// persistence as FieldDesignation entries in moonswift.toml.
+public struct PickerState: Sendable, Equatable {
+
+    // MARK: Source identity
+
+    /// The structured-file SourceID whose tree is being browsed.
+    ///
+    /// Used by the save path to determine which file's designations to update
+    /// and by the renderer to label the picker header.
+    public var sourceID: SourceID
+
+    /// Human-readable file path for the picker title (e.g. "data/config.json").
+    public var filePath: String
+
+    // MARK: Tree content
+
+    /// The decoded TreeValue for the file (root node).
+    ///
+    /// nil when the file failed to parse — in that case `parseError` is set.
+    public var tree: PickerTree?
+
+    /// When non-nil, the file could not be parsed. The picker shows
+    /// "Cannot parse file: <parseError>" and nothing is markable (ux-spec §3.6).
+    public var parseError: String?
+
+    // MARK: Navigation
+
+    /// The 0-based index of the currently focused row in the flattened visible
+    /// row list produced by `PickerTree.visibleRows`.
+    public var cursorRow: Int
+
+    // MARK: Marks
+
+    /// The set of normalized JSONPath strings the user has toggled ON in this
+    /// session (added or kept). Pre-existing designations from the project file
+    /// are populated here when the picker opens so they appear pre-marked.
+    public var marks: Set<String>
+
+    /// Normalized JSONPaths that were already saved in moonswift.toml before
+    /// the picker opened. Used to determine whether the picker is dirty (any
+    /// marks differ from the pre-existing set) and to style pre-existing marks
+    /// in `keyword` color vs. newly-added marks in `added` color.
+    public var preExistingMarks: Set<String>
+
+    // MARK: Discard confirmation
+
+    /// When true, the reducer has received Esc on a dirty picker and is waiting
+    /// for the user to confirm discard with y/N (ux-spec §3.6).
+    public var awaitingDiscardConfirmation: Bool
+
+    // MARK: Computed
+
+    /// True when the current marks differ from the marks that were pre-existing
+    /// when the picker opened — i.e., the user has made unsaved changes.
+    public var isDirty: Bool {
+        marks != preExistingMarks
+    }
+
+    // MARK: Init
+
+    public init(
+        sourceID: SourceID,
+        filePath: String,
+        tree: PickerTree? = nil,
+        parseError: String? = nil,
+        cursorRow: Int = 0,
+        marks: Set<String> = [],
+        preExistingMarks: Set<String> = [],
+        awaitingDiscardConfirmation: Bool = false
+    ) {
+        self.sourceID = sourceID
+        self.filePath = filePath
+        self.tree = tree
+        self.parseError = parseError
+        self.cursorRow = cursorRow
+        self.marks = marks
+        self.preExistingMarks = preExistingMarks
+        self.awaitingDiscardConfirmation = awaitingDiscardConfirmation
+    }
+}
+
 // MARK: - AppState
 
 /// The entire mutable state of the MoonSwift TUI.
@@ -496,6 +589,15 @@ public struct AppState: Sendable {
     /// User-adjustable pane dimensions.
     public var paneLayout: PaneLayout
 
+    // MARK: Picker modal
+
+    /// Non-nil while the structured-file picker modal is open (ux-spec §3.6).
+    ///
+    /// The picker occupies the code-pane area and intercepts all keyboard input.
+    /// Set when the user presses `m` on a structured-file navigator entry (after
+    /// the tree loads via Effect.loadPickerTree); cleared on save or cancel.
+    public var pickerState: PickerState?
+
     // MARK: Initialiser
 
     /// Seed state: constructed by the AppDriver before the first `reduce` call.
@@ -518,7 +620,8 @@ public struct AppState: Sendable {
         theme: ThemeState = ThemeState(),
         transient: TransientMessage? = nil,
         navigator: NavigatorState = NavigatorState(),
-        paneLayout: PaneLayout = PaneLayout()
+        paneLayout: PaneLayout = PaneLayout(),
+        pickerState: PickerState? = nil
     ) {
         self.launch = launch
         self.project = project
@@ -536,5 +639,6 @@ public struct AppState: Sendable {
         self.transient = transient
         self.navigator = navigator
         self.paneLayout = paneLayout
+        self.pickerState = pickerState
     }
 }

@@ -207,6 +207,14 @@ public final class AppDriver: @unchecked Sendable {
             // ProjectStore.saveDesignations() — no-op in skeleton.
             channel.post(.designationsSaved)
 
+        case .loadPickerTree(let id, let projectRoot):
+            // Parse the structured file for the picker modal (ux-spec §3.6).
+            // Dispatched to a background Task; result posted as .pickerTreeReady.
+            Task {
+                let tree = await Self.loadPickerTreeValue(id: id, projectRoot: projectRoot)
+                self.channel.post(tree)
+            }
+
         case .spawnEditor(let url):
             // Full pump-park + terminal suspend + editor spawn + resume sequence.
             // See ARCHITECTURE.md §5.2 and docs/internals/ffi-boundary.md for the
@@ -347,5 +355,60 @@ public final class AppDriver: @unchecked Sendable {
         pump.stop()
         tickSource.stop()
         // Terminal.teardown() called here in the full implementation (task 13).
+    }
+
+    // MARK: Picker tree loader
+
+    /// Parses a structured file on a background Task and returns the picker-ready
+    /// AppEvent to post. Resolves the file format from the `SourceID.path` extension.
+    ///
+    /// Called from `executeSingle(.loadPickerTree)` inside a `Task {}` block so
+    /// the parse never blocks the UI thread. Dispatched as static so it does not
+    /// capture `self` and can run concurrently without data-race risk.
+    ///
+    /// Supported formats: `.json` → `decodeJSON`, `.yaml` / `.yml` → `decodeYAML`,
+    /// `.toml` → `decodeTOML`. Unknown extension → parse error event.
+    private static func loadPickerTreeValue(id: SourceID, projectRoot: URL) async -> AppEvent {
+        let fileURL = projectRoot.appendingPathComponent(id.path)
+        let ext = (id.path as NSString).pathExtension.lowercased()
+
+        let raw: String
+        do {
+            raw = try String(contentsOf: fileURL, encoding: .utf8)
+        } catch {
+            return .pickerTreeReady(id, tree: nil, errorMessage: error.localizedDescription)
+        }
+
+        do {
+            let tree: TreeValue
+            switch ext {
+            case "json":
+                tree = try decodeJSON(raw)
+            case "yaml", "yml":
+                // For YAML, use the document index from the SourceID (multi-doc support).
+                tree = try decodeYAML(raw, document: id.document)
+            case "toml":
+                tree = try decodeTOML(raw)
+            default:
+                return .pickerTreeReady(
+                    id,
+                    tree: nil,
+                    errorMessage: "Unsupported file format: .\(ext)"
+                )
+            }
+            return .pickerTreeReady(id, tree: tree, errorMessage: nil)
+        } catch let e as TreeDecoderError {
+            let msg: String
+            switch e {
+            case .jsonMalformed(let r): msg = r
+            case .yamlMalformed(let r): msg = r
+            case .tomlMalformed(let r): msg = r
+            case .yamlDocumentIndexOutOfRange(let req, let avail):
+                msg = "document \(req) requested but only \(avail) available"
+            }
+            return .pickerTreeReady(id, tree: nil, errorMessage: msg)
+        } catch {
+            return .pickerTreeReady(id, tree: nil, errorMessage: error.localizedDescription)
+        }
     }
 }
