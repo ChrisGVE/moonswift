@@ -697,6 +697,43 @@ struct SourceStoreLoadStructuredFileTests {
         #expect(fragment.provenance.lineOffset == 1)
     }
 
+    // MARK: - TOML inline-array index regression (#3)
+
+    /// Regression test: TOML inline arrays (scripts = ["a", "b"]) must still
+    /// resolve via index steps after the array-of-tables fix (#3).
+    @Test("TOML inline array — $.handlers.scripts[0] resolves first element (regression #3)")
+    func tomlInlineArrayIndex() async {
+        let event = await load(file: "scripts-inline-array.toml", jsonpath: "$.handlers.scripts[0]")
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        #expect(id.jsonpath == "$.handlers.scripts[0]")
+        #expect(fragment.code == "print('first')")
+
+        // R7 cross-check: span bytes must equal the decoded string value.
+        let fileURL = fixturesRoot.appendingPathComponent("scripts-inline-array.toml")
+        let data = try! Data(contentsOf: fileURL)
+        let spanStart = fragment.provenance.byteRange.lowerBound
+        let spanEnd = fragment.provenance.byteRange.upperBound
+        let spanText = String(data: data[spanStart..<spanEnd], encoding: .utf8)
+        #expect(spanText == fragment.code, "R7: span bytes must equal decoded code value")
+    }
+
+    @Test("TOML inline array — $.handlers.scripts[1] resolves second element (regression #3)")
+    func tomlInlineArrayIndexSecond() async {
+        let event = await load(file: "scripts-inline-array.toml", jsonpath: "$.handlers.scripts[1]")
+
+        guard case .loaded(_, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event)")
+            return
+        }
+
+        #expect(fragment.code == "return 42")
+    }
+
     // MARK: - Multi-document YAML
 
     @Test("YAML multi-doc — document 0 loads first document's field")

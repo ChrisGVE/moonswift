@@ -1,0 +1,7 @@
+## scripts-inline-array.toml — inline-array regression fixture
+##
+## Used by SourceStoreLoadStructuredFileTests to verify that TOML inline-array
+## index steps ($.items[0]) still work after the array-of-tables fix (#3).
+
+[handlers]
+scripts = ["print('first')", "return 42"]

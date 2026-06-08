@@ -412,38 +412,12 @@ struct SourceStoreFixtureIntegrationTests {
 
     // MARK: structured-toml
 
-    // BUG REPORT — SpanLocator: TOML array-of-tables index step fails
-    //
-    // Expected: $.hooks[0].script resolves to a .loaded event with
-    //           fragment.code == "print('toml hook')" for [[hooks]] TOML tables.
-    //
-    // Actual: SpanLocator.walkTOML hits the .index(0) step expecting
-    //         node.nodeType == "array", but TOML array-of-tables produces
-    //         sibling `table_array_element` nodes at the document level,
-    //         NOT a single `array` node containing element children. The guard
-    //         `guard node.nodeType == "array"` (SpanLocator.swift walkTOML,
-    //         case .index) throws `.nodeNotFound`, causing SourceStore to emit
-    //         .failed with "span location failed … nodeNotFound".
-    //
-    // Root cause: walkTOML handles [table].key steps via `tomlFindTable`, which
-    //   correctly matches the first `table_array_element` named "hooks" and
-    //   returns that node. The subsequent .index(0) step then receives the
-    //   matched `table_array_element` and expects it to be an "array" node —
-    //   but TOML's grammar does not wrap [[arr]] elements in an enclosing array
-    //   node; all `table_array_element` siblings with the same key form the
-    //   logical array at the document level.
-    //
-    // Fix (not done here — task spec: do not touch Sources/): SpanLocator
-    //   walkTOML case .index(n) must detect that the current node is a
-    //   `table_array_element` (meaning the path traversal already resolved the
-    //   key and arrived at a single element). Instead of indexing an array node,
-    //   it should walk the document-level children to find the Nth
-    //   `table_array_element` with the same header key, then descend into that
-    //   element for the remaining path steps.
-    //
-    // Test below documents the current (broken) behaviour so CI catches any
-    // regression and serves as a specification for the fix.
-    @Test("structured-toml: $.hooks[0].script from array-of-tables (BUG: span location fails)")
+    // History: #3 — SpanLocator failed on TOML array-of-tables index steps.
+    // walkTOML .index(n) required node.nodeType == "array", but tree-sitter-TOML
+    // represents [[name]] sections as sibling `table_array_element` nodes (no
+    // enclosing array node).  Fixed by detecting `table_array_element` in the
+    // .index branch and collecting siblings from the parent document node.
+    @Test("structured-toml: $.hooks[0].script from array-of-tables resolves correctly")
     func structuredToml() async {
         let dir = fixtureDir("structured-toml")
         let fields = [FieldDesignation(jsonpath: "$.hooks[0].script")]
@@ -452,29 +426,20 @@ struct SourceStoreFixtureIntegrationTests {
         #expect(events.count == 1, "Expected exactly one event")
         guard let first = events.first else { return }
 
-        // BUG: currently produces .failed due to SpanLocator nodeNotFound on
-        //      TOML array-of-tables index step. Document the actual broken state.
-        switch first {
-        case .loaded(_, let fragment):
-            // If this branch is reached the bug is fixed — assert correct value.
-            #expect(
-                fragment.code == "print('toml hook')",
-                "Fixed SpanLocator must return the first hooks entry"
-            )
-        case .failed(_, let state):
-            // Bug is still present: verify it is a span-location failure, not
-            // a parse or path-resolution failure (which would indicate a different problem).
-            guard case .failed(let diag) = state else {
-                Issue.record(
-                    "Expected .failed(Diagnostic) for span-location bug, got .missing: \(state)"
-                )
-                return
-            }
-            #expect(
-                diag.message.contains("span location failed") && diag.message.contains("nodeNotFound"),
-                "BUG: must be a span-location nodeNotFound failure, got: \(diag.message)"
-            )
+        guard case .loaded(let id, let fragment) = first else {
+            Issue.record("Expected .loaded, got \(first)")
+            return
         }
+        #expect(id.jsonpath == "$.hooks[0].script")
+        #expect(fragment.code == "print('toml hook')")
+
+        // R7 cross-check: span text must equal decoded value.
+        let fileURL = dir.appendingPathComponent("config.toml")
+        let data = try! Data(contentsOf: fileURL)
+        let spanStart = fragment.provenance.byteRange.lowerBound
+        let spanEnd = fragment.provenance.byteRange.upperBound
+        let spanText = String(data: data[spanStart..<spanEnd], encoding: .utf8)
+        #expect(spanText == fragment.code, "R7: span bytes must equal decoded code value")
     }
 
     // MARK: structured-multi-doc
