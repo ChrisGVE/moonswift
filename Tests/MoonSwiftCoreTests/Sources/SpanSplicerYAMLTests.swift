@@ -763,23 +763,31 @@ struct YAMLSplicerEdgeCaseTests {
         #expect(decoded == editedText)
     }
 
-    @Test("multi-line with trailing newline in editedText uses |- to strip it")
-    func multiLineTrailingNewlineBehavior() throws {
-        // editedText ends with \n; |- strips the trailing newline, so
-        // round-trip will yield the text WITHOUT the trailing \n.
-        // The splicer must use |- (strip) for this case and the decoded
-        // value will NOT include the trailing newline.
+    @Test("multi-line with trailing newline returns .fieldMismatch (|- strips it)")
+    func multiLineTrailingNewlineIsFieldMismatch() throws {
+        // editedText ends with \n. The splicer uses |- (strip chomping),
+        // which always strips the final newline. This means the decoded
+        // value will be "line" — not "line\n" — so validation (3) must
+        // fail with .fieldMismatch, not silently corrupt the value.
+        // Callers must strip the trailing newline before calling spliceYAML.
         let editedText = "line\n"  // has trailing \n
-        let decoded = try roundTripYAML(
-            yaml: "k: v\n",
+        let data = Data("k: v\n".utf8)
+        let byteRange = try locateYAMLRange(data: data, jsonpath: "$.k")
+        let result = SpanSplicer.spliceYAML(
+            editedText: editedText,
+            into: data,
+            byteRange: byteRange,
             jsonpath: "$.k",
-            editedText: editedText
+            document: 0
         )
-        // |- strips final newline → decoded = "line" (no trailing \n)
-        // This is the correct YAML behaviour for |-.
-        // We assert the round-trip is deterministic.
-        #expect(decoded == "line" || decoded == "line\n")
-        // At minimum, the splice must not crash or return .failure.
+        // Must fail — |- strips the trailing \n so re-extract gives "line" ≠ "line\n".
+        guard case .failure(let err) = result else {
+            Issue.record("Expected .failure for trailing-newline text, got .success")
+            return
+        }
+        // The correct failure is .fieldMismatch (reparse succeeds but re-extract
+        // doesn't equal editedText because |- chomped the trailing newline).
+        #expect(err == .fieldMismatch)
     }
 
     @Test("value starting with YAML null keyword stays quoted if value is non-null")
