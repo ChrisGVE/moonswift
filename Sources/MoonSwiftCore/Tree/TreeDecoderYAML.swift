@@ -39,6 +39,8 @@ import Yams
 ///     fewer documents than `document + 1`.
 ///   - `TreeDecoderError.nestingTooDeep` if the document exceeds
 ///     `treeDecoderMaxDepth` levels of nesting (CWE-674 guard).
+///   - `TreeDecoderError.tooManyNodes` if the expanded node tree exceeds
+///     `treeDecoderMaxNodes` total nodes (alias-bomb / wide-shallow guard).
 public func decodeYAML(_ text: String, document: Int = 0) throws -> TreeValue {
     var nodes: [Node] = []
     do {
@@ -59,7 +61,22 @@ public func decodeYAML(_ text: String, document: Int = 0) throws -> TreeValue {
         )
     }
 
-    return try nodeToTreeValue(nodes[document], depth: 0)
+    // NodeCounter is a reference-type counter shared across the recursive
+    // nodeToTreeValue calls so the total node budget is tracked globally,
+    // not per-frame. Using a class avoids the need for inout parameters
+    // through every recursive call site.
+    let counter = NodeCounter()
+    return try nodeToTreeValue(nodes[document], depth: 0, counter: counter)
+}
+
+// MARK: - Node counter (alias-bomb guard)
+
+/// Mutable counter shared across recursive `nodeToTreeValue` calls.
+///
+/// Each call increments by one before proceeding; when the total reaches
+/// `treeDecoderMaxNodes` the next increment throws `tooManyNodes`.
+private final class NodeCounter {
+    var count: Int = 0
 }
 
 // MARK: - Node → TreeValue conversion (internal)
@@ -70,13 +87,20 @@ public func decodeYAML(_ text: String, document: Int = 0) throws -> TreeValue {
 /// `.mapping`, and `.sequence` cases appear here.
 ///
 /// - Parameters:
-///   - node:  The Yams node to convert.
-///   - depth: Current recursion depth. Throws `nestingTooDeep` when it
-///            exceeds `treeDecoderMaxDepth` (128) to prevent stack overflow
-///            on pathologically nested documents (CWE-674).
-private func nodeToTreeValue(_ node: Node, depth: Int) throws -> TreeValue {
+///   - node:    The Yams node to convert.
+///   - depth:   Current recursion depth. Throws `nestingTooDeep` when it
+///              exceeds `treeDecoderMaxDepth` (128) to prevent stack overflow
+///              on pathologically nested documents (CWE-674).
+///   - counter: Shared node counter. Throws `tooManyNodes` when the total
+///              decoded node count exceeds `treeDecoderMaxNodes` (500 000).
+///              Guards against YAML alias-bomb / wide-shallow expansion.
+private func nodeToTreeValue(_ node: Node, depth: Int, counter: NodeCounter) throws -> TreeValue {
     guard depth <= treeDecoderMaxDepth else {
         throw TreeDecoderError.nestingTooDeep
+    }
+    counter.count += 1
+    guard counter.count <= treeDecoderMaxNodes else {
+        throw TreeDecoderError.tooManyNodes
     }
 
     switch node {
@@ -96,12 +120,14 @@ private func nodeToTreeValue(_ node: Node, depth: Int) throws -> TreeValue {
                 // Non-scalar key (rare in practice): render as YAML.
                 key = (try? Yams.serialize(node: keyNode)) ?? "\(keyNode)"
             }
-            dict[key] = try nodeToTreeValue(valueNode, depth: depth + 1)
+            dict[key] = try nodeToTreeValue(valueNode, depth: depth + 1, counter: counter)
         }
         return .map(dict)
 
     case .sequence(let sequence):
-        let elements = try sequence.map { try nodeToTreeValue($0, depth: depth + 1) }
+        let elements = try sequence.map {
+            try nodeToTreeValue($0, depth: depth + 1, counter: counter)
+        }
         return .array(elements)
 
     case .alias:

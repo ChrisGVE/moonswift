@@ -388,3 +388,54 @@ struct YAMLDecoderDepthLimitTests {
         }
     }
 }
+
+// MARK: - Alias-bomb node-count budget (wide-shallow expansion guard)
+
+/// Tests that a YAML alias bomb (wide-shallow expansion that bypasses the
+/// depth limit) is caught by the `treeDecoderMaxNodes` node-count budget.
+///
+/// Yams expands anchors/aliases inline before this decoder runs; a small
+/// YAML file can reference a large anchor many times, expanding to millions
+/// of nodes at constant depth. The depth limit does not help — the node
+/// budget does.
+@Suite("YAML decoder — alias-bomb node budget")
+struct YAMLDecoderAliasBombTests {
+
+    @Test("wide-shallow alias expansion beyond treeDecoderMaxNodes throws tooManyNodes")
+    func aliasBombThrowsTooManyNodes() throws {
+        // Build a YAML with a single anchor that is a large flat sequence,
+        // then alias it many times as top-level keys. After Yams expands
+        // aliases, the total node count will exceed treeDecoderMaxNodes.
+        //
+        // anchor: a sequence of 1001 scalars.
+        // top-level: 1000 keys each pointing to the alias → > 1 000 000 nodes
+        // treeDecoderMaxNodes (500 000) will fire before the expansion finishes.
+        let elementCount = 1_001
+        let aliasRepeat = 1_000
+        let elements = (0..<elementCount).map { "  - item\($0)" }.joined(separator: "\n")
+        let anchor = "base: &anchor\n\(elements)\n"
+        let aliases = (0..<aliasRepeat).map { "k\($0): *anchor" }.joined(separator: "\n")
+        let yaml = anchor + aliases
+
+        do {
+            _ = try decodeYAML(yaml)
+            Issue.record("Expected tooManyNodes but decode succeeded")
+        } catch TreeDecoderError.tooManyNodes {
+            // Correct — node budget fired.
+        } catch TreeDecoderError.yamlMalformed {
+            // Acceptable — Yams may refuse extreme input before we can check.
+        } catch {
+            Issue.record("Expected tooManyNodes or yamlMalformed, got \(error)")
+        }
+    }
+
+    @Test("small document well within node budget decodes successfully")
+    func smallDocumentDecodes() throws {
+        let yaml = "items:\n  - a\n  - b\n  - c"
+        let result = try decodeYAML(yaml)
+        guard case .map = result else {
+            Issue.record("Expected .map at top level, got \(result)")
+            return
+        }
+    }
+}

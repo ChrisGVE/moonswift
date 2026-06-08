@@ -64,6 +64,13 @@ public enum TreeDecoderError: Error, Equatable {
     /// The limit is `treeDecoderMaxDepth` (128). Files deeper than this are
     /// rejected with this error rather than overflowing the call stack.
     case nestingTooDeep
+    /// The total node count in a decoded document exceeds `treeDecoderMaxNodes`.
+    ///
+    /// Yams expands YAML anchors/aliases before returning the Node tree, so a
+    /// small YAML file with recursive or wide-shallow alias bombs can produce
+    /// millions of nodes regardless of nesting depth. This error caps the
+    /// total decoded node count to prevent unbounded memory growth.
+    case tooManyNodes
 }
 
 // MARK: - Nesting depth limit
@@ -78,6 +85,24 @@ public enum TreeDecoderError: Error, Equatable {
 ///
 /// This constant is `internal` so tests can reference it via `@testable import`.
 let treeDecoderMaxDepth = 128
+
+// MARK: - Node-count budget
+
+/// Maximum number of `TreeValue` nodes that the YAML decoder will produce.
+///
+/// Yams resolves YAML anchors/aliases before this decoder runs, so a small
+/// file with many shallow aliases can expand to millions of in-memory nodes
+/// even when nesting depth stays within `treeDecoderMaxDepth`. Without a
+/// node-count budget the only mitigation would be the 50 MiB file-size limit,
+/// which is insufficient — a 1 KiB YAML file can reference a 100-element
+/// sequence 500 000 times and expand to 50 million nodes.
+///
+/// 500 000 nodes is generous for any real config or data file while still
+/// bounding peak RSS to a safe level (each `TreeValue` node is a few hundred
+/// bytes on the heap; 500 k nodes ≈ ~100 MiB worst-case).
+///
+/// This constant is `internal` so tests can reference it via `@testable import`.
+let treeDecoderMaxNodes = 500_000
 
 // MARK: - JSONParser (internal)
 
