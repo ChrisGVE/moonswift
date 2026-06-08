@@ -142,6 +142,13 @@ public enum AppEvent: Sendable {
     /// The run completed (success, error, cancelled, or limit).
     case runFinished(RunOutcome)
 
+    /// A transient status-bar message requested by a service callback.
+    ///
+    /// Posted by AppDriver-constructed closures — currently `RunService`'s
+    /// `onTransient` (the LuaSwift#22-absent cancel degradation path). The
+    /// reducer sets `AppState.transient` and arms the tick for its expiry.
+    case transient(String)
+
     // MARK: Lint service (LintService callbacks)
 
     /// The lint engine is ready to accept requests.

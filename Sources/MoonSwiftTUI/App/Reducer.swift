@@ -111,6 +111,12 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         }
         return (s, tickEffectsAfterRunEnds(s))
 
+    case .transient(let message):
+        // A service requested a transient status-bar message (e.g. RunService's
+        // cancel-degradation notice). Set it and arm the tick for expiry.
+        s.transient = TransientMessage(text: message)
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+
     // MARK: Lint
 
     case .lintEngineReady:
