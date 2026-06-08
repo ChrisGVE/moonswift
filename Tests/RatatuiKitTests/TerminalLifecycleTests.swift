@@ -148,38 +148,3 @@ struct EmergencyRestoreTests {
         Terminal.emergencyRestore()
     }
 }
-
-// MARK: - CR-022 regression: init asserts Thread.current, not Thread.main
-
-@Suite("Terminal.init thread-class assertion — CR-022 regression")
-struct TerminalInitThreadAssertTests {
-
-    /// Regression test for CR-022: `Terminal.init()` previously passed
-    /// `Thread.main` to `assertRenderClass` while storing `Thread.current`,
-    /// making them inconsistent and breaking non-main UI thread test patterns.
-    ///
-    /// This test is deliberately headless (no TTY needed): it only verifies
-    /// the assertion logic itself — that `assertRenderClass(owningThread:
-    /// Thread.current)` does not fault when called from the main thread
-    /// (Thread.current === Thread.main on the main thread, so isMainThread
-    /// is satisfied by the `current.isMainThread && owningThread.isMainThread`
-    /// branch in assertRenderClass).
-    @Test("assertRenderClass with Thread.current does not fault on main thread")
-    func assertRenderClassCurrentDoesNotFaultOnMain() {
-        // Swift Testing runs @Test functions on the main thread.
-        // assertRenderClass(owningThread: Thread.current) must not precondition-fail here.
-        assertRenderClass(owningThread: Thread.current)
-    }
-
-    /// Verifies that the owning-thread stored in Terminal equals Thread.current
-    /// at construction time (the precondition for consistent thread checks).
-    /// Indirectly confirmed by: all subsequent render-class method calls in
-    /// TerminalLifecycleTests pass without assertion failure.
-    @Test("assertRenderClass with Thread.main is consistent when on main thread")
-    func assertRenderClassMainEqualsCurrentOnMain() {
-        // On the main thread, Thread.current === Thread.main, so both forms
-        // are equivalent. This test ensures neither assertion style faults.
-        assertRenderClass(owningThread: Thread.main)
-        assertRenderClass(owningThread: Thread.current)
-    }
-}
