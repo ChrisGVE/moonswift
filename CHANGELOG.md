@@ -9,6 +9,8 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-08
+
 First public preview (P1 feature set). MoonSwift is a terminal UI editor and
 runner for Lua fragments embedded in structured files (JSON/YAML/TOML) and
 standalone `.lua` files.
@@ -210,4 +212,5 @@ standalone `.lua` files.
   keyword-escape convention; the new name is more descriptive and
   consistent with the other token cases).
 
-[Unreleased]: https://github.com/ChrisGVE/MoonSwift/compare/HEAD...HEAD
+[Unreleased]: https://github.com/ChrisGVE/moonswift/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ChrisGVE/moonswift/releases/tag/v0.1.0
