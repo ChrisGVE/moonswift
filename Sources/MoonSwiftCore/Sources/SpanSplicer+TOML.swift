@@ -15,10 +15,12 @@
 //   detectDelimiterKind reads bytes around byteRange to classify the original.
 //
 // String kind for the NEW token (PRD F8, binding):
+//   • original was single-line literal AND editedText needs no escapes (no `'`,
+//     no newline, no control char but tab) → keep '…' literal (minimal change).
 //   • editedText has a newline, or original was multi-line → """…""" basic.
 //   • all other cases → "…" basic with TOML escape rules.
-//   Literal style ('…') is never written back; upgrading to basic is always
-//   safe and the PRD only mandates it when escapes are needed.
+//   Single-line literals are upgraded to basic ONLY when the new text requires
+//   escapes; multi-line literals upgrade to multi-line basic.
 //
 // Delimiter-expansion:
 //   The splice replaces the WHOLE original token (delimiters + content) so that
@@ -42,13 +44,14 @@ extension SpanSplicer {
     /// before `byteRange.lowerBound` is always `"` or `'`.
     ///
     /// **String kind selection (PRD F8 binding rule):**
-    /// - `editedText` contains a newline → `"""…"""` multi-line basic.
-    ///   Embedded `"""` sequences are escaped by inserting a `\` before the
-    ///   last `"` of any `"""` run.
-    /// - `editedText` needs escapes (contains `"`, `\`, or control chars) OR
-    ///   the original was a single-line basic string → `"…"` basic string.
-    /// - Otherwise (no escapes needed) → `"…"` basic string (simpler and
-    ///   unambiguous; literal style is not preserved for edited values).
+    /// - Original was a single-line literal (`'…'`) and `editedText` needs no
+    ///   escapes (no `'`, no newline, no control char but tab) → keep `'…'`
+    ///   (minimal change; literals carry `\` verbatim).
+    /// - `editedText` contains a newline, or original was multi-line → `"""…"""`
+    ///   multi-line basic. Embedded `"""` runs are broken by escaping every
+    ///   third `"`.
+    /// - Otherwise → `"…"` basic string with TOML escape rules (this is where a
+    ///   single-line literal is upgraded to basic, per the PRD).
     ///
     /// **3-part validation contract (all must hold):**
     /// 1. The whole new file re-parses as valid TOML.
@@ -245,6 +248,14 @@ extension SpanSplicer {
     /// The leading `\n` after `"""` is trimmed by TOML parsers, so the content
     /// starts at the first non-newline character.
     static func tomlStringToken(for editedText: String, originalKind: TOMLDelimiterKind) -> String {
+        // Minimal-change rule (PRD F8): a single-line literal is UPGRADED to a
+        // basic string only when the new text requires escapes.  When the edited
+        // text can be held verbatim in a literal string, keep `'…'` — literal
+        // strings carry backslashes unescaped (e.g. Windows paths), so converting
+        // them to basic would be exactly the kind of reformat span-splicing avoids.
+        if originalKind == .literal, canBeSingleLineLiteral(editedText) {
+            return "'\(editedText)'"
+        }
         let isMultiline =
             editedText.contains("\n")
             || originalKind == .multilineBasic
@@ -253,6 +264,26 @@ extension SpanSplicer {
             return "\"\"\"\n\(multilineBasicBody(for: editedText))\"\"\""
         }
         return "\"\(tomlBasicStringBody(for: editedText))\""
+    }
+
+    /// Whether `text` can be held verbatim in a single-line TOML literal string
+    /// (`'…'`).  TOML literal strings have NO escaping, so they cannot contain a
+    /// single quote (which would close the literal), a newline (single-line only),
+    /// or control characters other than tab (TOML v1.0 §2.2).
+    private static func canBeSingleLineLiteral(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x27:  // ' closes the literal
+                return false
+            case 0x09:  // tab is permitted
+                continue
+            case 0x00..<0x20, 0x7F:  // newline/CR and other control chars are not
+                return false
+            default:
+                continue
+            }
+        }
+        return true
     }
 
     // MARK: - TOML basic string body encoding

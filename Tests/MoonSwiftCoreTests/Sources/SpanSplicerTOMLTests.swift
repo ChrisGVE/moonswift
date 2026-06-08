@@ -326,12 +326,10 @@ struct TOMLSplicerLiteralUpgradeTests {
         #expect(decoded == editedText)
     }
 
-    @Test("literal string edited to plain text stays as basic string (minimal change)")
-    func literalEditedToPlainProducesBasic() throws {
-        // Per the minimal-change rule: we always produce a basic string for
-        // any edit via spliceTOML (literal kept only when no escapes needed,
-        // but the implementation always produces basic for simplicity and
-        // predictability — see SpanSplicer+TOML.swift design note).
+    @Test("literal string edited to plain text STAYS literal (minimal change)")
+    func literalEditedToPlainStaysLiteral() throws {
+        // PRD F8 minimal-change: a single-line literal whose new text needs no
+        // escapes keeps its `'…'` style — no gratuitous reformat to basic.
         let data = try fixtureData("splice-literal.toml")
         let jsonpath = "$.scripts.simple"
         let byteRange = try locateTOMLRange(data: data, jsonpath: jsonpath)
@@ -350,12 +348,44 @@ struct TOMLSplicerLiteralUpgradeTests {
             return
         }
         let newText = String(data: newData, encoding: .utf8)!
-        #expect(throws: Never.self) { try decodeTOML(newText) }
+        #expect(newText.contains("simple = 'world'"))  // literal kept, not "world"
+        #expect(!newText.contains("\"world\""))
         let tree = try decodeTOML(newText)
-        let expr = try JSONPathExpression(parsing: jsonpath)
-        let matches = expr.evaluate(on: tree)
+        let matches = try JSONPathExpression(parsing: jsonpath).evaluate(on: tree)
         guard let (_, value) = matches.first, case .string(let decoded) = value else {
             Issue.record("Re-extract failed for plain literal edit")
+            return
+        }
+        #expect(decoded == editedText)
+    }
+
+    @Test("literal Windows path edited to another backslash path stays literal verbatim")
+    func literalBackslashPathStaysLiteral() throws {
+        // The whole point of TOML literals: backslashes are verbatim. Editing a
+        // path to another path must NOT convert to basic (which would escape \).
+        let data = try fixtureData("splice-literal.toml")
+        let jsonpath = "$.scripts.path"
+        let byteRange = try locateTOMLRange(data: data, jsonpath: jsonpath)
+
+        let editedText = #"D:\new\deeper\path"#
+        let result = SpanSplicer.spliceTOML(
+            editedText: editedText,
+            into: data,
+            byteRange: byteRange,
+            jsonpath: jsonpath,
+            document: 0
+        )
+
+        guard case .success(let newData) = result else {
+            Issue.record("Expected .success, got \(result)")
+            return
+        }
+        let newText = String(data: newData, encoding: .utf8)!
+        #expect(newText.contains(#"path = 'D:\new\deeper\path'"#))  // literal, no \\ escaping
+        let tree = try decodeTOML(newText)
+        let matches = try JSONPathExpression(parsing: jsonpath).evaluate(on: tree)
+        guard let (_, value) = matches.first, case .string(let decoded) = value else {
+            Issue.record("Re-extract failed for literal path edit")
             return
         }
         #expect(decoded == editedText)
