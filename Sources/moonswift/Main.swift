@@ -106,6 +106,13 @@ private func run(launchMode: LaunchMode) {
     let pump = EventPump(source: source, channel: channel)
     let tickSource = TickSource(channel: channel)
 
+    // The backend wraps the live Terminal. It owns Terminal.teardown() from
+    // this point forward — Main.swift must not call teardown independently.
+    let backend = RatatuiKitBackend(terminal: terminal)
+
+    // The suspender also wraps the terminal for $EDITOR suspend/resume.
+    let suspender = LiveTerminalSuspender(terminal: terminal)
+
     let seed = AppState(
         launch: launchMode,
         project: projectState,
@@ -116,24 +123,17 @@ private func run(launchMode: LaunchMode) {
         channel: channel,
         pump: pump,
         tickSource: tickSource,
+        suspender: suspender,
+        backend: backend,
         seed: seed
     )
 
     // ── 6. Enter the loop ─────────────────────────────────────────────────────
     // AppDriver.run() blocks until Effect.quit is processed. The returned code
     // comes from the quit effect's exitCode payload (0 = normal quit, 70 =
-    // internal error). Teardown (terminal restore) runs inside run() before it
-    // returns — the process does not exit mid-frame.
+    // internal error). Teardown (terminal restore) runs inside AppDriver.teardown()
+    // via the RatatuiKitBackend — Main.swift does not call terminal.teardown().
     let code = driver.run()
-
-    // Teardown the terminal after the loop exits cleanly.
-    do {
-        try terminal.teardown()
-    } catch {
-        // Teardown failure is logged to stderr after the terminal is (mostly)
-        // restored; the exit code is already determined by the loop.
-        fputs("moonswift: terminal teardown warning — \(error)\n", stderr)
-    }
 
     exit(code)
 }
