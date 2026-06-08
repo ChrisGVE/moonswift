@@ -1,0 +1,188 @@
+moonswift                                                                       
++----------------++------------------------------------------------------------+
+|hello.lua       ||>  1-- A sample Lua module                                  |
+|                ||   2local M = {}                                            |
+|                ||E  3                                                        |
+|                ||   4function M.greet(name)                                  |
+|                ||   5    print("Hello, " .. name)                            |
+|                ||   6end                                                     |
+|                ||   7                                                        |
+|                ||   8return M                                                |
+|                ||                                                            |
+|                ||                                                            |
+|                ||                                                            |
+|                ||                                                            |
++----------------++------------------------------------------------------------+
++------------------------------------------------------------------------------+
+|[ Output ] [ Diagnostics ]                                           hello.lua|
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+[running…]                                                    j/k  :N  n/N  r  l
+
+=== styles ===
+1,18 fg=default bg=default mods=1
+1,19 fg=default bg=default mods=1
+1,20 fg=default bg=default mods=1
+1,21 fg=default bg=default mods=1
+1,22 fg=default bg=default mods=1
+1,23 fg=default bg=default mods=1
+1,24 fg=default bg=default mods=1
+1,25 fg=default bg=default mods=1
+1,26 fg=default bg=default mods=1
+1,27 fg=default bg=default mods=1
+1,28 fg=default bg=default mods=1
+1,29 fg=default bg=default mods=1
+1,30 fg=default bg=default mods=1
+1,31 fg=default bg=default mods=1
+1,32 fg=default bg=default mods=1
+1,33 fg=default bg=default mods=1
+1,34 fg=default bg=default mods=1
+1,35 fg=default bg=default mods=1
+1,36 fg=default bg=default mods=1
+1,37 fg=default bg=default mods=1
+1,38 fg=default bg=default mods=1
+1,39 fg=default bg=default mods=1
+1,40 fg=default bg=default mods=1
+1,41 fg=default bg=default mods=1
+1,42 fg=default bg=default mods=1
+1,43 fg=default bg=default mods=1
+1,44 fg=default bg=default mods=1
+1,45 fg=default bg=default mods=1
+1,46 fg=default bg=default mods=1
+1,47 fg=default bg=default mods=1
+1,48 fg=default bg=default mods=1
+1,49 fg=default bg=default mods=1
+1,50 fg=default bg=default mods=1
+1,51 fg=default bg=default mods=1
+1,52 fg=default bg=default mods=1
+1,53 fg=default bg=default mods=1
+1,54 fg=default bg=default mods=1
+1,55 fg=default bg=default mods=1
+1,56 fg=default bg=default mods=1
+1,57 fg=default bg=default mods=1
+1,58 fg=default bg=default mods=1
+1,59 fg=default bg=default mods=1
+1,60 fg=default bg=default mods=1
+1,61 fg=default bg=default mods=1
+1,62 fg=default bg=default mods=1
+1,63 fg=default bg=default mods=1
+1,64 fg=default bg=default mods=1
+1,65 fg=default bg=default mods=1
+1,66 fg=default bg=default mods=1
+1,67 fg=default bg=default mods=1
+1,68 fg=default bg=default mods=1
+1,69 fg=default bg=default mods=1
+1,70 fg=default bg=default mods=1
+1,71 fg=default bg=default mods=1
+1,72 fg=default bg=default mods=1
+1,73 fg=default bg=default mods=1
+1,74 fg=default bg=default mods=1
+1,75 fg=default bg=default mods=1
+1,76 fg=default bg=default mods=1
+1,77 fg=default bg=default mods=1
+1,78 fg=default bg=default mods=1
+1,79 fg=default bg=default mods=1
+2,18 fg=default bg=default mods=1
+2,79 fg=default bg=default mods=1
+3,18 fg=default bg=default mods=1
+3,79 fg=default bg=default mods=1
+4,18 fg=default bg=default mods=1
+4,19 fg=default bg=default mods=1
+4,20 fg=default bg=default mods=1
+4,21 fg=default bg=default mods=1
+4,22 fg=default bg=default mods=1
+4,79 fg=default bg=default mods=1
+5,18 fg=default bg=default mods=1
+5,79 fg=default bg=default mods=1
+6,18 fg=default bg=default mods=1
+6,79 fg=default bg=default mods=1
+7,18 fg=default bg=default mods=1
+7,79 fg=default bg=default mods=1
+8,18 fg=default bg=default mods=1
+8,79 fg=default bg=default mods=1
+9,18 fg=default bg=default mods=1
+9,79 fg=default bg=default mods=1
+10,18 fg=default bg=default mods=1
+10,79 fg=default bg=default mods=1
+11,18 fg=default bg=default mods=1
+11,79 fg=default bg=default mods=1
+12,18 fg=default bg=default mods=1
+12,79 fg=default bg=default mods=1
+13,18 fg=default bg=default mods=1
+13,79 fg=default bg=default mods=1
+14,18 fg=default bg=default mods=1
+14,19 fg=default bg=default mods=1
+14,20 fg=default bg=default mods=1
+14,21 fg=default bg=default mods=1
+14,22 fg=default bg=default mods=1
+14,23 fg=default bg=default mods=1
+14,24 fg=default bg=default mods=1
+14,25 fg=default bg=default mods=1
+14,26 fg=default bg=default mods=1
+14,27 fg=default bg=default mods=1
+14,28 fg=default bg=default mods=1
+14,29 fg=default bg=default mods=1
+14,30 fg=default bg=default mods=1
+14,31 fg=default bg=default mods=1
+14,32 fg=default bg=default mods=1
+14,33 fg=default bg=default mods=1
+14,34 fg=default bg=default mods=1
+14,35 fg=default bg=default mods=1
+14,36 fg=default bg=default mods=1
+14,37 fg=default bg=default mods=1
+14,38 fg=default bg=default mods=1
+14,39 fg=default bg=default mods=1
+14,40 fg=default bg=default mods=1
+14,41 fg=default bg=default mods=1
+14,42 fg=default bg=default mods=1
+14,43 fg=default bg=default mods=1
+14,44 fg=default bg=default mods=1
+14,45 fg=default bg=default mods=1
+14,46 fg=default bg=default mods=1
+14,47 fg=default bg=default mods=1
+14,48 fg=default bg=default mods=1
+14,49 fg=default bg=default mods=1
+14,50 fg=default bg=default mods=1
+14,51 fg=default bg=default mods=1
+14,52 fg=default bg=default mods=1
+14,53 fg=default bg=default mods=1
+14,54 fg=default bg=default mods=1
+14,55 fg=default bg=default mods=1
+14,56 fg=default bg=default mods=1
+14,57 fg=default bg=default mods=1
+14,58 fg=default bg=default mods=1
+14,59 fg=default bg=default mods=1
+14,60 fg=default bg=default mods=1
+14,61 fg=default bg=default mods=1
+14,62 fg=default bg=default mods=1
+14,63 fg=default bg=default mods=1
+14,64 fg=default bg=default mods=1
+14,65 fg=default bg=default mods=1
+14,66 fg=default bg=default mods=1
+14,67 fg=default bg=default mods=1
+14,68 fg=default bg=default mods=1
+14,69 fg=default bg=default mods=1
+14,70 fg=default bg=default mods=1
+14,71 fg=default bg=default mods=1
+14,72 fg=default bg=default mods=1
+14,73 fg=default bg=default mods=1
+14,74 fg=default bg=default mods=1
+14,75 fg=default bg=default mods=1
+14,76 fg=default bg=default mods=1
+14,77 fg=default bg=default mods=1
+14,78 fg=default bg=default mods=1
+14,79 fg=default bg=default mods=1
+16,1 fg=default bg=default mods=4
+16,2 fg=default bg=default mods=4
+16,3 fg=default bg=default mods=4
+16,4 fg=default bg=default mods=4
+16,5 fg=default bg=default mods=4
+16,6 fg=default bg=default mods=4
+16,7 fg=default bg=default mods=4
+16,8 fg=default bg=default mods=4
+16,9 fg=default bg=default mods=4
+16,10 fg=default bg=default mods=4
