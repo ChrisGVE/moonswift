@@ -9,7 +9,74 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+First public preview (P1 feature set). MoonSwift is a terminal UI editor and
+runner for Lua fragments embedded in structured files (JSON/YAML/TOML) and
+standalone `.lua` files.
+
 ### Added
+
+#### Application (TUI)
+
+- Elm-style application core: immutable `AppState`, pure `Reducer` with
+  per-focus key dispatch tables, and an `AppDriver` event loop with flood
+  guard that translates state effects into core-service calls.
+- Three-pane layout (navigator, code pane, bottom pane) with a pure layout
+  `Renderer` implementing the binding UX spec, plus `</>`/`{/}` pane-resize
+  keybindings.
+- Navigator pane: source list with live filter, loading spinner, and error
+  states.
+- Code pane: syntax highlighting (tree-sitter query engine with an LRU cache),
+  colon-jump to line, hover, diagnostic gutter, and a deadline-guarded
+  highlight-pulse animation on diagnostic jump.
+- Bottom pane: run output, diagnostics tab, run bookkeeping (FIFO notices,
+  yank), and `C-l` clear.
+- Help overlay covering every pane section with per-token keybinding listings.
+- Init-form modal: detects an empty project (no `moonswift.toml`), scans the
+  directory, and writes a new project file.
+- Source picker modal (`PickerState`/`PickerTree`) for selecting fields within
+  structured files.
+- Theme engine: Dracula-derived 18-token color tables, terminal-capability
+  detection, and an environment-seam override mechanism.
+- External-editor handoff: `spawnEditor` effect with a pump-park/unpark
+  handshake and a `TerminalSuspender` protocol seam for clean suspend/resume.
+- Degraded-state rendering per spec for unsupported Lua versions and malformed
+  projects (engine/lint errors logged, keys blocked on malformed project).
+
+#### Engine (MoonSwiftCore)
+
+- Project codec and validation for `moonswift.toml`
+  (`lua_version`, `[[source]]`/`[[source.field]]`, `[run]`, `[lint]`,
+  `[settings]`) with comment preservation and forward-compatibility.
+- Source loading with provenance for standalone `.lua` files and field
+  designation within JSON/YAML/TOML structured files.
+- `TreeValue` decoded tree with a `SpanLocator` mapping decoded values back to
+  byte ranges (incl. TOML array-of-tables index steps).
+- JSONPath subset evaluator with syntax validation at project-load time.
+- `RunService`: one-shot Lua engine lifecycle with instruction and wall-clock
+  limits, output coalescing (`Coalescer`), and sandbox vs. unrestricted modes.
+- `LintService`: two-layer lint (syntax pre-pass + embedded luacheck) backed by
+  a `LuaModuleCatalog` (base / conditional / opt-in / compile-flag-gated module
+  availability).
+- Diagnostics: `LuaError`→`Diagnostic` mapping with a line parser.
+- Background timing primitives: `TickSource` (arm/disarm timer) and `EventPump`
+  with a park/unpark handshake for editor suspension.
+
+#### Rendering (RatatuiKit)
+
+- Safe Swift overlay over the C FFI shim: `Terminal` lifecycle, event decoding,
+  widget wrappers, and cell-level batched drawing (`CellBuffer`, `CellGrid`
+  snapshot backend).
+- `RenderBackend` protocol with a production `RatatuiKitBackend`, a
+  `CommandInterpreter`, and an FFI-free `RecordingRenderBackend` test double.
+
+#### CLI (moonswift)
+
+- Typed argument parser with `sysexits`-style exit codes (0 success, 64 usage,
+  65 data error, 70 internal error).
+- `@convention(c)` crash handlers that restore the terminal on abnormal exit.
+- Startup sequence with empty-project detection.
+
+#### Tooling, packaging & documentation
 
 - `docs/user/` — user documentation for P1 features:
   - `docs/user/cli.md` — CLI flags, exit codes (0/64/65/70), environment
@@ -83,6 +150,46 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Repository hygiene: `CONTRIBUTING.md`, `CHANGELOG.md`, `.github/ISSUE_TEMPLATE/`
   (bug report and feature request templates), `.gitignore` extended for
   Rust `target/` and build artifacts.
+
+### Security
+
+- Unified disk-read guard `SourceStore.validateReadable` routes every file read
+  (`loadLuaFile`, `loadStructuredFile`, and the picker tree loader) through one
+  check: regular-file type only (rejects symlinks, devices, FIFOs) and a size
+  ceiling (10 MiB for `.lua`, 50 MiB for structured files) before the file is
+  read into memory.
+- Path-traversal hardening: `escapesProjectRoot` resolves symlinks before the
+  containment check (CWE-61 prevention).
+- Denial-of-service limits on structured-tree decoding: a nesting-depth cap
+  (128) on the JSON/YAML decoders to prevent stack exhaustion, and a YAML
+  alias-bomb node-count budget (`treeDecoderMaxNodes`) to bound alias expansion.
+- External-editor command validation: the `EDITOR` value is validated as a raw
+  executable path (rejecting relative or malformed paths) before
+  `Process.executableURL` is set.
+- FFI safety: `Terminal` is guarded against use-after-free; the Rust shim guards
+  the `tcgetattr` return, defers `Box` free during teardown, and recovers from a
+  poisoned mutex in the process-global last-error slot. Widget/layout FFI calls
+  are render-class thread-asserted.
+- Release builds of the shim require `--features swift_ffi`, which drops
+  `catch_unwind` and sets `panic = abort` (arm64e PAC/TLS safety).
+- CI enforces an 85% line-coverage gate on `MoonSwiftCore`.
+
+### Fixed
+
+- `SpanLocator` no longer false-flags escaped fields (removed the R7
+  byte-equality check) and resolves TOML array-of-tables index steps correctly.
+- JSONPath expressions are validated against the real parser at project load
+  rather than failing later at evaluation.
+- Diagnostics-tab jump/yank index offset corrected.
+- FIFO notice ordering fixed and the dead `clearedNoticeInserted` flag removed.
+- `resize(0,0)` sentinel treated as a clean quit.
+- `q` quits from the help overlay; misleading `n`/`N` hints dropped.
+- `Coalescer` made thread-safe for cross-thread output coalescing.
+- Backslash escaped before quote in generated Lua table literals.
+- Snapshot backend renders a distinct tab style; a missing golden now fails the
+  test instead of silently passing.
+- Lint prewarm engine-init failure is reported via `onFailed` rather than
+  swallowed.
 
 ### Changed
 
