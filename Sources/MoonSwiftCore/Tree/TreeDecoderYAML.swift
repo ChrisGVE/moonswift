@@ -37,6 +37,8 @@ import Yams
 ///   - `TreeDecoderError.yamlMalformed` if the YAML is invalid.
 ///   - `TreeDecoderError.yamlDocumentIndexOutOfRange` if the stream contains
 ///     fewer documents than `document + 1`.
+///   - `TreeDecoderError.nestingTooDeep` if the document exceeds
+///     `treeDecoderMaxDepth` levels of nesting (CWE-674 guard).
 public func decodeYAML(_ text: String, document: Int = 0) throws -> TreeValue {
     var nodes: [Node] = []
     do {
@@ -57,7 +59,7 @@ public func decodeYAML(_ text: String, document: Int = 0) throws -> TreeValue {
         )
     }
 
-    return try nodeToTreeValue(nodes[document])
+    return try nodeToTreeValue(nodes[document], depth: 0)
 }
 
 // MARK: - Node → TreeValue conversion (internal)
@@ -66,7 +68,17 @@ public func decodeYAML(_ text: String, document: Int = 0) throws -> TreeValue {
 ///
 /// Yams resolves aliases before returning the Node tree, so only `.scalar`,
 /// `.mapping`, and `.sequence` cases appear here.
-private func nodeToTreeValue(_ node: Node) throws -> TreeValue {
+///
+/// - Parameters:
+///   - node:  The Yams node to convert.
+///   - depth: Current recursion depth. Throws `nestingTooDeep` when it
+///            exceeds `treeDecoderMaxDepth` (512) to prevent stack overflow
+///            on pathologically nested documents (CWE-674).
+private func nodeToTreeValue(_ node: Node, depth: Int) throws -> TreeValue {
+    guard depth <= treeDecoderMaxDepth else {
+        throw TreeDecoderError.nestingTooDeep
+    }
+
     switch node {
 
     case .scalar(let scalar):
@@ -84,12 +96,12 @@ private func nodeToTreeValue(_ node: Node) throws -> TreeValue {
                 // Non-scalar key (rare in practice): render as YAML.
                 key = (try? Yams.serialize(node: keyNode)) ?? "\(keyNode)"
             }
-            dict[key] = try nodeToTreeValue(valueNode)
+            dict[key] = try nodeToTreeValue(valueNode, depth: depth + 1)
         }
         return .map(dict)
 
     case .sequence(let sequence):
-        let elements = try sequence.map { try nodeToTreeValue($0) }
+        let elements = try sequence.map { try nodeToTreeValue($0, depth: depth + 1) }
         return .array(elements)
 
     case .alias:

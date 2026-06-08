@@ -287,3 +287,75 @@ struct JSONDecoderErrorTests {
         }
     }
 }
+
+// MARK: - Depth limit (CR-027)
+
+/// Tests that deeply nested JSON documents hit the `treeDecoderMaxDepth` guard
+/// and throw `TreeDecoderError.nestingTooDeep` instead of crashing with a
+/// stack overflow (CWE-674 guard).
+@Suite("JSON decoder — nesting depth limit (CR-027)")
+struct JSONDecoderDepthLimitTests {
+
+    /// Build a JSON array nested `levels` deep with a single integer leaf.
+    ///
+    /// For example, depth 3 produces `[[[1]]]`.
+    private func nestedArrayJSON(depth: Int) -> String {
+        String(repeating: "[", count: depth) + "1" + String(repeating: "]", count: depth)
+    }
+
+    /// Build a JSON object nested `levels` deep with key "x" and an integer leaf.
+    ///
+    /// For example, depth 3 produces `{"x":{"x":{"x":1}}}`.
+    private func nestedObjectJSON(depth: Int) -> String {
+        let open = String(repeating: #"{"x":"#, count: depth)
+        let close = String(repeating: "}", count: depth)
+        return open + "1" + close
+    }
+
+    @Test("array at exactly the depth limit decodes successfully")
+    func arrayAtLimitSucceeds() throws {
+        // treeDecoderMaxDepth arrays of depth exactly = limit should succeed.
+        let json = nestedArrayJSON(depth: treeDecoderMaxDepth)
+        #expect(throws: Never.self) {
+            try decodeJSON(json)
+        }
+    }
+
+    @Test("array one level beyond the limit throws nestingTooDeep")
+    func arrayBeyondLimitThrows() throws {
+        let json = nestedArrayJSON(depth: treeDecoderMaxDepth + 1)
+        do {
+            _ = try decodeJSON(json)
+            Issue.record("Expected nestingTooDeep but decode succeeded")
+        } catch TreeDecoderError.nestingTooDeep {
+            // Correct — depth guard fired.
+        } catch {
+            Issue.record("Expected nestingTooDeep, got \(error)")
+        }
+    }
+
+    @Test("object one level beyond the limit throws nestingTooDeep")
+    func objectBeyondLimitThrows() throws {
+        let json = nestedObjectJSON(depth: treeDecoderMaxDepth + 1)
+        do {
+            _ = try decodeJSON(json)
+            Issue.record("Expected nestingTooDeep but decode succeeded")
+        } catch TreeDecoderError.nestingTooDeep {
+            // Correct — depth guard fired.
+        } catch {
+            Issue.record("Expected nestingTooDeep, got \(error)")
+        }
+    }
+
+    @Test("shallow nesting well within limit decodes correctly")
+    func shallowNestingDecodes() throws {
+        // Sanity check: a 5-level nested array decodes without error.
+        let json = nestedArrayJSON(depth: 5)
+        let result = try decodeJSON(json)
+        // The outermost node should be an array.
+        guard case .array = result else {
+            Issue.record("Expected .array at top level, got \(result)")
+            return
+        }
+    }
+}

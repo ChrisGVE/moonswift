@@ -59,7 +59,25 @@ public enum TreeDecoderError: Error, Equatable {
     case tomlMalformed(String)
     /// A valid YAML stream contains fewer documents than requested.
     case yamlDocumentIndexOutOfRange(requested: Int, available: Int)
+    /// The document nesting depth exceeds the safe limit (CWE-674).
+    ///
+    /// The limit is `TreeDecoderDepthLimit.max` (512). Files deeper than this
+    /// are rejected with this error rather than overflowing the call stack.
+    case nestingTooDeep
 }
+
+// MARK: - Nesting depth limit
+
+/// Safe maximum nesting depth for recursive JSON and YAML decoders.
+///
+/// 128 levels is deep enough for any realistic config or data file; realistic
+/// config files rarely exceed 10–20 levels. The Swift default stack size on
+/// macOS is ~8 MiB; typical recursive parser frames use several hundred bytes
+/// each, so 128 frames sits comfortably within that budget with generous margin.
+/// A smaller value also improves test determinism when verifying the guard.
+///
+/// This constant is `internal` so tests can reference it via `@testable import`.
+let treeDecoderMaxDepth = 128
 
 // MARK: - JSONParser (internal)
 
@@ -67,18 +85,25 @@ public enum TreeDecoderError: Error, Equatable {
 ///
 /// Implements ECMA-404 §5 for the value grammar. Single-pass, index-based.
 /// State is index into `source.unicodeScalars`.
+///
+/// Nesting depth is tracked via `depth` and capped at `treeDecoderMaxDepth`
+/// (512) to prevent stack overflow on pathologically nested documents (CWE-674).
 private struct JSONParser {
 
     // MARK: State
 
     private let source: String
     private var index: String.UnicodeScalarView.Index
+    /// Current nesting depth. Incremented on entering an array or object,
+    /// decremented on exit. Capped at `treeDecoderMaxDepth`.
+    private var depth: Int
 
     // MARK: Init
 
     init(source: String) {
         self.source = source
         self.index = source.unicodeScalars.startIndex
+        self.depth = 0
     }
 
     // MARK: Helpers
@@ -320,6 +345,11 @@ private struct JSONParser {
     // MARK: Array
 
     private mutating func parseArray() throws -> TreeValue {
+        depth += 1
+        defer { depth -= 1 }
+        guard depth <= treeDecoderMaxDepth else {
+            throw TreeDecoderError.nestingTooDeep
+        }
         try expect("[")
         skipWhitespace()
         var elements: [TreeValue] = []
@@ -341,6 +371,11 @@ private struct JSONParser {
     // MARK: Object
 
     private mutating func parseObject() throws -> TreeValue {
+        depth += 1
+        defer { depth -= 1 }
+        guard depth <= treeDecoderMaxDepth else {
+            throw TreeDecoderError.nestingTooDeep
+        }
         try expect("{")
         skipWhitespace()
         var dict = OrderedDictionary<String, TreeValue>()

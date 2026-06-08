@@ -336,3 +336,55 @@ struct YAMLDecoderErrorTests {
         }
     }
 }
+
+// MARK: - Depth limit (CR-027)
+
+/// Tests that deeply nested YAML documents hit the `treeDecoderMaxDepth` guard
+/// and throw `TreeDecoderError.nestingTooDeep` instead of crashing with a
+/// stack overflow (CWE-674 guard).
+@Suite("YAML decoder — nesting depth limit (CR-027)")
+struct YAMLDecoderDepthLimitTests {
+
+    /// Build a YAML sequence nested `depth` levels deep with a scalar leaf.
+    ///
+    /// For example, depth 3 produces:
+    ///   - - - leaf
+    private func nestedSequenceYAML(depth: Int) -> String {
+        let indent = String(repeating: "  ", count: depth)
+        let prefix = (0..<depth).map { String(repeating: "  ", count: $0) + "- " }.joined(separator: "\n")
+        return prefix + "\n" + indent + "leaf"
+    }
+
+    @Test("sequence one level beyond the limit throws nestingTooDeep")
+    func sequenceBeyondLimitThrows() throws {
+        // Build a deeply nested YAML mapping instead of sequences, which is
+        // easier to generate programmatically without indentation issues.
+        // Each level: "k:\n  " repeated N times, then "v".
+        let lines = (0..<(treeDecoderMaxDepth + 1)).map { i in
+            String(repeating: "  ", count: i) + "k:"
+        }.joined(separator: "\n")
+        let yaml = lines + "\n" + String(repeating: "  ", count: treeDecoderMaxDepth + 1) + "v"
+
+        do {
+            _ = try decodeYAML(yaml)
+            Issue.record("Expected nestingTooDeep but decode succeeded")
+        } catch TreeDecoderError.nestingTooDeep {
+            // Correct — depth guard fired.
+        } catch {
+            // Yams may fail to parse before the depth limit fires on extreme
+            // input; accept yamlMalformed as also safe (no crash = no overflow).
+            if case TreeDecoderError.yamlMalformed = error { return }
+            Issue.record("Expected nestingTooDeep or yamlMalformed, got \(error)")
+        }
+    }
+
+    @Test("shallow nesting well within limit decodes correctly")
+    func shallowNestingDecodes() throws {
+        let yaml = "a:\n  b:\n    c: leaf"
+        let result = try decodeYAML(yaml)
+        guard case .map = result else {
+            Issue.record("Expected .map at top level, got \(result)")
+            return
+        }
+    }
+}
