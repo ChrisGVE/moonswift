@@ -39,6 +39,11 @@ import RatatuiKit
 @main
 struct MoonSwift {
     static func main() {
+        // Ignore SIGPIPE process-wide so a write to a dead nvim pipe raises an
+        // error return from write(2) instead of killing MoonSwift outright.
+        // Must be installed before any pipe is opened (ARCHITECTURE.md §10.6).
+        signal(SIGPIPE, SIG_IGN)
+
         // ── 1. Parse arguments ────────────────────────────────────────────────
         let result = CLIParser.parse(CommandLine.arguments)
 
