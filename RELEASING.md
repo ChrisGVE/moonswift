@@ -45,8 +45,9 @@ A single `workflow_dispatch` run performs every step in the correct order:
 | Artifact | Description |
 |----------|-------------|
 | `CRatatuiFFI.xcframework.zip` | Universal XCFramework wrapping the Rust FFI static lib + regenerated cbindgen header.  Referenced by `Package.swift`'s `binaryTarget`. |
-| `moonswift_universal.zip` | Universal `moonswift` CLI binary (arm64 + x86_64, notarization-ready). |
+| `moonswift_universal.zip` | Universal `moonswift` CLI binary (arm64 + x86_64), shim statically linked and `otool`-verified self-contained (notarization-ready, runs via Homebrew). |
 | Provenance attestations | SLSA-style attestations for both zips, signed by GitHub's OIDC infrastructure.  Verified with `gh attestation verify`. |
+| Homebrew formula PR | A formula-bump PR opened in `ChrisGVE/homebrew-tap` (`Formula/moonswift.rb`); merge it to publish `brew install ChrisGVE/tap/moonswift`. |
 
 ---
 
@@ -75,6 +76,22 @@ or fine-grained token, and would bypass signed-commit requirements.  The
 `GITHUB_TOKEN` approach (bot identity bypass) keeps the surface minimal and
 auditable.
 
+### Homebrew tap dispatch token
+
+The release also publishes to `ChrisGVE/homebrew-tap` (formula `moonswift`).
+The build job's final step sends a cross-repo `repository_dispatch`, which
+`GITHUB_TOKEN` cannot do — it needs a PAT with write access to the tap repo:
+
+- Secret name: **`TAP_DISPATCH_TOKEN`** (repository secret on
+  `ChrisGVE/moonswift`).
+- Scope: a fine-grained PAT with **Contents: write** on `ChrisGVE/homebrew-tap`
+  (or a classic PAT with `repo`).
+- This is the same token convention used by the `codesize` release pipeline.
+
+The tap side (`Formula/moonswift.rb` + `.github/workflows/update-moonswift.yml`)
+must exist on the tap's `main` before the first release dispatch, or the
+update PR has nothing to bump.
+
 ---
 
 ## 4. Running a release
@@ -98,12 +115,26 @@ Steps:
    - Lipo a universal static lib.
    - Regenerate the cbindgen header.
    - Wrap in an XCFramework and zip it.
+   - Build the universal `moonswift` binary with the shim **statically**
+     linked (the dylib is removed first; an `otool -L` gate fails the release
+     if any `libratatui_ffi` load command survives), so the artifact runs on
+     any machine and via Homebrew.
    - Update `Package.swift`, commit, tag, push.
    - Create the GitHub release and upload artifacts.
    - Generate provenance attestations.
+   - Dispatch `moonswift-release-published` to `ChrisGVE/homebrew-tap`, which
+     bumps `Formula/moonswift.rb` (version + checksum) and opens a PR there.
 6. The **verify** job runs after **build** succeeds.  It checks out the tag
    on a clean x86_64 runner and runs `swift build` in binaryTarget mode.
-7. Once both jobs are green, the release is complete.
+7. Once both jobs are green, merge the formula-bump PR in `ChrisGVE/homebrew-tap`
+   (`brew install ChrisGVE/tap/moonswift` works once merged).  The release is
+   then complete.
+
+> **Before bumping the version:** the `--version` string is hard-coded at
+> `Sources/moonswift/CLIArguments.swift` (`versionString = "moonswift X.Y.Z"`).
+> It MUST match the release version, or the Homebrew formula's `test do`
+> (`assert_match version`) fails.  Bump it in the same change-set that prepares
+> the release.
 
 ---
 

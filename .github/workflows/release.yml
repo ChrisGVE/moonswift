@@ -15,7 +15,12 @@
 #     3. Tag that commit with the input version
 #     4. Upload artifact → create GitHub release
 #     5. Generate build-provenance attestation
-#     6. Verify job: clean checkout of the new tag + plain swift build
+#     6. Dispatch to ChrisGVE/homebrew-tap (formula bump PR)
+#     7. Verify job: clean checkout of the new tag + plain swift build
+#
+# The distributable `moonswift` universal binary is force-statically-linked
+# against the shim (dylib removed before the source-mode build) and otool-
+# verified self-contained, so it runs on any machine and via Homebrew.
 #
 # Permissions: the workflow pushes directly to protected main via a
 #   branch-protection bypass allowance for github-actions[bot].  See
@@ -176,6 +181,24 @@ jobs:
           restore-keys: |
             spm-release-${{ runner.os }}-
 
+      # The distributable `moonswift` binary must be self-contained.  Source
+      # mode links the Rust shim, and `ld` prefers libratatui_ffi.dylib over
+      # the .a when both are present — but the dylib's install_name is an
+      # absolute build-tree path (and Package.swift embeds an rpath into the
+      # build dir), so a dylib-linked binary fails to launch on any other
+      # machine (`dyld: Library not loaded`).  Remove the dylibs so
+      # `-lratatui_ffi` resolves the static archive instead.
+      #
+      # Safe here: the release binary is arm64/x86_64 (NOT arm64e) and the
+      # shim is built `--features swift_ffi` (no unwind TLS), so the arm64e
+      # SIGBUS that motivates the dylib link in dev/test (ARCHITECTURE.md §5.4)
+      # does not apply.  The verify step below otool-asserts self-containment.
+      - name: Force static shim linkage for the distributable binary
+        run: |
+          rm -f rust/ratatui-ffi/target/aarch64-apple-darwin/release/libratatui_ffi.dylib
+          rm -f rust/ratatui-ffi/target/x86_64-apple-darwin/release/libratatui_ffi.dylib
+          rm -f rust/ratatui-ffi/target/release/libratatui_ffi.dylib
+
       - name: Build moonswift arm64 (source mode, shim from XCFramework build)
         env:
           MOONSWIFT_SHIM_SOURCE: "1"
@@ -206,6 +229,20 @@ jobs:
         run: |
           lipo -create moonswift_arm64 moonswift_x86_64 -output moonswift_universal
           echo "Universal moonswift arches: $(lipo -archs moonswift_universal)"
+
+      # Distribution gate: the binary must carry no dynamic dependency on the
+      # Rust shim (see the force-static step above).  A leftover libratatui_ffi
+      # load command means the artifact would fail with `dyld: Library not
+      # loaded` on a user's machine (and via Homebrew) — fail the release here.
+      - name: Verify the universal binary is self-contained (no shim dylib)
+        run: |
+          if otool -L moonswift_universal | grep -q "libratatui_ffi"; then
+            echo "ERROR: moonswift_universal links libratatui_ffi dynamically — not distributable."
+            otool -L moonswift_universal
+            exit 1
+          fi
+          echo "moonswift_universal is self-contained (static shim)."
+          otool -L moonswift_universal
 
       - name: Zip universal moonswift binary
         run: zip moonswift_universal.zip moonswift_universal
@@ -329,6 +366,30 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: moonswift_universal.zip
+
+      # ── Phase 9: Publish to the Homebrew tap ─────────────────────────────
+      # After the release + artifacts exist, notify ChrisGVE/homebrew-tap so it
+      # bumps Formula/moonswift.rb (version + checksum) and opens a PR.  The
+      # tap's update-moonswift workflow listens for the repository_dispatch
+      # event below.  Runs last so it only fires once the release succeeded.
+
+      - name: Compute moonswift_universal.zip sha256 (for Homebrew)
+        id: brew-sha
+        run: echo "sha256=$(shasum -a 256 moonswift_universal.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch release to the Homebrew tap
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          # Cross-repo PAT with write access to ChrisGVE/homebrew-tap.
+          token: ${{ secrets.TAP_DISPATCH_TOKEN }}
+          repository: ChrisGVE/homebrew-tap
+          event-type: moonswift-release-published
+          client-payload: |
+            {
+              "formula": "moonswift",
+              "version": "${{ steps.update-package.outputs.tag }}",
+              "darwin_universal_sha256": "${{ steps.brew-sha.outputs.sha256 }}"
+            }
 
   # ── job 2: verify ─────────────────────────────────────────────────────────
   # Clean-machine verification: check out the tagged commit and run a plain

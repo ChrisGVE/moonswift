@@ -108,8 +108,11 @@ standalone `.lua` files.
   in binaryTarget mode, no Rust toolchain).  Also builds and attaches a
   notarization-ready universal `moonswift` binary.
 - `RELEASING.md` — documents the release pipeline, the branch-protection bypass
-  allowance setup for `github-actions[bot]`, recovery procedures, and
-  notarization instructions.
+  allowance setup for `github-actions[bot]`, the `TAP_DISPATCH_TOKEN` Homebrew
+  secret, recovery procedures, and notarization instructions.
+- Homebrew distribution: the release pipeline dispatches a
+  `moonswift-release-published` event to `ChrisGVE/homebrew-tap`, which bumps
+  `Formula/moonswift.rb` and opens a PR (`brew install ChrisGVE/tap/moonswift`).
 
 - `.swift-format` config at repo root: 4-space indent, 120-column line
   length, `UseLetInEveryBoundCaseVariable` disabled. Applies consistently
@@ -190,6 +193,12 @@ standalone `.lua` files.
   test instead of silently passing.
 - Lint prewarm engine-init failure is reported via `onFailed` rather than
   swallowed.
+- Release pipeline: the distributable universal `moonswift` binary is now
+  force-statically linked against the Rust shim (the source-mode build
+  otherwise links the dylib, whose `install_name` is an absolute build-tree
+  path — producing a `dyld: Library not loaded` failure on any other machine).
+  An `otool -L` gate fails the release if a `libratatui_ffi` load command
+  survives.
 
 ### Changed
 
