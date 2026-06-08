@@ -1,0 +1,12 @@
+## moonswift.toml — structured-json fixture
+##
+## Drives: IntegrationTests / SourceStore — JSON structured-file loading
+## Designates a nested string field via JSONPath.
+
+lua_version = "5.4"
+
+[[source]]
+path = "config.json"
+
+  [[source.field]]
+  jsonpath = "$.handlers.onCreate"

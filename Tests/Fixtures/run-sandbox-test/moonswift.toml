@@ -1,0 +1,13 @@
+## moonswift.toml — run-sandbox-test fixture
+##
+## Drives: IntegrationTests / RunService — sandbox os.getenv behaviour
+## Script: Calls os.getenv and checks that it returns nil in sandboxed mode
+##         (os.getenv is stripped by LuaSwift's sandboxed configuration).
+##
+## The same script is run under both sandboxed and unrestricted configs in
+## the integration test to contrast the two modes.
+
+lua_version = "5.4"
+
+[[source]]
+path = "sandbox-test.lua"

@@ -1,0 +1,10 @@
+## moonswift.toml — lint-syntax-error fixture
+##
+## Drives: IntegrationTests / LintService — syntax pre-pass detection
+## Script: Contains a deliberate Lua parse error on line 3.
+## Expected: syntaxPrePass returns a non-nil Diagnostic with line >= 1.
+
+lua_version = "5.4"
+
+[[source]]
+path = "syntax-error.lua"

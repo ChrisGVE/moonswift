@@ -1,0 +1,17 @@
+## moonswift.toml — structured-multi-doc fixture
+##
+## Drives: IntegrationTests / SourceStore — YAML multi-document loading
+## The same JSONPath is designated in two documents (document 0 and document 1).
+
+lua_version = "5.4"
+
+[[source]]
+path = "multi-doc.yaml"
+
+  [[source.field]]
+  jsonpath = "$.script"
+  document = 0
+
+  [[source.field]]
+  jsonpath = "$.script"
+  document = 1

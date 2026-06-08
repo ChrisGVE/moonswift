@@ -1,0 +1,5 @@
+# .styluaignore — patterns excluded from stylua formatting
+#
+# Intentionally invalid Lua: these fixture files contain deliberate syntax
+# errors to test the parser/linter paths and cannot be formatted by stylua.
+Tests/Fixtures/lint-syntax-error/syntax-error.lua

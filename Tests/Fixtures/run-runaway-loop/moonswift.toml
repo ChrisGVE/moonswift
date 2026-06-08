@@ -1,0 +1,19 @@
+## moonswift.toml — run-runaway-loop fixture
+##
+## Drives: IntegrationTests / RunService — instruction-limit trip
+## Script: An infinite loop that the instruction_limit halts.
+## Expected: outcome .limitExceeded(.instructions)
+##
+## IMPORTANT: The instruction_limit in the toml is for documentation only.
+## Tests arm their own limit via RunConfig to keep wall-clock time negligible.
+
+lua_version = "5.4"
+
+[[source]]
+path = "runaway-loop.lua"
+
+[run]
+# instruction_limit declared here is read by the integration test via
+# ProjectFileCodec.  Tests arm a small limit (≤ 10_000) explicitly so
+# CI wall-clock stays under 1 ms.
+instruction_limit = 1000
