@@ -453,35 +453,6 @@ private func paragraphLines(_ text: String, rect: Rect, style: CellStyle) -> [Re
     return [.paragraph(rect: rect, lines: lines, block: nil)]
 }
 
-// MARK: - Init form renderer (ux-spec §3.1, task 24)
-
-/// Renders the project init form in the code-pane area.
-///
-/// Stub: full implementation belongs to task 24. Shows field labels and
-/// values so the user can see what they are editing before confirming.
-private func renderInitForm(
-    form: InitFormState,
-    rect: Rect,
-    theme: ThemeState
-) -> [RenderCommand] {
-    let keyStyle = tokenStyle(.keyword, theme: theme)
-    let valStyle = normalStyle(theme)
-    var lines: [[Span]] = [
-        [Span("  Create moonswift.toml", style: keyStyle)],
-        [Span("", style: normalStyle(theme))],
-        [Span("  Lua version: \(form.luaVersion)", style: valStyle)],
-    ]
-    for src in form.selectedFiles.sorted() {
-        lines.append([Span("    \(src)", style: dimStyle(theme))])
-    }
-    if form.isScanning {
-        lines.append([Span("  Scanning for source files…", style: dimStyle(theme))])
-    }
-    lines.append([Span("", style: normalStyle(theme))])
-    lines.append([Span("  <Tab> next field  <Enter> confirm  <Esc> cancel", style: dimStyle(theme))])
-    return [.paragraph(rect: rect, lines: lines, block: nil)]
-}
-
 // MARK: - Picker pane renderer (ux-spec §3.6)
 
 /// Renders the structured-file picker in the code-pane area.
@@ -738,6 +709,160 @@ private func pickerRowSpans(
 
 /// Pads or truncates `text` to exactly `width` characters for a single cell-run.
 private func pickerPadded(_ text: String, width: Int) -> String {
+    guard width > 0 else { return "" }
+    if text.count >= width { return String(text.prefix(width)) }
+    return text + String(repeating: " ", count: width - text.count)
+}
+
+// MARK: - Init form renderer (ux-spec §3.1, task 24)
+
+/// Renders the project-init form inline modal in the code-pane area (ux-spec §3.1).
+///
+/// Layout (binding):
+///   Row 0       — title: "  Create moonswift.toml"
+///   Row 1       — blank separator
+///   Row 2       — "  Lua version:  5.4" (read-only pre-filled, focus_bg when focused)
+///   Row 3       — blank separator
+///   Row 4       — "  Source files:" header (focus_border color when focused)
+///   Rows 5…n-2  — file list entries; `[x]`/`[ ]` prefix; cursor row in focus_bg
+///   Row n-1     — contextual hint line (dim)
+///
+/// When `isScanning` is true, the file list area shows "  Scanning…" (dim).
+/// When the candidate list is empty after a scan, shows "  (no files found)".
+private func renderInitForm(form: InitFormState, rect: Rect, theme: ThemeState) -> [RenderCommand] {
+    // Need at least 5 rows: title + sep + luaVersion + sep + hint.
+    guard rect.height >= 5 else { return [] }
+
+    let width = Int(rect.width)
+    var commands: [RenderCommand] = []
+    let titleStyle = tokenStyle(.keyword, theme: theme)
+    let normalSt = normalStyle(theme)
+    let dimSt = dimStyle(theme)
+    let focusSt = cursorLineStyle(theme)
+
+    var termRow = Int(rect.y)
+    let maxRow = Int(rect.y) + Int(rect.height) - 1  // last row reserved for hint
+
+    // Row 0: title
+    commands.append(
+        .cellRun(
+            col: rect.x, row: UInt16(termRow),
+            text: initFormPadded("  Create moonswift.toml", width: width),
+            style: titleStyle))
+    termRow += 1
+    guard termRow <= maxRow else { return commands }
+
+    // Row 1: blank separator
+    commands.append(
+        .cellRun(
+            col: rect.x, row: UInt16(termRow),
+            text: initFormPadded("", width: width),
+            style: normalSt))
+    termRow += 1
+    guard termRow <= maxRow else { return commands }
+
+    // Row 2: Lua version field
+    let luaFocused = form.focusedField == .luaVersion
+    let luaRowStyle = luaFocused ? focusSt : normalSt
+    commands.append(
+        .cellRun(
+            col: rect.x, row: UInt16(termRow),
+            text: initFormPadded("  Lua version:  \(form.luaVersion)", width: width),
+            style: luaRowStyle))
+    termRow += 1
+    guard termRow <= maxRow else { return commands }
+
+    // Row 3: blank separator
+    commands.append(
+        .cellRun(
+            col: rect.x, row: UInt16(termRow),
+            text: initFormPadded("", width: width),
+            style: normalSt))
+    termRow += 1
+    guard termRow <= maxRow else { return commands }
+
+    // Row 4: Source files header
+    let sourcesFocused = form.focusedField == .sourceFiles
+    let headerStyle = sourcesFocused ? tokenStyle(.focusBorder, theme: theme) : normalSt
+    commands.append(
+        .cellRun(
+            col: rect.x, row: UInt16(termRow),
+            text: initFormPadded("  Source files:", width: width),
+            style: headerStyle))
+    termRow += 1
+
+    // File list area: from termRow to maxRow - 1 (last row reserved for hint).
+    let listAreaRows = maxRow - termRow
+    if listAreaRows > 0 {
+        if form.isScanning {
+            commands.append(
+                .cellRun(
+                    col: rect.x, row: UInt16(termRow),
+                    text: initFormPadded("  Scanning…", width: width),
+                    style: dimSt))
+            termRow += 1
+        } else if form.candidateFiles.isEmpty {
+            commands.append(
+                .cellRun(
+                    col: rect.x, row: UInt16(termRow),
+                    text: initFormPadded("  (no files found)", width: width),
+                    style: dimSt))
+            termRow += 1
+        } else {
+            // Scroll window: ensure the cursor is always visible.
+            let visibleStart = max(
+                0,
+                min(
+                    form.fileListCursor - listAreaRows + 1,
+                    form.candidateFiles.count - listAreaRows))
+            for rowOffset in 0..<listAreaRows {
+                let fileIdx = visibleStart + rowOffset
+                guard form.candidateFiles.indices.contains(fileIdx) else {
+                    commands.append(
+                        .cellRun(
+                            col: rect.x, row: UInt16(termRow),
+                            text: initFormPadded("", width: width),
+                            style: normalSt))
+                    termRow += 1
+                    continue
+                }
+                let file = form.candidateFiles[fileIdx]
+                let isSelected = form.selectedFiles.contains(file)
+                let isCursor = sourcesFocused && fileIdx == form.fileListCursor
+                let checkMark = isSelected ? "[x]" : "[ ]"
+                let rowStyle = isCursor ? focusSt : normalSt
+                commands.append(
+                    .cellRun(
+                        col: rect.x, row: UInt16(termRow),
+                        text: initFormPadded("  \(checkMark) \(file)", width: width),
+                        style: rowStyle))
+                termRow += 1
+            }
+        }
+    }
+
+    // Last row: contextual hint
+    let hintText: String
+    switch form.focusedField {
+    case .luaVersion:
+        hintText = "  Enter/Tab next field  Esc cancel"
+    case .sourceFiles:
+        hintText =
+            form.isScanning
+            ? "  Esc cancel"
+            : "  Space toggle  Enter confirm  Tab prev  Esc cancel"
+    }
+    commands.append(
+        .cellRun(
+            col: rect.x, row: UInt16(maxRow),
+            text: initFormPadded(hintText, width: width),
+            style: dimSt))
+
+    return commands
+}
+
+/// Pads or truncates `text` to exactly `width` characters for a single init-form cell-run.
+private func initFormPadded(_ text: String, width: Int) -> String {
     guard width > 0 else { return "" }
     if text.count >= width { return String(text.prefix(width)) }
     return text + String(repeating: " ", count: width - text.count)
