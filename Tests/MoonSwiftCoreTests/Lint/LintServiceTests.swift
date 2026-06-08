@@ -404,3 +404,62 @@ struct LintServicePrewarmTests {
         #expect(diagnostics.isEmpty)
     }
 }
+
+// MARK: - CR-010: Lua literal encoding injection safety
+
+/// Tests that `luaTableLiteral` / `luaValueLiteral` / `luaQuotedString` correctly
+/// escape backslashes and double-quotes so a module name containing those
+/// characters cannot break the generated Lua source or inject arbitrary code.
+///
+/// The globals table is normally produced from compile-time catalog identifiers
+/// (CR-010 fix: backslash-before-quote ordering is correct). These tests verify
+/// the defence-in-depth path.
+@Suite("LintService — Lua literal injection safety (CR-010)")
+struct LintServiceLuaLiteralInjectionTests {
+
+    // MARK: Unit-level: luaQuotedString (tested via @testable import)
+
+    @Test("backslash in key is double-escaped in table literal")
+    func backslashInKeyDoesNotBreakLiteral() {
+        // A module name like "foo\\bar" should produce ["foo\\\\bar"] in the
+        // generated Lua, not leave a raw unescaped backslash that would be
+        // interpreted as a Lua escape sequence.
+        let dict: [String: Any] = ["foo\\bar": [:] as [String: Any]]
+        let literal = luaTableLiteral(from: dict)
+        // The literal must contain \\\\ (four characters: two backslashes in
+        // the Swift string → one escaped backslash in Lua).
+        #expect(literal.contains("foo\\\\bar"), "Expected double-escaped backslash, got: \(literal)")
+        // Sanity: it must NOT contain a bare unescaped backslash followed by
+        // a double-quote (the injection vector).
+        #expect(!literal.contains("\\\""), "Unexpected unescaped quote in: \(literal)")
+    }
+
+    @Test("double-quote in key is escaped in table literal")
+    func doubleQuoteInKeyIsEscaped() {
+        let dict: [String: Any] = ["foo\"bar": [:] as [String: Any]]
+        let literal = luaTableLiteral(from: dict)
+        #expect(literal.contains("\\\""), "Expected escaped quote in: \(literal)")
+    }
+
+    @Test("backslash-before-quote in key: backslash escaped before quote")
+    func backslashBeforeQuoteOrdering() {
+        // The key "a\"b" contains a backslash followed by a double-quote.
+        // Correct output: ["a\\\"b"] — backslash doubled, then quote escaped.
+        // Incorrect output (old code): ["a\\"b"] — quote escapes the backslash,
+        // leaving the quote unescaped and breaking the Lua string literal.
+        let dict: [String: Any] = ["a\\\"b": [:] as [String: Any]]
+        let literal = luaTableLiteral(from: dict)
+        #expect(
+            literal.contains("a\\\\\\\"b"),
+            "Expected backslash doubled then quote escaped, got: \(literal)"
+        )
+    }
+
+    @Test("clean catalog-style key encodes without extra escaping")
+    func cleanKeyNoExtraEscaping() {
+        // Normal catalog keys ("luaswift", "json") must not be mangled.
+        let dict: [String: Any] = ["luaswift": ["fields": [:] as [String: Any]]]
+        let literal = luaTableLiteral(from: dict)
+        #expect(literal.contains("\"luaswift\""), "Expected unmodified key, got: \(literal)")
+    }
+}

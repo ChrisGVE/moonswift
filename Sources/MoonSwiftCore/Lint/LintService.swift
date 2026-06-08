@@ -488,27 +488,25 @@ public final class LintService: LintServiceProtocol {
 /// handled: `[String: Any]` values are encoded as nested `{ fields = {…} }`
 /// tables; other values are encoded as empty tables `{}`.
 ///
-/// This function is file-private because it is an implementation detail of
-/// `LintService.runLuacheck`. The encoding is deterministic (sorted keys) so
-/// the generated Lua is stable across runs.
-private func luaTableLiteral(from dict: [String: Any]) -> String {
+/// Internal (not private) so `@testable import` in unit tests can verify the
+/// injection-safety invariant directly. The encoding is deterministic (sorted
+/// keys) so the generated Lua is stable across runs.
+func luaTableLiteral(from dict: [String: Any]) -> String {
     guard !dict.isEmpty else { return "{}" }
     let pairs = dict.keys.sorted().map { key -> String in
-        let escaped = key.replacingOccurrences(of: "\"", with: "\\\"")
         let value = luaValueLiteral(from: dict[key])
-        return "[\"\(escaped)\"] = \(value)"
+        return "[\(luaQuotedString(key))] = \(value)"
     }
     return "{ " + pairs.joined(separator: ", ") + " }"
 }
 
 /// Recursively encode a value to a Lua literal.
-private func luaValueLiteral(from value: Any?) -> String {
+func luaValueLiteral(from value: Any?) -> String {
     switch value {
     case let d as [String: Any]:
         return luaTableLiteral(from: d)
     case let s as String:
-        let escaped = s.replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
+        return luaQuotedString(s)
     case let b as Bool:
         return b ? "true" : "false"
     case let n as Int:
@@ -518,4 +516,25 @@ private func luaValueLiteral(from value: Any?) -> String {
     default:
         return "{}"
     }
+}
+
+/// Encode a Swift string as a Lua double-quoted string literal.
+///
+/// Escapes backslash first, then double-quote, to prevent injection into
+/// the generated Lua source. Any string that is a key or value in the
+/// luacheck globals table passes through this function.
+///
+/// In practice, the globals table is produced entirely from
+/// `LuaModuleCatalog.luacheckGlobals`, whose keys and values are
+/// compile-time constant identifiers (`"luaswift"`, `"json"`, etc.) and
+/// therefore contain neither backslashes nor double-quotes. This function
+/// is a defence-in-depth measure: it ensures correctness even if that
+/// assumption ever changes.
+func luaQuotedString(_ s: String) -> String {
+    // Backslash must be escaped before quote to avoid double-escaping.
+    let escaped =
+        s
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+    return "\"\(escaped)\""
 }
