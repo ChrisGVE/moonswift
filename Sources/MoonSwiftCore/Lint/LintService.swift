@@ -11,7 +11,7 @@
 //         - lint(_:knownGlobals:) — async, uses the long-lived lint engine
 //           (serial executor) to call luacheck.check_strings; maps the
 //           structured report to [Diagnostic].
-//         - prewarm(onReady:onCatalogProbed:) — creates the lint engine off the
+//         - prewarm(onReady:onCatalogProbed:onFailed:) — creates the lint engine off the
 //           main thread, loads luacheck, runs the one-shot toml catalog probe,
 //           then calls the provided callbacks.
 //
@@ -42,7 +42,7 @@ import LuaSwift
 ///   a **fresh** throw-away engine per call and does not touch the lint engine.
 /// - `lint(_:knownGlobals:)` — async; all engine work is dispatched onto the
 ///   service's internal serial executor.
-/// - `prewarm(onReady:onCatalogProbed:)` — async; must be called once, after
+/// - `prewarm(onReady:onCatalogProbed:onFailed:)` — async; must be called once, after
 ///   the first frame. The callbacks are invoked off the main thread; callers
 ///   must arrange for channel posting on the appropriate executor.
 public protocol LintServiceProtocol: Sendable {
@@ -64,7 +64,7 @@ public protocol LintServiceProtocol: Sendable {
     /// Run a full luacheck pass on `fragment`.
     ///
     /// Uses the long-lived lint engine (serial executor). Requires
-    /// `prewarm(onReady:onCatalogProbed:)` to have completed; if called before
+    /// `prewarm(onReady:onCatalogProbed:onFailed:)` to have completed; if called before
     /// the engine is ready, throws `LintServiceError.engineNotReady`.
     ///
     /// - Parameters:
@@ -89,6 +89,11 @@ public protocol LintServiceProtocol: Sendable {
     /// `onReady` when the engine and luacheck are ready, then calls
     /// `onCatalogProbed(tomlAvailable:)` once the probe finishes.
     ///
+    /// When engine creation or luacheck installation fails, `onReady` is NOT
+    /// called; instead `onFailed` is called with a human-readable message so
+    /// the TUI can display a "lint engine error" state rather than remaining
+    /// stuck in the "initializing" state forever. (CR-012)
+    ///
     /// Must be called exactly once (AppDriver, after the first frame).
     ///
     /// - Parameters:
@@ -96,9 +101,12 @@ public protocol LintServiceProtocol: Sendable {
     ///     to post `AppEvent.lintEngineReady`.
     ///   - onCatalogProbed: Called with the probe result. AppDriver wraps this
     ///     to post `AppEvent.catalogProbed(tomlAvailable:)`.
+    ///   - onFailed: Called with an error message when the engine cannot be
+    ///     initialised. AppDriver wraps this to post `AppEvent.lintEngineFailed`.
     func prewarm(
         onReady: @escaping @Sendable () -> Void,
-        onCatalogProbed: @escaping @Sendable (_ tomlAvailable: Bool) -> Void
+        onCatalogProbed: @escaping @Sendable (_ tomlAvailable: Bool) -> Void,
+        onFailed: @escaping @Sendable (_ message: String) -> Void
     ) async
 }
 
@@ -252,7 +260,8 @@ public final class LintService: LintServiceProtocol {
 
     public func prewarm(
         onReady: @escaping @Sendable () -> Void,
-        onCatalogProbed: @escaping @Sendable (_ tomlAvailable: Bool) -> Void
+        onCatalogProbed: @escaping @Sendable (_ tomlAvailable: Bool) -> Void,
+        onFailed: @escaping @Sendable (_ message: String) -> Void
     ) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             lintQueue.async { [weak self] in
@@ -274,12 +283,12 @@ public final class LintService: LintServiceProtocol {
                     try installLuacheckPreloadShim(engine: engine, modules: modules)
                     self.lintEngine = engine
                 } catch {
-                    // Engine setup failed — signal ready anyway so the TUI can
-                    // show "lint engine starting..." then transition to failed.
-                    // The lint(_:) call will throw .engineNotReady.
-                    // onReady is NOT called here; only onCatalogProbed(false) is,
-                    // so the AppDriver can still clear the initialising state.
-                    onCatalogProbed(false)
+                    // Engine setup failed — report the failure via onFailed so the
+                    // TUI transitions from "initializing" to "failed" rather than
+                    // remaining stuck. (CR-012: onFailed was previously absent here.)
+                    // onReady is NOT called; onCatalogProbed is NOT called (they are
+                    // irrelevant when the engine is unusable).
+                    onFailed(error.localizedDescription)
                     continuation.resume()
                     return
                 }

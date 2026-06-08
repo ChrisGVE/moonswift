@@ -164,7 +164,8 @@ struct LintServiceFullPassTests {
 
         await service.prewarm(
             onReady: { result.markReady() },
-            onCatalogProbed: { avail in result.setTomlAvailable(avail) }
+            onCatalogProbed: { avail in result.setTomlAvailable(avail) },
+            onFailed: { _ in }
         )
 
         guard result.ready else {
@@ -334,7 +335,8 @@ struct LintServicePrewarmTests {
 
         await service.prewarm(
             onReady: { result.markReady() },
-            onCatalogProbed: { avail in result.setTomlAvailable(avail) }
+            onCatalogProbed: { avail in result.setTomlAvailable(avail) },
+            onFailed: { _ in }
         )
 
         #expect(result.ready, "Expected onReady to be called after prewarm")
@@ -363,7 +365,8 @@ struct LintServicePrewarmTests {
 
         await service.prewarm(
             onReady: { capture.append("ready") },
-            onCatalogProbed: { _ in capture.append("probed") }
+            onCatalogProbed: { _ in capture.append("probed") },
+            onFailed: { _ in }
         )
 
         #expect(capture.order == ["ready", "probed"], "Expected ready before probed, got \(capture.order)")
@@ -376,7 +379,8 @@ struct LintServicePrewarmTests {
 
         await service.prewarm(
             onReady: {},
-            onCatalogProbed: { avail in result.setTomlAvailable(avail) }
+            onCatalogProbed: { avail in result.setTomlAvailable(avail) },
+            onFailed: { _ in }
         )
 
         #expect(result.tomlAvailable != nil, "Expected a probe result")
@@ -389,7 +393,8 @@ struct LintServicePrewarmTests {
 
         await service.prewarm(
             onReady: { result.markReady() },
-            onCatalogProbed: { avail in result.setTomlAvailable(avail) }
+            onCatalogProbed: { avail in result.setTomlAvailable(avail) },
+            onFailed: { _ in }
         )
 
         #expect(result.ready)

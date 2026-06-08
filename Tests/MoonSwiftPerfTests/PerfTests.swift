@@ -355,7 +355,7 @@ struct LuacheckPerfTests {
         // the lint pass itself, not the warm-up, because the PRD target is for
         // the steady-state lint latency (the engine is already warm when the user
         // presses l).
-        await service.prewarm(onReady: {}, onCatalogProbed: { _ in })
+        await service.prewarm(onReady: {}, onCatalogProbed: { _ in }, onFailed: { _ in })
 
         // Attempt the lint pass and measure its duration. Capture any error
         // from within the measure closure via the actor-isolated box below.

@@ -110,7 +110,8 @@ private func prewarmedLintService() async throws -> LintService {
     let capture = PrewarmCapture()
     await service.prewarm(
         onReady: { capture.markReady() },
-        onCatalogProbed: { avail in capture.markToml(avail) }
+        onCatalogProbed: { avail in capture.markToml(avail) },
+        onFailed: { _ in }
     )
     guard capture.ready else {
         struct PrewarmFailed: Error, CustomStringConvertible {
