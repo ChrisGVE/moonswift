@@ -248,7 +248,12 @@ private func renderNavigator(
 
     // Build display items, applying the spinner for loading entries.
     var items: [Span] = []
-    if filteredIDs.isEmpty {
+
+    // ux-spec §4.2: malformed project overrides the normal list with a single
+    // error entry regardless of navigatorOrder / filterText.
+    if case .malformed = state.project {
+        items.append(Span("Project file error", style: tokenStyle(.error, theme: theme)))
+    } else if filteredIDs.isEmpty {
         let msg = state.navigatorOrder.isEmpty ? "(empty)" : "(no match)"
         items.append(Span(msg, style: dimStyle(theme)))
     } else {
@@ -393,6 +398,21 @@ private func renderCodePane(
     // Init form modal: replace code pane with the init form (ux-spec §3.1, task 24).
     if state.focus == .initForm, let form = state.initFormState {
         return renderInitForm(form: form, rect: inner, theme: theme)
+    }
+
+    // ux-spec §4.2: malformed project file overrides the code pane with a fixed
+    // 4-line error block regardless of any current selection.
+    if case .malformed(let diag) = state.project {
+        let errorStyle = tokenStyle(.error, theme: theme)
+        let dimmed = dimStyle(theme)
+        let lines: [[Span]] = [
+            [Span("✖ Project file error", style: errorStyle)],
+            [],
+            [Span("moonswift.toml: \(diag.message)", style: errorStyle)],
+            [],
+            [Span("Edit the file to correct the error, then press <C-r> to reload.", style: dimmed)],
+        ]
+        return [.paragraph(rect: inner, lines: lines, block: nil)]
     }
 
     // No selection: show state-appropriate placeholder.
@@ -1182,11 +1202,33 @@ private func renderBottomPane(
     guard let inner = insetRect(layout.bottomPane), inner.height >= 2 else { return [] }
 
     let tabRow = Rect(x: inner.x, y: inner.y, width: inner.width, height: 1)
-    let contentRect = Rect(x: inner.x, y: inner.y + 1, width: inner.width, height: inner.height - 1)
-
     var commands: [RenderCommand] = []
     commands += renderBottomPaneTabBar(
         state: state, rect: tabRow, width: Int(inner.width), theme: theme)
+
+    // ux-spec §3.7: unsupported Lua version shows a persistent error header
+    // pinned between the tab bar and the tab content area.
+    var contentStartY = inner.y + 1
+    var contentHeight = inner.height - 1
+
+    if case .unsupportedVersion(let v) = state.project, contentHeight >= 1 {
+        let headerRect = Rect(x: inner.x, y: contentStartY, width: inner.width, height: 1)
+        let headerText = "✖ Lua version \"\(v)\" is not supported. MoonSwift P1 supports Lua 5.4 only."
+        let truncated =
+            headerText.count > Int(inner.width)
+            ? String(headerText.prefix(Int(inner.width)))
+            : headerText
+        commands.append(
+            .cellRun(
+                col: headerRect.x, row: headerRect.y, text: truncated,
+                style: tokenStyle(.error, theme: theme)
+            ))
+        contentStartY += 1
+        contentHeight -= 1
+    }
+
+    guard contentHeight > 0 else { return commands }
+    let contentRect = Rect(x: inner.x, y: contentStartY, width: inner.width, height: contentHeight)
 
     switch state.bottomPane.activeTab {
     case .output:
@@ -1469,12 +1511,17 @@ private func renderDiagnosticsTab(
 
     // Lint section (ux-spec §6.5 — exact header string).
     lines.append([Span("── Lint ──", style: dimStyle(theme))])
-    let lintDiags = bp.diagnostics.sorted { $0.line < $1.line }
-    if lintDiags.isEmpty {
-        lines.append([Span("✔ No issues found.", style: normalStyle(theme))])
+    // ux-spec §4.2: lint engine error takes precedence over normal lint results.
+    if case .failed(let msg) = state.lintState {
+        lines.append([Span("✖ Lint engine error: \(msg)", style: tokenStyle(.error, theme: theme))])
     } else {
-        for d in lintDiags {
-            lines.append([Span(formatDiagnosticLine(d), style: diagStyle(d, theme: theme))])
+        let lintDiags = bp.diagnostics.sorted { $0.line < $1.line }
+        if lintDiags.isEmpty {
+            lines.append([Span("✔ No issues found.", style: normalStyle(theme))])
+        } else {
+            for d in lintDiags {
+                lines.append([Span(formatDiagnosticLine(d), style: diagStyle(d, theme: theme))])
+            }
         }
     }
 
