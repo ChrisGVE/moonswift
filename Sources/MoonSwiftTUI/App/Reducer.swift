@@ -1089,12 +1089,21 @@ private func confirmInitForm(_ s: AppState, form: InitFormState) -> (AppState, [
 }
 
 /// Handles the `.projectFileWritten` event — transitions from empty to loaded state.
+///
+/// CR-020 guard: if `initFormState` is nil when this event arrives the form was
+/// cancelled (Esc pressed) before the background write Task completed. Discard
+/// the event silently — the written file on disk is harmless, but the app state
+/// must not transition into project mode after a cancel.
 private func reduceProjectFileWritten(
     _ s: AppState,
     projectURL: URL?,
     error: String?
 ) -> (AppState, [Effect]) {
     var s = s
+
+    // Guard: if the init form was cancelled while the Task was in flight,
+    // initFormState is nil. Discard the late event unconditionally.
+    guard s.initFormState != nil else { return (s, []) }
 
     if let err = error {
         // Write failed: show transient, leave form open.

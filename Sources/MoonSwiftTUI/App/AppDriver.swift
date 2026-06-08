@@ -724,6 +724,8 @@ public final class AppDriver: @unchecked Sendable {
             case .tomlMalformed(let r): msg = r
             case .yamlDocumentIndexOutOfRange(let req, let avail):
                 msg = "document \(req) requested but only \(avail) available"
+            case .nestingTooDeep:
+                msg = "File nesting too deep (exceeds safe recursion limit)"
             }
             return .pickerTreeReady(id, tree: nil, errorMessage: msg)
         } catch {

@@ -532,6 +532,116 @@ struct ReducerHighlightTests {
     }
 }
 
+// MARK: - Init form / projectFileWritten tests (CR-020)
+
+@Suite("Reducer — Init form cancel race (CR-020)")
+struct ReducerInitFormCancelRaceTests {
+
+    /// Builds an AppState that has the init form open (non-nil initFormState),
+    /// simulating the state just after the user confirmed the form.
+    private func stateWithOpenInitForm() -> AppState {
+        var s = AppState()
+        s.launch = .empty
+        s.initFormState = InitFormState(
+            luaVersion: "5.4",
+            candidateFiles: ["main.lua"],
+            isScanning: false,
+            selectedFiles: ["main.lua"],
+            focusedField: .sourceFiles
+        )
+        s.focus = .initForm
+        return s
+    }
+
+    @Test("projectFileWritten with initFormState nil is discarded (cancel race guard)")
+    func projectFileWrittenAfterCancelIsDiscarded() {
+        // CR-020: Esc-then-Enter closes the form (initFormState → nil) but the
+        // background Task may still complete and post .projectFileWritten. When
+        // initFormState is nil the event must be a no-op — app must NOT transition.
+        var s = AppState()
+        s.launch = .empty
+        s.initFormState = nil  // form already cancelled
+        let url = URL(fileURLWithPath: "/tmp/moonswift.toml")
+
+        let (next, effects) = reduce(s, .projectFileWritten(projectURL: url, error: nil))
+
+        // State and effects must be unchanged — no transition to project mode.
+        #expect(next.launch == .empty, "Launch mode must not change when form was cancelled")
+        #expect(next.initFormState == nil, "initFormState must remain nil")
+        let hasLoadProject = effects.contains {
+            if case .loadProject = $0 { return true }
+            return false
+        }
+        #expect(!hasLoadProject, "No .loadProject effect must be emitted when form was cancelled")
+    }
+
+    @Test("projectFileWritten with initFormState set transitions normally")
+    func projectFileWrittenWithFormOpenTransitions() {
+        // Normal path: form is still open when the write completes.
+        let s = stateWithOpenInitForm()
+        let url = URL(fileURLWithPath: "/tmp/moonswift.toml")
+
+        let (next, effects) = reduce(s, .projectFileWritten(projectURL: url, error: nil))
+
+        #expect(next.initFormState == nil, "Form must be closed after successful write")
+        #expect(next.focus == .pane(.navigator), "Focus must return to navigator after write")
+        let hasLoadProject = effects.contains {
+            if case .loadProject = $0 { return true }
+            return false
+        }
+        #expect(hasLoadProject, ".loadProject must be emitted on successful write")
+    }
+
+    @Test("projectFileWritten with error and form open shows transient, keeps form open")
+    func projectFileWrittenErrorKeepsFormOpen() {
+        let s = stateWithOpenInitForm()
+
+        let (next, _) = reduce(s, .projectFileWritten(projectURL: nil, error: "disk full"))
+
+        #expect(next.initFormState != nil, "Form must remain open on write error")
+        #expect(next.transient != nil, "Transient must be set on write error")
+        #expect(
+            next.transient?.text.contains("disk full") == true,
+            "Transient must include the error message"
+        )
+    }
+}
+
+// MARK: - Terminal event no-op tests (CR-035)
+
+@Suite("Reducer — Terminal event no-ops (CR-035)")
+struct ReducerTerminalEventTests {
+
+    @Test("paste event is a no-op in P1")
+    func pasteIsNoOp() {
+        let state = AppState()
+        let (next, effects) = reduce(state, .paste("some text"))
+        // P1: paste is read-only; state unchanged, no effects.
+        #expect(effects.isEmpty, "paste must produce no effects in P1")
+        #expect(next.focus == state.focus, "paste must not change focus")
+    }
+
+    @Test("mouse event is a no-op in P1")
+    func mouseIsNoOp() {
+        let state = AppState()
+        let (next, effects) = reduce(
+            state,
+            .mouse(kind: .down, button: .left, col: 5, row: 10, modifiers: [])
+        )
+        #expect(effects.isEmpty, "mouse must produce no effects in P1")
+        #expect(next.focus == state.focus, "mouse must not change focus")
+    }
+
+    @Test("resize event is a no-op to state but causes re-render (no effects required)")
+    func resizeNoStateChange() {
+        var state = AppState()
+        state.focus = .pane(.codePane)
+        let (next, _) = reduce(state, .resize(TerminalSize(cols: 120, rows: 40)))
+        // Resize stores no data in AppState (size lives in AppDriver.currentSize).
+        #expect(next.focus == .pane(.codePane), "resize must not change focus")
+    }
+}
+
 // MARK: - TransientMessage helper extension for tests
 
 extension TransientMessage {
