@@ -212,6 +212,11 @@ public final class AppDriver: @unchecked Sendable {
             // See ARCHITECTURE.md §5.2 and docs/internals/ffi-boundary.md for the
             // handshake diagram and thread-class invariants.
             spawnEditorAndWait(url: url)
+
+        case .yank(let text):
+            // Copy text to the system clipboard via pbcopy (ux-spec §2.3 bottom-pane `y`).
+            // Purely additive: spawn pbcopy, write text to stdin, let it exit.
+            yankToPasteboard(text)
         }
     }
 
@@ -296,6 +301,31 @@ public final class AppDriver: @unchecked Sendable {
 
         // 6. Unpark the pump — resumes normal input polling.
         pump.unparkAfterResume()
+    }
+
+    // MARK: Clipboard
+
+    /// Write `text` to the system clipboard by piping it through `pbcopy`.
+    ///
+    /// macOS-only (`pbcopy` is a standard utility). Failure (pbcopy not on PATH,
+    /// or stdin write fails) is silently swallowed — clipboard is a best-effort
+    /// feature; the UI does not change either way. Must be called from the UI
+    /// thread (all effects are executed on the UI thread by `executeSingle`).
+    private func yankToPasteboard(_ text: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pbcopy")
+        let pipe = Pipe()
+        process.standardInput = pipe
+        do {
+            try process.run()
+            if let data = text.data(using: .utf8) {
+                pipe.fileHandleForWriting.write(data)
+            }
+            pipe.fileHandleForWriting.closeFile()
+            process.waitUntilExit()
+        } catch {
+            // pbcopy unavailable or failed — silent no-op (see doc comment).
+        }
     }
 
     // MARK: Render

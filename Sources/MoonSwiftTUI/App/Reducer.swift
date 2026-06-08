@@ -630,6 +630,13 @@ private func reduceBottomPaneKey(
         // Jump code pane to the error line of the focused diagnostic.
         return jumpCodePaneFromBottomPane(s)
 
+    case (.char("y"), []):
+        // Yank: copy the focused output/diagnostic line to the clipboard via pbcopy
+        // (ux-spec §2.3 bottom-pane table). The Effect.yank request is executed by
+        // the AppDriver, which is the only component that performs impure I/O.
+        let text = yankFocusedLine(from: s)
+        return (s, text.map { [.yank($0)] } ?? [])
+
     case (.char("1"), []):
         s.bottomPane.activeTab = .output
         s.bottomPane.scrollOffset = 0
@@ -652,8 +659,11 @@ private func reduceBottomPaneKey(
         return (s, [])
 
     case (.char("l"), .ctrl):
-        s.bottomPane.outputBuffer.removeAll()
-        s.bottomPane.scrollOffset = 0
+        // C-l clears the output buffer and inserts a [cleared] notice
+        // at the top (ux-spec §6.4). Pane precedence rule #1: this case
+        // is only reached when bottomPane is focused (the global C-l handler
+        // declines the key when bottomPane is focused, per ux-spec §2.2).
+        s.bottomPane.clearOutputWithNotice()
         return (s, [])
 
     default:
@@ -768,10 +778,12 @@ private func tryRun(_ s: AppState) -> (AppState, [Effect]) {
         return (s, [armTickIfNeeded(s)].compactMap { $0 })
     }
 
-    // Start the run.
-    s.runState = .running(id: UUID(), startedAt: Date())
+    // Start the run: record the start time and increment the run counter.
+    let startTime = Date()
+    s.runState = .running(id: UUID(), startedAt: startTime)
     s.bottomPane.activeTab = .output
     s.bottomPane.outputBuffer.removeAll()
+    s.bottomPane.startRun(at: startTime)
 
     let runConfig: RunConfig
     if case .loaded(let file, _) = s.project {
@@ -1021,10 +1033,37 @@ private func jumpCodePaneFromBottomPane(_ s: AppState) -> (AppState, [Effect]) {
 
     let idx = min(s.bottomPane.scrollOffset, diags.count - 1)
     let line = diags[idx].line
-    s.codePane.cursorLine = max(0, line - 1)
-    s.codePane.scrollOffset = max(0, line - 1)
-    s.codePane.jumpPulseLine = max(0, line - 1)
+    let targetLine = max(0, line - 1)
+    s.codePane.cursorLine = targetLine
+    s.codePane.scrollOffset = targetLine
+    // Set the 500 ms highlight pulse (ux-spec §3.5, §6.3 "→ jump to line N"
+    // affordance). Task 31 implements the pulse animation; here we set the
+    // state hook so the reducer's output is correct when task 31 wires it up.
+    s.codePane.jumpPulseLine = targetLine
     return (s, [armTickIfNeeded(s)].compactMap { $0 })
+}
+
+/// Returns the text of the line currently focused in the bottom pane, if any.
+///
+/// The scroll offset acts as the focused-line index:
+/// - Output tab: index into `outputBuffer`.
+/// - Diagnostics tab: index into `diagnostics`, formatted as the renderer would display it.
+///
+/// Returns `nil` when the buffer is empty or the offset is out of range.
+private func yankFocusedLine(from s: AppState) -> String? {
+    let offset = s.bottomPane.scrollOffset
+    switch s.bottomPane.activeTab {
+    case .output:
+        guard s.bottomPane.outputBuffer.indices.contains(offset) else { return nil }
+        return s.bottomPane.outputBuffer[offset]
+    case .diagnostics:
+        guard s.bottomPane.diagnostics.indices.contains(offset) else { return nil }
+        let d = s.bottomPane.diagnostics[offset]
+        let prefix = d.severity == .error ? "E" : "W"
+        let colStr = d.column.map { ":\($0)" } ?? ""
+        let codeStr = d.code.map { " [\($0)]" } ?? ""
+        return "\(prefix) \(d.line)\(colStr) \(d.message)\(codeStr)"
+    }
 }
 
 // MARK: - Scroll constants
