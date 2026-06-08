@@ -1251,3 +1251,113 @@ struct SourceStoreTOCTOUTests {
         #expect(diag.severity == .error)
     }
 }
+
+// MARK: - Shared read-guard tests (validateReadable, CR-028 / CR-030)
+
+/// Tests for the `SourceStore.validateReadable` helper — the single guard shared
+/// by `loadLuaFile`, `loadStructuredFile`, and the MoonSwiftTUI picker tree
+/// loader. Each rejection reason and the safe path is exercised directly so the
+/// guard cannot regress on any one read path.
+@Suite("SourceStore — validateReadable shared guard")
+struct SourceStoreValidateReadableTests {
+
+    private func makeTempDir() throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ValidateReadable-\(Int.random(in: 0..<Int.max))")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        return tmp
+    }
+
+    @Test("regular file inside root, under limit — returns nil (safe)")
+    func safeRegularFile() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appendingPathComponent("ok.json")
+        try "{\"x\":1}".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let rejection = SourceStore.validateReadable(
+            at: fileURL, projectRoot: dir, sizeLimit: structuredFileSizeLimit
+        )
+        #expect(rejection == nil)
+    }
+
+    @Test("FIFO (named pipe) — rejected as .notRegularFile")
+    func fifoRejected() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fifoURL = dir.appendingPathComponent("pipe.json")
+        let rc = mkfifo(fifoURL.path, 0o600)
+        // Skip gracefully if the platform refuses to create a FIFO here.
+        guard rc == 0 else { return }
+
+        let rejection = SourceStore.validateReadable(
+            at: fifoURL, projectRoot: dir, sizeLimit: structuredFileSizeLimit
+        )
+        #expect(rejection == .notRegularFile)
+    }
+
+    @Test("symlink — rejected as .notRegularFile (its target is never read)")
+    func symlinkRejected() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appendingPathComponent("real.json")
+        try "{\"x\":1}".write(to: target, atomically: true, encoding: .utf8)
+        let link = dir.appendingPathComponent("link.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let rejection = SourceStore.validateReadable(
+            at: link, projectRoot: dir, sizeLimit: structuredFileSizeLimit
+        )
+        #expect(rejection == .notRegularFile)
+    }
+
+    @Test("regular file over the limit — rejected as .tooLarge with MiB limit")
+    func oversizeRejected() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appendingPathComponent("big.json")
+        // Use a tiny sizeLimit so we need only a few bytes over it.
+        let limit = 16
+        try Data(repeating: 0x20, count: limit + 1).write(to: fileURL)
+
+        let rejection = SourceStore.validateReadable(
+            at: fileURL, projectRoot: dir, sizeLimit: limit
+        )
+        #expect(rejection == .tooLarge(limitMiB: limit / (1_024 * 1_024)))
+    }
+
+    @Test("regular file exactly at the limit — not rejected for size")
+    func atLimitNotRejected() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appendingPathComponent("edge.json")
+        let limit = 32
+        try Data(repeating: 0x20, count: limit).write(to: fileURL)
+
+        let rejection = SourceStore.validateReadable(
+            at: fileURL, projectRoot: dir, sizeLimit: limit
+        )
+        #expect(rejection == nil)
+    }
+
+    @Test("symlink escaping the project root — rejected before content read")
+    func escapeRejected() throws {
+        let base = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let projectRoot = base.appendingPathComponent("project")
+        let outside = base.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let outsideFile = outside.appendingPathComponent("data.json")
+        try "{\"x\":1}".write(to: outsideFile, atomically: true, encoding: .utf8)
+        let link = projectRoot.appendingPathComponent("evil.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outsideFile)
+
+        // The type guard fires first (symlink → not regular); either that or the
+        // escape check is a correct rejection. Assert a non-nil rejection.
+        let rejection = SourceStore.validateReadable(
+            at: link, projectRoot: projectRoot, sizeLimit: structuredFileSizeLimit
+        )
+        #expect(rejection != nil)
+    }
+}

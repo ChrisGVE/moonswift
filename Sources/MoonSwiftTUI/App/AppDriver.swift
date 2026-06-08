@@ -725,6 +725,28 @@ public final class AppDriver: @unchecked Sendable {
         let fileURL = projectRoot.appendingPathComponent(id.path)
         let ext = (id.path as NSString).pathExtension.lowercased()
 
+        // --- File-type + size + TOCTOU guard (CR-028 / CR-030) ---
+        // The picker reads the whole structured file into memory to build its
+        // tree, so it needs the same OOM / hang / symlink-escape protections as
+        // the source loaders. Without this, a project file naming a FIFO or a
+        // symlink to /dev/zero as a source would hang or exhaust memory here.
+        if let rejection = SourceStore.validateReadable(
+            at: fileURL,
+            projectRoot: projectRoot,
+            sizeLimit: structuredFileSizeLimit
+        ) {
+            let message: String
+            switch rejection {
+            case .notRegularFile:
+                message = "Cannot open \(id.path): not a regular file"
+            case .tooLarge(let limitMiB):
+                message = "Cannot open \(id.path): file size exceeds the \(limitMiB) MiB limit"
+            case .outsideProjectRoot:
+                message = "Cannot open \(id.path): path resolves outside the project root"
+            }
+            return .pickerTreeReady(id, tree: nil, errorMessage: message)
+        }
+
         let raw: String
         do {
             raw = try String(contentsOf: fileURL, encoding: .utf8)
