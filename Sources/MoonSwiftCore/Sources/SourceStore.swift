@@ -210,20 +210,60 @@ public final class SourceStore: Sendable {
             return .failed(id: id, state: .missing)
         }
 
-        // --- File size guard (CR-028): reject oversized files before reading ---
+        // --- File-type + size guard (CR-028) ---
         // attributesOfItem reads only the file metadata — no I/O on file content.
-        // This prevents OOM from /dev/zero, pipes, or accidental huge files.
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-            let fileSize = attrs[.size] as? Int,
-            fileSize > sourceFileSizeLimit
-        {
-            let limitMiB = sourceFileSizeLimit / (1_024 * 1_024)
+        // Two sequential checks protect against OOM:
+        //
+        // 1. File-type guard: only regular files (.typeRegular) are accepted.
+        //    Symlinks, FIFOs, character devices, block devices, and directories
+        //    are all rejected here. Note: `fileExists(atPath:)` above follows
+        //    symlinks, so a dangling symlink is already handled; a symlink to
+        //    a regular file that passes ProjectValidation's escape check is
+        //    covered by the TOCTOU re-check below. Any other non-regular target
+        //    (device, FIFO, directory-behind-symlink) is rejected by this guard.
+        //
+        // 2. Size guard: regular files whose byte count exceeds sourceFileSizeLimit
+        //    are rejected. attributesOfItem returns the actual file size for
+        //    regular files (unlike symlinks, which report the link target length).
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path) {
+            let fileType = attrs[.type] as? FileAttributeType
+            guard fileType == .typeRegular else {
+                let diagnostic = Diagnostic(
+                    severity: .error,
+                    line: 0,
+                    column: nil,
+                    code: nil,
+                    message: "Cannot read \(path): not a regular file",
+                    source: .sourceLoad
+                )
+                return .failed(id: id, state: .failed(diagnostic))
+            }
+            if let fileSize = attrs[.size] as? Int, fileSize > sourceFileSizeLimit {
+                let limitMiB = sourceFileSizeLimit / (1_024 * 1_024)
+                let diagnostic = Diagnostic(
+                    severity: .error,
+                    line: 0,
+                    column: nil,
+                    code: nil,
+                    message: "Cannot read \(path): file size exceeds the \(limitMiB) MiB limit",
+                    source: .sourceLoad
+                )
+                return .failed(id: id, state: .failed(diagnostic))
+            }
+        }
+
+        // --- TOCTOU symlink-escape re-check (CR-030) ---
+        // ProjectValidation resolves symlinks at validation time. Between
+        // validation and this read (on a background Task), the path could be
+        // replaced by a symlink pointing outside the project root.
+        // Re-resolving here closes that window.
+        if !fileURLIsInsideProjectRoot(fileURL: fileURL, projectRoot: projectRoot) {
             let diagnostic = Diagnostic(
                 severity: .error,
                 line: 0,
                 column: nil,
                 code: nil,
-                message: "Cannot read \(path): file size exceeds the \(limitMiB) MiB limit",
+                message: "Cannot read \(path): path resolves outside the project root",
                 source: .sourceLoad
             )
             return .failed(id: id, state: .failed(diagnostic))
@@ -320,16 +360,41 @@ public final class SourceStore: Sendable {
             return [.failed(id: id, state: .missing)]
         }
 
-        // --- File size guard (CR-028): reject oversized files before reading ---
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-            let fileSize = attrs[.size] as? Int,
-            fileSize > structuredFileSizeLimit
-        {
+        // --- File-type + size guard (CR-028) ---
+        // Same two-check logic as loadLuaFile: reject non-regular files first,
+        // then reject regular files that exceed the size limit. See that function
+        // for the full rationale.
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path) {
+            let fileType = attrs[.type] as? FileAttributeType
+            guard fileType == .typeRegular else {
+                let id = SourceID(path: path, jsonpath: nil, document: 0)
+                let diag = Diagnostic(
+                    severity: .error,
+                    message: "✖ Cannot parse \(filename): not a regular file",
+                    source: .sourceLoad
+                )
+                return [.failed(id: id, state: .failed(diag))]
+            }
+            if let fileSize = attrs[.size] as? Int, fileSize > structuredFileSizeLimit {
+                let id = SourceID(path: path, jsonpath: nil, document: 0)
+                let limitMiB = structuredFileSizeLimit / (1_024 * 1_024)
+                let diag = Diagnostic(
+                    severity: .error,
+                    message: "✖ Cannot parse \(filename): file size exceeds the \(limitMiB) MiB limit",
+                    source: .sourceLoad
+                )
+                return [.failed(id: id, state: .failed(diag))]
+            }
+        }
+
+        // --- TOCTOU symlink-escape re-check (CR-030) ---
+        // Same rationale as loadLuaFile: re-resolve the path to catch a symlink
+        // swap that occurred between ProjectValidation and this background Task.
+        if !fileURLIsInsideProjectRoot(fileURL: fileURL, projectRoot: projectRoot) {
             let id = SourceID(path: path, jsonpath: nil, document: 0)
-            let limitMiB = structuredFileSizeLimit / (1_024 * 1_024)
             let diag = Diagnostic(
                 severity: .error,
-                message: "✖ Cannot parse \(filename): file size exceeds the \(limitMiB) MiB limit",
+                message: "✖ Cannot parse \(filename): path resolves outside the project root",
                 source: .sourceLoad
             )
             return [.failed(id: id, state: .failed(diag))]
@@ -546,5 +611,30 @@ public final class SourceStore: Sendable {
         case .map: return "object"
         case .null: return "null"
         }
+    }
+
+    /// Returns `true` if `fileURL`, after resolving all symlinks in its path,
+    /// is located inside `projectRoot` (also fully resolved).
+    ///
+    /// This is the TOCTOU re-check (CR-030): `ProjectValidation` resolves
+    /// symlinks at validation time, but a symlink swap between that check and
+    /// the actual file read could redirect a path outside the project root.
+    /// Re-resolving here closes that window.
+    ///
+    /// Uses the same separator-guarded prefix check as
+    /// `ProjectValidation.escapesProjectRoot`: the resolved candidate path
+    /// must equal the resolved root, or start with root + "/" to avoid false
+    /// positives from sibling directories sharing a common name prefix (e.g.
+    /// `/project` vs `/project-other`).
+    ///
+    /// - Parameters:
+    ///   - fileURL: The URL to check.
+    ///   - projectRoot: The project root directory URL.
+    /// - Returns: `true` if the resolved file path is inside the resolved root.
+    private static func fileURLIsInsideProjectRoot(fileURL: URL, projectRoot: URL) -> Bool {
+        let resolvedRoot = projectRoot.resolvingSymlinksInPath().standardized.path
+        let resolvedFile = fileURL.resolvingSymlinksInPath().standardized.path
+        let rootWithSep = resolvedRoot.hasSuffix("/") ? resolvedRoot : resolvedRoot + "/"
+        return resolvedFile == resolvedRoot || resolvedFile.hasPrefix(rootWithSep)
     }
 }

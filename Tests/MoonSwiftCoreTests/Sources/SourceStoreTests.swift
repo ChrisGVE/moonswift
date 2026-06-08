@@ -11,6 +11,7 @@
 //       because the tested I/O path is the implementation under test.
 
 import CryptoKit
+import Darwin
 import Foundation
 import Testing
 
@@ -1047,5 +1048,206 @@ struct SourceStoreFileSizeLimitTests {
         } else {
             Issue.record("Expected .failed(_, .failed) for oversized structured file, got \(events)")
         }
+    }
+
+    // MARK: - File-type guard (CR-028 extension)
+
+    @Test("lua — FIFO (named pipe) rejected as non-regular file")
+    func luaFifoRejected() async throws {
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Create a named pipe (FIFO) using mkfifo(2).
+        let fifoPath = tempDir.appendingPathComponent("pipe.lua").path
+        let rc = mkfifo(fifoPath, 0o600)
+        guard rc == 0 else {
+            // If the OS won't create a FIFO here, skip gracefully.
+            return
+        }
+
+        let id = SourceID(path: "pipe.lua", jsonpath: nil, document: 0)
+        let event = await SourceStore.loadLuaFile(at: "pipe.lua", projectRoot: tempDir, id: id)
+
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed for FIFO, got \(event)")
+            return
+        }
+        guard case .failed(let diag) = state else {
+            Issue.record("Expected .failed(diagnostic) for FIFO, got \(state)")
+            return
+        }
+        #expect(diag.severity == .error)
+        #expect(
+            diag.message.contains("not a regular file"),
+            "Expected 'not a regular file' message, got: \(diag.message)"
+        )
+    }
+
+    @Test("lua — symlink is rejected as non-regular file regardless of target size")
+    func luaSymlinkRejectedAsNonRegular() async throws {
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Write a small regular target file.
+        let targetURL = tempDir.appendingPathComponent("target.lua")
+        try "return 1\n".write(to: targetURL, atomically: true, encoding: .utf8)
+
+        // Create a symlink pointing to it.
+        // FileManager.attributesOfItem(atPath:) returns .typeSymbolicLink for
+        // symlink paths — it does NOT follow the symlink for the type attribute.
+        // The file-type guard therefore rejects symlinks directly, preventing
+        // any attempt to open a link whose target could change between validation
+        // and read (TOCTOU / CWE-61). The TOCTOU re-check in SourceStore
+        // provides an additional layer for symlinks that pass ProjectValidation.
+        let symlinkURL = tempDir.appendingPathComponent("link.lua")
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: targetURL)
+
+        let id = SourceID(path: "link.lua", jsonpath: nil, document: 0)
+        let event = await SourceStore.loadLuaFile(at: "link.lua", projectRoot: tempDir, id: id)
+
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed for symlink, got \(event)")
+            return
+        }
+        guard case .failed(let diag) = state else {
+            Issue.record("Expected .failed(diagnostic) for symlink, got \(state)")
+            return
+        }
+        #expect(diag.severity == .error)
+        #expect(
+            diag.message.contains("not a regular file"),
+            "Expected 'not a regular file' message, got: \(diag.message)"
+        )
+    }
+
+    @Test("structured — FIFO rejected as non-regular file")
+    func structuredFifoRejected() async throws {
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let fifoPath = tempDir.appendingPathComponent("pipe.json").path
+        let rc = mkfifo(fifoPath, 0o600)
+        guard rc == 0 else { return }
+
+        let fields = [FieldDesignation(jsonpath: "$.x", document: 0)]
+        let events = await SourceStore.loadStructuredFile(
+            at: "pipe.json", projectRoot: tempDir, fields: fields
+        )
+
+        guard let event = events.first, case .failed(_, let state) = event,
+            case .failed(let diag) = state
+        else {
+            Issue.record("Expected .failed(_, .failed) for FIFO structured file, got \(events)")
+            return
+        }
+        #expect(diag.severity == .error)
+        #expect(
+            diag.message.contains("not a regular file"),
+            "Expected 'not a regular file' message, got: \(diag.message)"
+        )
+    }
+}
+
+// MARK: - TOCTOU symlink-escape re-check tests (CR-030)
+
+/// Tests for the post-validation symlink re-check in SourceStore (CR-030).
+/// ProjectValidation resolves symlinks at validation time; SourceStore
+/// re-resolves at read time so a symlink swap between those two moments
+/// cannot redirect a path outside the project root.
+@Suite("SourceStore — TOCTOU symlink-escape re-check (CR-030)")
+struct SourceStoreTOCTOUTests {
+
+    private func makeTempDir() throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SourceStoreTOCTOU-\(Int.random(in: 0..<Int.max))")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        return tmp
+    }
+
+    @Test("lua — path escaping project root returns .failed")
+    func luaEscapesRoot() async throws {
+        // Project dir contains only a symlink whose TARGET is outside the dir.
+        // Arrange: create two sibling temp dirs: projectRoot and outsideDir.
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TOCTOU-\(Int.random(in: 0..<Int.max))")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let projectRoot = base.appendingPathComponent("project")
+        let outsideDir = base.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+
+        // Write a real lua file outside the project.
+        let outsideFile = outsideDir.appendingPathComponent("secret.lua")
+        try "return 'secret'".write(to: outsideFile, atomically: true, encoding: .utf8)
+
+        // Place a symlink inside the project that points outside.
+        let symlinkInProject = projectRoot.appendingPathComponent("evil.lua")
+        try FileManager.default.createSymbolicLink(at: symlinkInProject, withDestinationURL: outsideFile)
+
+        let id = SourceID(path: "evil.lua", jsonpath: nil, document: 0)
+        let event = await SourceStore.loadLuaFile(at: "evil.lua", projectRoot: projectRoot, id: id)
+
+        // The file-type guard catches this (symlink → .typeSymbolicLink, not .typeRegular)
+        // before the TOCTOU check even runs. Either guard producing .failed is correct.
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed for path escaping project root, got \(event)")
+            return
+        }
+        guard case .failed(let diag) = state else {
+            Issue.record("Expected .failed(diagnostic), got \(state)")
+            return
+        }
+        #expect(diag.severity == .error)
+    }
+
+    @Test("lua — regular file inside project root loads successfully")
+    func luaInsideRootSucceeds() async throws {
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let fileURL = tempDir.appendingPathComponent("valid.lua")
+        try "return 1\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let id = SourceID(path: "valid.lua", jsonpath: nil, document: 0)
+        let event = await SourceStore.loadLuaFile(at: "valid.lua", projectRoot: tempDir, id: id)
+
+        guard case .loaded = event else {
+            Issue.record("Expected .loaded for regular file inside root, got \(event)")
+            return
+        }
+    }
+
+    @Test("structured — path escaping project root returns .failed")
+    func structuredEscapesRoot() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TOCTOU-str-\(Int.random(in: 0..<Int.max))")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let projectRoot = base.appendingPathComponent("project")
+        let outsideDir = base.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+
+        let outsideFile = outsideDir.appendingPathComponent("data.json")
+        try "{\"x\":1}".write(to: outsideFile, atomically: true, encoding: .utf8)
+
+        let symlinkInProject = projectRoot.appendingPathComponent("evil.json")
+        try FileManager.default.createSymbolicLink(at: symlinkInProject, withDestinationURL: outsideFile)
+
+        let fields = [FieldDesignation(jsonpath: "$.x", document: 0)]
+        let events = await SourceStore.loadStructuredFile(
+            at: "evil.json", projectRoot: projectRoot, fields: fields
+        )
+
+        guard let event = events.first, case .failed(_, let state) = event,
+            case .failed(let diag) = state
+        else {
+            Issue.record("Expected .failed for structured path escaping root, got \(events)")
+            return
+        }
+        #expect(diag.severity == .error)
     }
 }
