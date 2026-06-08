@@ -109,7 +109,7 @@ public final class SourceStore: Sendable {
         let tasks = activeTasks
         activeTasks = []
         tasksLock.unlock()
-        tasks.forEach { $0.cancel() }
+        for task in tasks { task.cancel() }
     }
 
     // MARK: Load all sources
