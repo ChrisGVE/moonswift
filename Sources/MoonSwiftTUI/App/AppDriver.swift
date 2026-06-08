@@ -6,12 +6,14 @@
 //       that MoonSwiftCore services never see TUI types. Owns the TickSource
 //       and coordinates with the EventPump for $EDITOR suspension.
 //       (ARCHITECTURE.md §5.1, §3b, §5.2)
-// Upstream: EventChannel, TickSource, EventPump, Reducer, Renderer (stub),
-//           TerminalSuspender, MoonSwiftCore service protocols
-// Downstream: Services (via callbacks), Terminal (render), process exit
+// Upstream: EventChannel, TickSource, EventPump, Reducer, Renderer,
+//           CommandInterpreter, RenderBackend, TerminalSuspender,
+//           MoonSwiftCore service protocols
+// Downstream: Services (via callbacks), CommandInterpreter (render), process exit
 
 import Foundation
 import MoonSwiftCore
+import RatatuiKit
 
 // MARK: - AppDriver
 
@@ -44,9 +46,21 @@ public final class AppDriver: @unchecked Sendable {
     private let highlighter: Highlighter
     private let suspender: (any TerminalSuspender)?
 
+    /// The render pipeline: interprets [RenderCommand] against a RenderBackend.
+    /// `nil` in skeleton/test mode when no backend is injected.
+    private let interpreter: CommandInterpreter?
+
     // MARK: State
 
     private var state: AppState
+
+    /// Last known terminal size, updated from `.resize` events.
+    ///
+    /// Seeded to the minimum supported size (80×24) at construction so the
+    /// renderer always has a valid size even before the first resize event.
+    /// In production the EventPump posts a `.resize` as soon as the pump starts,
+    /// so this default is quickly replaced with the real terminal dimensions.
+    private var currentSize: TerminalSize = TerminalSize(cols: 80, rows: 24)
 
     // MARK: Loop control
 
@@ -71,6 +85,9 @@ public final class AppDriver: @unchecked Sendable {
     ///   - suspender: The terminal suspend/resume adapter for $EDITOR handoff.
     ///     `nil` in skeleton mode (no terminal); inject `LiveTerminalSuspender`
     ///     in production and `RecordingTerminalSuspender` in tests.
+    ///   - backend: The rendering surface to drive. `nil` in skeleton/test mode.
+    ///     Inject `RatatuiKitBackend` in production. When non-nil, the backend
+    ///     owns `Terminal.teardown()` — callers must not call it independently.
     ///   - seed: The initial `AppState` built from the decoded project file.
     public init(
         channel: EventChannel,
@@ -78,6 +95,7 @@ public final class AppDriver: @unchecked Sendable {
         tickSource: TickSource,
         highlighter: Highlighter = Highlighter(),
         suspender: (any TerminalSuspender)? = nil,
+        backend: (any RenderBackend)? = nil,
         seed: AppState
     ) {
         self.channel = channel
@@ -85,6 +103,7 @@ public final class AppDriver: @unchecked Sendable {
         self.tickSource = tickSource
         self.highlighter = highlighter
         self.suspender = suspender
+        self.interpreter = backend.map { CommandInterpreter(backend: $0) }
         self.state = seed
     }
 
@@ -103,6 +122,13 @@ public final class AppDriver: @unchecked Sendable {
         while quitCode == nil {
             let events = channel.waitAndDrainAll()
             for event in events {
+                // Track terminal size from resize events so renderNow() always
+                // has the current dimensions. Updated before the reduce call so
+                // the renderer sees the new size immediately on the same frame.
+                if case .resize(let size) = event {
+                    currentSize = size
+                }
+
                 let (newState, effects) = reduce(state, event)
                 state = newState
                 execute(effects)
@@ -357,23 +383,45 @@ public final class AppDriver: @unchecked Sendable {
 
     // MARK: Render
 
-    /// Call the renderer with the current state. In the skeleton this is a
-    /// no-op; the real renderer (task 14) issues RenderCommands to RatatuiKit.
+    /// Render the current state to the terminal.
+    ///
+    /// Calls `render(_:size:)` to produce a [RenderCommand] sequence, then
+    /// hands it to the `CommandInterpreter` to drive the RenderBackend. When
+    /// no backend is injected (skeleton/test mode) this is a timed no-op so
+    /// the flood-guard timestamp advances correctly.
+    ///
+    /// Must be called from the UI thread (render/terminal-class).
     private func renderNow() {
         lastRenderTime = Date()
-        // Renderer stub — implemented in task 14.
+        guard let interp = interpreter else { return }
+        let commands = render(state, size: currentSize)
+        do {
+            try interp.apply(commands)
+        } catch {
+            // Render errors are non-fatal: the loop continues and the next frame
+            // will attempt a full redraw. Log to stderr; the UI remains intact.
+            fputs("moonswift: render error — \(error)\n", stderr)
+        }
     }
 
     // MARK: Teardown
 
     /// Restore the terminal and shut down background threads.
     ///
-    /// Called after the loop exits (after `quitCode` is set). The real
-    /// terminal teardown (task 13 / RatatuiKit) is invoked here.
+    /// Called after the loop exits (after `quitCode` is set). The backend owns
+    /// `Terminal.teardown()`; callers (Main.swift) must not call it separately
+    /// when a backend is active. Background threads are stopped before teardown
+    /// so no render/input calls are in flight during terminal restore.
     private func teardown() {
         pump.stop()
         tickSource.stop()
-        // Terminal.teardown() called here in the full implementation (task 13).
+        if let interp = interpreter {
+            do {
+                try interp.backend.teardown()
+            } catch {
+                fputs("moonswift: terminal teardown warning — \(error)\n", stderr)
+            }
+        }
     }
 
     // MARK: Init form helpers (task 24)
