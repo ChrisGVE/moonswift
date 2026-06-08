@@ -1,0 +1,5 @@
+single: 'single quoted'
+double: "double quoted"
+nested:
+  sq: 'inner single'
+  dq: "inner double"
