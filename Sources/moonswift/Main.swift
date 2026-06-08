@@ -55,10 +55,10 @@ struct MoonSwift {
             exit(ExitCode.usage)
 
         case .projectCwd(let url):
-            run(launchMode: .project(url))
+            run(launchMode: resolveProjectMode(at: url))
 
         case .projectDirectory(let url):
-            run(launchMode: .project(url))
+            run(launchMode: resolveProjectMode(at: url))
 
         case .quickFile(let url):
             run(launchMode: .quickFile(url))
@@ -136,6 +136,20 @@ private func run(launchMode: LaunchMode) {
     }
 
     exit(code)
+}
+
+// MARK: - Launch mode resolution
+
+/// Returns `.empty` when `directory` contains no `moonswift.toml`; otherwise `.project`.
+///
+/// This is the single decision point for empty-state detection (ux-spec §3.1, task 24).
+/// When no project file is present the TUI opens in empty state offering the init form.
+private func resolveProjectMode(at directory: URL) -> LaunchMode {
+    let projectFile = directory.appendingPathComponent(ProjectStore.fileName)
+    if FileManager.default.fileExists(atPath: projectFile.path) {
+        return .project(directory)
+    }
+    return .empty
 }
 
 // MARK: - Project loading
