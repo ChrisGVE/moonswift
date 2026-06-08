@@ -1495,13 +1495,31 @@ private func jumpToDiagnostic(
     return (s, [])
 }
 
+/// Number of synthetic header rows prepended before lint diagnostics in the
+/// diagnostics tab (ux-spec §6.5): "── Syntax ──", prepass result, "── Lint ──".
+/// scrollOffset must be adjusted by this amount to obtain a `diagnostics[]` index.
+private let diagTabHeaderRows = 3
+
 private func jumpCodePaneFromBottomPane(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
     let diags = s.bottomPane.diagnostics
     guard !diags.isEmpty else { return (s, []) }
 
-    let idx = min(s.bottomPane.scrollOffset, diags.count - 1)
-    let line = diags[idx].line
+    // CR-017: diagnostics tab renders 3 synthetic header rows before the first
+    // lint diagnostic (── Syntax ──, prepass result, ── Lint ──). Subtract them
+    // so scrollOffset maps to the correct diagnostics[] index.
+    let rawOffset = s.bottomPane.scrollOffset
+    let diagIdx: Int
+    switch s.bottomPane.activeTab {
+    case .diagnostics:
+        let adjusted = rawOffset - diagTabHeaderRows
+        guard adjusted >= 0 else { return (s, []) }
+        diagIdx = min(adjusted, diags.count - 1)
+    case .output:
+        diagIdx = min(rawOffset, diags.count - 1)
+    }
+
+    let line = diags[diagIdx].line
     let targetLine = max(0, line - 1)
     s.codePane.cursorLine = targetLine
     // Center the target in view where possible (task 31 jump behavior;
@@ -1517,20 +1535,32 @@ private func jumpCodePaneFromBottomPane(_ s: AppState) -> (AppState, [Effect]) {
 
 /// Returns the text of the line currently focused in the bottom pane, if any.
 ///
-/// The scroll offset acts as the focused-line index:
-/// - Output tab: index into `outputBuffer`.
-/// - Diagnostics tab: index into `diagnostics`, formatted as the renderer would display it.
+/// The scroll offset is a visual row index. For the output tab a synthetic run
+/// header row (when `runNumber > 0`) is prepended at row 0, so the buffer index
+/// is `offset - 1` when a header is shown. For the diagnostics tab the three
+/// synthetic header rows (── Syntax ──, prepass result, ── Lint ──) precede the
+/// lint diagnostics, so the buffer index is `offset - diagTabHeaderRows`.
 ///
-/// Returns `nil` when the buffer is empty or the offset is out of range.
+/// Returns `nil` when the offset falls on a synthetic row or out of range.
 private func yankFocusedLine(from s: AppState) -> String? {
     let offset = s.bottomPane.scrollOffset
     switch s.bottomPane.activeTab {
     case .output:
-        guard s.bottomPane.outputBuffer.indices.contains(offset) else { return nil }
-        return s.bottomPane.outputBuffer[offset]
+        // CR-017: when a run has been started the renderer prepends a phantom
+        // run-header row at visual row 0. Adjust the buffer index accordingly.
+        let hasHeader = s.bottomPane.runNumber > 0
+        let bufferIdx = hasHeader ? offset - 1 : offset
+        guard bufferIdx >= 0, s.bottomPane.outputBuffer.indices.contains(bufferIdx) else {
+            return nil
+        }
+        return s.bottomPane.outputBuffer[bufferIdx]
     case .diagnostics:
-        guard s.bottomPane.diagnostics.indices.contains(offset) else { return nil }
-        let d = s.bottomPane.diagnostics[offset]
+        // Adjust for the 3 synthetic header rows in the diagnostics tab.
+        let diagIdx = offset - diagTabHeaderRows
+        guard diagIdx >= 0, s.bottomPane.diagnostics.indices.contains(diagIdx) else {
+            return nil
+        }
+        let d = s.bottomPane.diagnostics[diagIdx]
         let prefix = d.severity == .error ? "E" : "W"
         let colStr = d.column.map { ":\($0)" } ?? ""
         let codeStr = d.code.map { " [\($0)]" } ?? ""

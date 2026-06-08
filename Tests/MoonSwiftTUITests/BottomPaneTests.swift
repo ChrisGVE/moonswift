@@ -622,9 +622,13 @@ struct YankTests {
         state.bottomPane.activeTab = .diagnostics
         state.bottomPane.diagnostics = [
             Diagnostic(
-                severity: .error, line: 5, column: 3, code: "113", message: "undefined global 'x'", source: .luacheck)
+                severity: .error, line: 5, column: 3, code: "113", message: "undefined global 'x'",
+                source: .luacheck)
         ]
-        state.bottomPane.scrollOffset = 0
+        // CR-017: diagnostics tab has 3 synthetic header rows (── Syntax ──, prepass
+        // result, ── Lint ──) before the first lint diagnostic. scrollOffset must be
+        // 3 to point at diagnostics[0].
+        state.bottomPane.scrollOffset = 3
 
         let (_, effects) = reduce(state, .key(.char("y"), modifiers: []))
 
@@ -641,6 +645,74 @@ struct YankTests {
                 text == "E 5:3 undefined global 'x' [113]",
                 "Yank on diagnostics tab must use formatDiagnosticLine format, got '\(text)'")
         }
+    }
+
+    @Test("y key at diagnostics header row (offset < 3) emits no effect")
+    func yKeyOnDiagHeaderRowNoEffect() {
+        // CR-017: rows 0-2 in the diagnostics tab are synthetic headers, not
+        // diagnostics. Yank on those rows must be a no-op.
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.bottomPane.activeTab = .diagnostics
+        state.bottomPane.diagnostics = [
+            Diagnostic(severity: .error, line: 1, message: "err", source: .luacheck)
+        ]
+        state.bottomPane.scrollOffset = 1  // header row (── Syntax ── result)
+
+        let (_, effects) = reduce(state, .key(.char("y"), modifiers: []))
+        let hasYank = effects.contains {
+            if case .yank = $0 { return true }
+            return false
+        }
+        #expect(!hasYank, "y key on a header row must not emit .yank effect")
+    }
+
+    @Test("y key output tab with run header: scrollOffset=1 yields outputBuffer[0] (CR-017)")
+    func yKeyOutputTabWithRunHeader() {
+        // CR-017: when runNumber > 0 the renderer prepends a phantom run-header
+        // row at visual row 0. scrollOffset=1 must yank outputBuffer[0], not
+        // outputBuffer[1].
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.bottomPane.activeTab = .output
+        state.bottomPane.runNumber = 1
+        state.bottomPane.runStartTime = Date()
+        state.bottomPane.outputBuffer = ["first line", "second line"]
+        state.bottomPane.scrollOffset = 1  // visual row 1 → outputBuffer[0]
+
+        let (_, effects) = reduce(state, .key(.char("y"), modifiers: []))
+
+        let yankEffect = effects.first {
+            if case .yank = $0 { return true }
+            return false
+        }
+        guard let yankEffect else {
+            Issue.record("y key must emit .yank effect")
+            return
+        }
+        if case .yank(let text) = yankEffect {
+            #expect(
+                text == "first line",
+                "With run header at row 0, scrollOffset=1 must yank outputBuffer[0], got '\(text)'")
+        }
+    }
+
+    @Test("y key output tab on run-header row (offset=0 with header) emits no effect (CR-017)")
+    func yKeyOnRunHeaderRowNoEffect() {
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.bottomPane.activeTab = .output
+        state.bottomPane.runNumber = 1
+        state.bottomPane.runStartTime = Date()
+        state.bottomPane.outputBuffer = ["line1"]
+        state.bottomPane.scrollOffset = 0  // header row — not a buffer line
+
+        let (_, effects) = reduce(state, .key(.char("y"), modifiers: []))
+        let hasYank = effects.contains {
+            if case .yank = $0 { return true }
+            return false
+        }
+        #expect(!hasYank, "y key on run-header row must not emit .yank effect")
     }
 
     @Test("y key with empty buffer emits no effect")
@@ -682,10 +754,12 @@ struct YankTests {
 @Suite("BottomPane — Enter jump (ux-spec §3.5)")
 struct EnterJumpTests {
 
-    @Test("Enter in bottom pane sets code pane cursor and jumpPulseLine")
+    @Test("Enter in bottom pane output tab sets code pane cursor and jumpPulseLine")
     func enterJumpsAndSetsPulse() {
+        // Output tab: scrollOffset maps directly to diagnostics[] index (no headers).
         var state = AppState()
         state.focus = .pane(.bottomPane)
+        state.bottomPane.activeTab = .output
         state.bottomPane.diagnostics = [
             Diagnostic(severity: .error, line: 8, message: "err", source: .luacheck)
         ]
@@ -701,6 +775,39 @@ struct EnterJumpTests {
         #expect(
             next.codePane.jumpPulseLine == 7,
             "Enter must set jumpPulseLine to trigger 500 ms highlight pulse")
+    }
+
+    @Test("Enter in bottom pane diagnostics tab at row 3 jumps to diagnostics[0] (CR-017)")
+    func enterDiagnosticsTabJumpsCorrectly() {
+        // CR-017: diagnostics tab has 3 synthetic header rows before the first
+        // lint diagnostic. scrollOffset=3 must jump to diagnostics[0].
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.bottomPane.activeTab = .diagnostics
+        state.bottomPane.diagnostics = [
+            Diagnostic(severity: .error, line: 8, message: "err", source: .luacheck)
+        ]
+        state.bottomPane.scrollOffset = 3
+
+        let (next, _) = reduce(state, .key(.enter, modifiers: []))
+        // Line 8 (1-based) → cursorLine 7 (0-based).
+        #expect(next.codePane.cursorLine == 7)
+        #expect(next.codePane.jumpPulseLine == 7)
+    }
+
+    @Test("Enter in bottom pane diagnostics tab at header row (< 3) is a no-op (CR-017)")
+    func enterDiagnosticsTabOnHeaderRowNoOp() {
+        // CR-017: scrollOffset < 3 points to a synthetic header — no jump.
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.bottomPane.activeTab = .diagnostics
+        state.bottomPane.diagnostics = [
+            Diagnostic(severity: .error, line: 8, message: "err", source: .luacheck)
+        ]
+        state.bottomPane.scrollOffset = 1  // header row
+
+        let (next, _) = reduce(state, .key(.enter, modifiers: []))
+        #expect(next.codePane.jumpPulseLine == nil, "Enter on header row must not trigger a jump")
     }
 
     @Test("Enter with empty diagnostics is a no-op")
