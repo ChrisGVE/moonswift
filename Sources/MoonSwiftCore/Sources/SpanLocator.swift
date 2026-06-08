@@ -507,11 +507,31 @@ public enum SpanLocator {
             throw SpanLocatorError.nodeNotFound
 
         case .index(let n):
-            guard node.nodeType == "array" else { throw SpanLocatorError.nodeNotFound }
-            guard let element = tomlArrayElement(node, at: n) else {
-                throw SpanLocatorError.nodeNotFound
+            // Inline array: node is an "array" node whose children are the elements.
+            if node.nodeType == "array" {
+                guard let element = tomlArrayElement(node, at: n) else {
+                    throw SpanLocatorError.nodeNotFound
+                }
+                return try walkTOML(node: element, path: path, idx: idx + 1, data: data, offsetMap: offsetMap)
             }
-            return try walkTOML(node: element, path: path, idx: idx + 1, data: data, offsetMap: offsetMap)
+            // Array-of-tables: the key step already resolved to a single
+            // `table_array_element` node. The logical array is formed by sibling
+            // `table_array_element` nodes in the parent (document) that share the
+            // same header key.  Collect them in document order and pick the n-th.
+            if node.nodeType == "table_array_element" {
+                guard let parent = node.parent else { throw SpanLocatorError.nodeNotFound }
+                let headerKey = tomlTableHeaderKey(node, data: data, offsetMap: offsetMap)
+                guard
+                    let element = tomlArrayOfTablesElement(
+                        parent: parent, headerKey: headerKey, at: n,
+                        data: data, offsetMap: offsetMap
+                    )
+                else {
+                    throw SpanLocatorError.nodeNotFound
+                }
+                return try walkTOML(node: element, path: path, idx: idx + 1, data: data, offsetMap: offsetMap)
+            }
+            throw SpanLocatorError.nodeNotFound
         }
     }
 
@@ -628,6 +648,31 @@ public enum SpanLocator {
             guard let child = arrayNode.child(at: i), child.isNamed else { continue }
             let t = child.nodeType ?? ""
             if t == "[" || t == "]" || t == "," || t == "comment" { continue }
+            if count == index { return child }
+            count += 1
+        }
+        return nil
+    }
+
+    /// Return the `n`-th `table_array_element` child of `parent` whose header key
+    /// matches `headerKey`, collecting siblings in document order.
+    ///
+    /// TOML `[[array-of-tables]]` has no wrapping array node in the tree-sitter
+    /// grammar.  All `[[name]]` sections appear as sibling `table_array_element`
+    /// children of the document root.  This helper scans them in document order
+    /// and returns the zero-based n-th match.
+    private static func tomlArrayOfTablesElement(
+        parent: Node,
+        headerKey: String?,
+        at index: Int,
+        data: Data,
+        offsetMap: UTF16ToUTF8OffsetMap
+    ) -> Node? {
+        var count = 0
+        for i in 0..<parent.childCount {
+            guard let child = parent.child(at: i), child.isNamed else { continue }
+            guard child.nodeType == "table_array_element" else { continue }
+            guard tomlTableHeaderKey(child, data: data, offsetMap: offsetMap) == headerKey else { continue }
             if count == index { return child }
             count += 1
         }
