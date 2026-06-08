@@ -44,6 +44,13 @@ let structuredFileSizeLimit: Int = 50 * 1_024 * 1_024  // 50 MiB
 ///   cross-thread interface.
 /// - `MoonSwiftCore` has zero terminal I/O; no print, no stderr, no exit calls.
 ///
+/// **Cancellation (CR-013):**
+/// `loadAll` stores every background task handle in `activeTasks`. Calling
+/// `cancelAll()` cancels all in-flight tasks from the previous `loadAll` before
+/// the next reload starts, preventing stale callbacks from arriving after a
+/// project reload. The AppDriver calls `cancelAll()` in the `reloadProject`
+/// effect handler before dispatching a new `loadAll`.
+///
 /// **Extensibility for task 16:**
 /// `loadLuaFile(at:projectRoot:id:)` handles whole `.lua` files. Task 16 adds
 /// a counterpart (`loadStructuredFile(…)`) that uses tree-sitter span location
@@ -61,6 +68,19 @@ public final class SourceStore: Sendable {
 
     private let callback: LoadCallback
 
+    /// Lock protecting `activeTasks`. All mutations happen under this lock.
+    private let tasksLock = NSLock()
+
+    /// Background task handles for the current `loadAll` invocation.
+    ///
+    /// Stored so `cancelAll()` can cancel in-flight loads when the project is
+    /// reloaded. Guarded by `tasksLock`.
+    ///
+    /// `nonisolated(unsafe)` is required because `SourceStore` is `Sendable`
+    /// and Swift 6 strict concurrency cannot see that `tasksLock` serialises
+    /// all accesses. The lock IS the synchronisation mechanism. (CR-013)
+    nonisolated(unsafe) private var activeTasks: [Task<Void, Never>] = []
+
     // MARK: Initialiser
 
     /// Creates a `SourceStore` with the given result callback.
@@ -70,6 +90,26 @@ public final class SourceStore: Sendable {
     ///   an `AppEvent` and post it to `EventChannel`.
     public init(callback: @escaping LoadCallback) {
         self.callback = callback
+    }
+
+    // MARK: Cancellation
+
+    /// Cancels all background load tasks started by the most recent `loadAll`.
+    ///
+    /// Call this before dispatching a new `loadAll` (e.g., in the
+    /// `reloadProject` effect handler in AppDriver) so that callbacks from the
+    /// previous load batch do not arrive after the new project is loaded.
+    ///
+    /// Cancellation is cooperative: tasks check `Task.isCancelled` at `await`
+    /// suspension points. A task that is already past its last suspension will
+    /// complete and invoke the callback; that is unavoidable but harmless because
+    /// the AppDriver ignores stale events for the superseded project.
+    public func cancelAll() {
+        tasksLock.lock()
+        let tasks = activeTasks
+        activeTasks = []
+        tasksLock.unlock()
+        tasks.forEach { $0.cancel() }
     }
 
     // MARK: Load all sources
@@ -82,39 +122,56 @@ public final class SourceStore: Sendable {
     ///   invocation per match (wildcards may yield multiple fragments) or one
     ///   failure event.
     ///
+    /// All spawned task handles are stored in `activeTasks` so that
+    /// `cancelAll()` can cancel the batch on a subsequent reload. Call
+    /// `cancelAll()` before `loadAll` to discard any in-flight tasks from
+    /// the previous project load. (CR-013)
+    ///
     /// - Parameters:
     ///   - entries: The `[[source]]` entries from the decoded `ProjectFile`.
     ///   - projectRoot: Absolute URL of the project root directory.
     public func loadAll(entries: [SourceEntry], projectRoot: URL) {
+        var newTasks: [Task<Void, Never>] = []
+
         for entry in entries {
             if entry.fields.isEmpty {
                 // Whole .lua file.
                 let path = entry.path
                 let id = SourceID(path: path, jsonpath: nil, document: 0)
-                Task {
+                let task = Task {
+                    guard !Task.isCancelled else { return }
                     let event = await Self.loadLuaFile(
                         at: path,
                         projectRoot: projectRoot,
                         id: id
                     )
+                    guard !Task.isCancelled else { return }
                     self.callback(event)
                 }
+                newTasks.append(task)
             } else {
                 // Structured file with field designations.
                 let path = entry.path
                 let fields = entry.fields
-                Task {
+                let task = Task {
+                    guard !Task.isCancelled else { return }
                     let events = await Self.loadStructuredFile(
                         at: path,
                         projectRoot: projectRoot,
                         fields: fields
                     )
+                    guard !Task.isCancelled else { return }
                     for event in events {
                         self.callback(event)
                     }
                 }
+                newTasks.append(task)
             }
         }
+
+        tasksLock.lock()
+        activeTasks = newTasks
+        tasksLock.unlock()
     }
 
     // MARK: Single file load (internal + testable)
