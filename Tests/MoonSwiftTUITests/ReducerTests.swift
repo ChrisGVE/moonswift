@@ -381,8 +381,11 @@ struct ReducerFocusTests {
 
     @Test("Ctrl-l jumps focus to codePane")
     func ctrlLJumpsToCodePane() {
+        // From the navigator: C-l is the global focus jump. From the bottom
+        // pane it means "clear output buffer" instead (ux-spec §2.3, #1) —
+        // covered in ReducerSequenceTests.
         var state = AppState()
-        state.focus = .pane(.bottomPane)
+        state.focus = .pane(.navigator)
 
         let (next, _) = reduce(state, .key(.char("l"), modifiers: .ctrl))
         #expect(next.focus == .pane(.codePane))
