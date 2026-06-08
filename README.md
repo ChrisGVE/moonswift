@@ -8,20 +8,99 @@ A terminal (TUI) workbench for testing Lua code written against
 > Lua means *moon* in Portuguese — MoonSwift is the literal translation of
 > LuaSwift: a tool built for that library, not a general-purpose Lua utility.
 
-## Status
+## Features
 
-Active development. SPM skeleton builds; executable target exits immediately
-(TUI not yet initialised). Subsequent tasks (F1+) add the full TUI loop,
-services, and terminal rendering.
+- **Source browser** — load `.lua` files or string fields from JSON, YAML, and
+  TOML documents; navigate sources in a panel with `j`/`k`
+- **Run** — execute the selected fragment with `r`; output streams into the
+  Output tab with return-value display and wall-clock timing
+- **Lint** — two-layer analysis with `l`: a fast syntax pre-pass on every load
+  plus a full embedded luacheck pass on demand
+- **LuaSwift globals** — the full `luaswift.*` namespace (json, yaml, regex,
+  mathx, stringx, tablex, types, utf8x, svg, and optional iox/http/ui) is
+  known to the linter; no spurious undefined-global warnings
+- **Sandboxed by default** — safe execution mode removes `io`, `debug`, and
+  unsafe OS functions; `unrestricted` mode available when needed
+- **Instruction limits** — stop runaway scripts via `run.instruction_limit`
+- **NO_COLOR support** — full compliance: character prefixes replace all
+  color-only distinctions
 
-## Planned scope
+## Quick start
 
-- Load Lua code from `.lua` files or from selected fields inside JSON, YAML,
-  and TOML documents
-- Wire up the Swift↔Lua sharing area (`LuaValueServer` implementations and
-  registered Swift functions) from the workbench
-- Lint, LSP support, debugging, and one-shot execution
-- In-place editing with write-back to the underlying source
+1. Create a project directory and add a `moonswift.toml`:
+
+   ```toml
+   lua_version = "5.4"
+
+   [[source]]
+   path = "hello.lua"
+   ```
+
+2. Add `hello.lua` next to the project file:
+
+   ```lua
+   print("hello from MoonSwift")
+   return 42
+   ```
+
+3. Launch MoonSwift in the project directory:
+
+   ```sh
+   moonswift
+   ```
+
+4. Press `r` to run, `l` to lint. Press `?` for the full keybinding reference.
+
+### Structured file example
+
+```toml
+lua_version = "5.4"
+
+[[source]]
+path = "config.json"
+
+  [[source.field]]
+  jsonpath = "$.scripts.init"
+```
+
+With a `config.json` containing:
+
+```json
+{
+  "scripts": {
+    "init": "return luaswift.mathx.clamp(0, 100, 42)"
+  }
+}
+```
+
+MoonSwift loads the string value at `$.scripts.init` as a Lua fragment.
+
+## Keybindings
+
+| Key | Action |
+|-----|--------|
+| `r` | Run selected source |
+| `l` | Lint selected source |
+| `x` | Cancel run |
+| `q` | Quit |
+| `?` | Help overlay (full keybinding list) |
+| `<C-p>` | Open project file in `$EDITOR` |
+| `<C-r>` | Reload project file |
+| `<Tab>` | Cycle panes; cycle tabs when bottom pane is focused |
+| `<S-Tab>` | Reverse-cycle panes |
+| `<C-h>` | Jump to navigator |
+| `<C-l>` | Jump to code pane |
+| `<C-j>` | Jump to bottom pane |
+
+Press `?` inside MoonSwift for the complete per-pane reference.
+
+## User documentation
+
+- [CLI reference](docs/user/cli.md) — flags, exit codes, environment variables
+- [Project file](docs/user/project-file.md) — full `moonswift.toml` schema
+- [Sources](docs/user/sources.md) — loading .lua files, field designations, JSONPath subset
+- [Running](docs/user/running.md) — execution, output capture, limits, sandbox
+- [Linting](docs/user/linting.md) — two-layer lint, catalog modules, extra_modules
 
 ## Building from source
 
