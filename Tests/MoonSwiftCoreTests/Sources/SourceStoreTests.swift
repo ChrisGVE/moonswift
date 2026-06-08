@@ -874,3 +874,70 @@ struct SourceStoreLoadStructuredFileTests {
         #expect(diag.message.contains("designate the anchor"))
     }
 }
+
+// MARK: - CR-002 regression: escaped strings must load successfully
+
+/// Regression suite for CR-002: the former R7 byte-equality check compared
+/// raw file bytes (escape sequences verbatim, e.g. backslash-n = two chars)
+/// against the decoded Lua string (backslash-n = real newline). Any fragment
+/// containing a JSON escape would always trigger a false span-mismatch failure.
+/// The R7 check has been removed; only the tree-sitter round-trip validates the
+/// span. These tests confirm that escaped fragments load as .loaded, not .failed.
+@Suite("SourceStore — escaped-string fragments (CR-002 regression)")
+struct SourceStoreEscapedStringTests {
+
+    private var fixturesRoot: URL {
+        Bundle.module.url(forResource: "Fixtures/Sources", withExtension: nil)!
+    }
+
+    /// A JSON fragment whose value contains a \n escape must load as .loaded
+    /// and produce the decoded string (real newline), not a span-mismatch failure.
+    @Test("JSON \\n escape — loads as .loaded with decoded value (not .failed)")
+    func jsonNewlineEscape() async {
+        let events = await SourceStore.loadStructuredFile(
+            at: "scripts-escaped.json",
+            projectRoot: fixturesRoot,
+            fields: [FieldDesignation(jsonpath: "$.scripts.init", document: 0)]
+        )
+
+        guard let event = events.first else {
+            Issue.record("Expected at least one event")
+            return
+        }
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event) — R7 regression: escaped fragment must not fail")
+            return
+        }
+
+        #expect(id.jsonpath == "$.scripts.init")
+        // The decoded value must contain a real newline, not the two-char sequence.
+        #expect(fragment.code.contains("\n"))
+        #expect(!fragment.code.contains("\\n"))
+    }
+
+    /// A JSON fragment whose value contains a \t escape must also load cleanly.
+    @Test("JSON \\t escape — loads as .loaded with decoded value (not .failed)")
+    func jsonTabEscape() async {
+        let events = await SourceStore.loadStructuredFile(
+            at: "scripts-escaped.json",
+            projectRoot: fixturesRoot,
+            fields: [FieldDesignation(jsonpath: "$.scripts.tab", document: 0)]
+        )
+
+        guard let event = events.first else {
+            Issue.record("Expected at least one event")
+            return
+        }
+
+        guard case .loaded(let id, let fragment) = event else {
+            Issue.record("Expected .loaded, got \(event) — R7 regression: escaped fragment must not fail")
+            return
+        }
+
+        #expect(id.jsonpath == "$.scripts.tab")
+        // The decoded value must contain a real tab character.
+        #expect(fragment.code.contains("\t"))
+        #expect(!fragment.code.contains("\\t"))
+    }
+}

@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "init": "line1\nline2",
+    "tab": "col1\tcol2"
+  }
+}

@@ -410,24 +410,6 @@ public final class SourceStore: Sendable {
                 continue
             }
 
-            // --- R7 cross-check: span text must match decoded value ---
-            let spanStart = spanLocation.byteRange.lowerBound
-            let spanEnd = spanLocation.byteRange.upperBound
-            if spanStart < data.count && spanEnd <= data.count {
-                if let spanText = String(data: data[spanStart..<spanEnd], encoding: .utf8),
-                    spanText != code
-                {
-                    let diag = Diagnostic(
-                        severity: .error,
-                        message:
-                            "✖ \(filename): span-mismatch at \"\(normalizedJSONPath)\" (span text ≠ decoded value)",
-                        source: .sourceLoad
-                    )
-                    events.append(.failed(id: id, state: .failed(diag)))
-                    continue
-                }
-            }
-
             // --- Build provenance and fragment ---
             let provenance = FragmentProvenance(
                 file: fileURL,
