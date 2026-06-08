@@ -344,6 +344,20 @@ let package = Package(
             swiftSettings: swiftTargetSettings
         ),
 
+        // MoonSwiftPerfTests: performance benchmarks.
+        // Six measurements (render pipeline, cancellation, pre-pass, luacheck,
+        // source load, cold-start proxy) with 2× PRD thresholds to absorb CI
+        // runner variance. NOT wired into ci.yml — see Tests/MoonSwiftPerfTests/
+        // PerfTests.swift file header for rationale and local run instructions.
+        .testTarget(
+            name: "MoonSwiftPerfTests",
+            dependencies: [
+                "MoonSwiftTUI"
+            ],
+            path: "Tests/MoonSwiftPerfTests",
+            swiftSettings: swiftTargetSettings
+        ),
+
         // RatatuiKit unit tests.
         .testTarget(
             name: "RatatuiKitTests",
