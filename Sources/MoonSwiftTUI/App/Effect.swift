@@ -117,6 +117,21 @@ public enum Effect: Sendable {
     /// at the call site in that task's pass.
     case yank(String)
 
+    // MARK: Init form
+
+    /// Scan `directory` for candidate source files (.lua/.json/.yaml/.toml) and
+    /// post `.projectDirectoryScanned` with the resulting paths when complete.
+    ///
+    /// Used by the init form to populate the source-file multi-select list.
+    /// The scan runs on a background Task to avoid blocking the UI thread.
+    case scanProjectDirectory(URL)
+
+    /// Write a minimal `moonswift.toml` containing `luaVersion` and `sources`
+    /// to `directory`, then post `.projectFileWritten` (success or failure).
+    ///
+    /// Transitions the app from empty state to the loaded project state.
+    case writeProjectFile(directory: URL, luaVersion: String, sources: [String])
+
     // MARK: Process lifecycle
 
     /// Break the AppDriver loop, run teardown, and `exit(exitCode)`.

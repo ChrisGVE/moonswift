@@ -157,6 +157,16 @@ public enum AppEvent: Sendable {
     /// Tree-sitter highlight spans are ready for the given source. The reducer
     /// applies these to AppState.highlight (ARCHITECTURE.md §2 Highlighter row).
     case highlightReady(SourceID, spans: [HighlightSpan])
+
+    // MARK: Init form (task 24)
+
+    /// The project-directory scan completed. `files` is the sorted list of
+    /// candidate paths (.lua/.json/.yaml/.toml relative to the project directory).
+    case projectDirectoryScanned([String])
+
+    /// The project file write completed. On success `projectURL` is the written
+    /// file URL; on failure `error` carries the reason (used for a transient).
+    case projectFileWritten(projectURL: URL?, error: String?)
 }
 
 // MARK: - HighlightSpan
