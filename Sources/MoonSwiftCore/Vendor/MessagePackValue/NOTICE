@@ -1,0 +1,70 @@
+# Vendored: MessagePack.swift
+
+## Origin
+
+Upstream repository: https://github.com/a2/MessagePack.swift
+Pinned commit:       (latest main as of 2026-06-08)
+Upstream version:    4.0.0 (last tagged release)
+License:             MIT (see LICENSE below)
+
+## Subset manifest
+
+All 7 files from `Sources/MessagePack/` are included verbatim:
+
+  MessagePack.swift           — MessagePackValue enum, Equatable, Hashable,
+                                MessagePackError
+  Pack.swift                  — pack(_:) top-level function
+  Unpack.swift                — unpack(_:compatibility:), unpackFirst,
+                                unpackAll, unpackArray, unpackMap
+  Subdata.swift               — Subdata RandomAccessCollection view over Data
+  LiteralConvertibles.swift   — ExpressibleBy* conformances
+  ConvenienceInitializers.swift — init overloads for all types
+  ConvenienceProperties.swift — typed accessor computed properties
+
+## MoonSwift vendor modifications (Swift 6 strict-concurrency compliance)
+
+The upstream code predates Swift 6. The following minimal surgical edits were
+applied; each is marked with `// MoonSwift vendor note:` in the source:
+
+1. `MessagePack.swift`: added `: Sendable` to the `MessagePackValue` enum
+   declaration. All associated values (Bool, Int64, UInt64, Float, Double,
+   String, Data, [MessagePackValue], [MessagePackValue: MessagePackValue],
+   (Int8, Data)) are themselves Sendable, so this is a semantically correct
+   conformance, not a suppression.
+
+2. `Subdata.swift`: added `: Sendable` to the `Subdata` struct declaration.
+   All stored properties (base: Data, baseStartIndex: Int, baseEndIndex: Int)
+   are Sendable value types, so this is a semantically correct conformance.
+
+No other edits were made. The msgpack wire format encoded and decoded by
+these files is identical to upstream.
+
+## Upgrade policy
+
+To upgrade: fetch the new upstream commit, overwrite these 7 files, re-apply
+the two `: Sendable` additions, update this NOTICE. Verify round-trip tests
+remain green.
+
+## License
+
+The MIT License (MIT)
+
+Copyright (c) 2015 Alexsander Akers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

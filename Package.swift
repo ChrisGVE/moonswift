@@ -262,6 +262,11 @@ let package = Package(
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ],
             path: "Sources/MoonSwiftCore",
+            exclude: [
+                // Provenance/licence note for the vendored msgpack codec — an
+                // extension-less file SPM would otherwise flag as unhandled.
+                "Vendor/MessagePackValue/NOTICE"
+            ],
             resources: [
                 // Vendored luacheck pure-Lua subset (F4.0 spike; F4.2 production).
                 // Loaded at runtime by LintService via Bundle.module.
