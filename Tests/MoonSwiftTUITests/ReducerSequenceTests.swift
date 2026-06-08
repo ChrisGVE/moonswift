@@ -1173,29 +1173,35 @@ struct ModalFlowTests {
 
     // MARK: Init form modal (P1 stub — Esc closes; other keys are absorbed)
 
-    // NOTE: initForm is a P1 stub. Only Esc is handled; all other keys are
-    // absorbed. Full form behavior (field navigation, confirmation) belongs to
-    // a future task (task 24). These tests verify the stub contract.
+    // Init form — full behavior implemented in task 24.
 
-    @Test("Init form: Esc closes to navigator")
+    @Test("Init form: Esc closes to navigator and clears initFormState")
     func initFormEscCloses() {
         var state = AppState()
         state.focus = .initForm
+        state.initFormState = InitFormState()
 
         let (next, _) = reduce(state, .key(.escape, modifiers: []))
         #expect(next.focus == .pane(.navigator), "Esc must close init form")
+        #expect(next.initFormState == nil, "Esc must clear initFormState")
     }
 
-    @Test("Init form: keys other than Esc are absorbed without changing focus")
+    @Test("Init form: non-navigation keys do not change focus when form is open")
     func initFormAbsorbsKeys() {
         var state = AppState()
         state.focus = .initForm
+        state.launch = .empty
+        state.initFormState = InitFormState(
+            candidateFiles: ["a.lua", "b.lua"],
+            isScanning: false
+        )
 
-        for code: KeyCode in [.char("j"), .enter, .tab, .char("i")] {
+        // j/k navigate the file list without leaving the form.
+        for code: KeyCode in [.char("j"), .char("k"), .tab] {
             let (next, _) = reduce(state, .key(code, modifiers: []))
             #expect(
                 next.focus == .initForm,
-                "Key \(code) in init form must not change focus (P1 stub)"
+                "Key \(code) in init form must not change focus"
             )
         }
     }

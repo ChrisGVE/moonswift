@@ -696,9 +696,10 @@ struct EnterJumpTests {
 
         let (next, _) = reduce(state, .key(.enter, modifiers: []))
 
-        // Code pane must be scrolled to line 8 (1-based) → index 7 (0-based).
+        // Code pane cursor must be placed at line 8 (1-based) → index 7 (0-based).
         #expect(next.codePane.cursorLine == 7)
-        #expect(next.codePane.scrollOffset == 7)
+        // scrollOffset centers the target: max(0, target - halfPageSize(10)) = 0.
+        #expect(next.codePane.scrollOffset == 0)
         // jumpPulseLine must be set for the 500 ms highlight pulse hook (ux-spec §3.5).
         #expect(
             next.codePane.jumpPulseLine == 7,

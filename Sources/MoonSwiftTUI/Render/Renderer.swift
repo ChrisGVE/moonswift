@@ -1413,6 +1413,9 @@ func buildRunFooter(outcome: RunOutcome) -> String {
         case .wallClock:
             return "wall-clock limit exceeded"
         }
+    case .engineError(let message):
+        // ux-spec §6.3 exact format: "✖ Engine error: <message>"
+        return "✖ Engine error: \(message)"
     }
 }
 

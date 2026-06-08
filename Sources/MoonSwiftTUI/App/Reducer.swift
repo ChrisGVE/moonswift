@@ -144,6 +144,20 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     case .highlightReady(let id, let spans):
         s.highlight[id] = spans
         return (s, [])
+
+    // MARK: Init form events (task 24)
+
+    case .projectDirectoryScanned(let files):
+        // Populate the init form's candidate file list on scan completion.
+        if var form = s.initFormState {
+            form.candidateFiles = files
+            form.isScanning = false
+            s.initFormState = form
+        }
+        return (s, [])
+
+    case .projectFileWritten(let projectURL, let error):
+        return reduceProjectFileWritten(s, projectURL: projectURL, error: error)
     }
 }
 
@@ -170,12 +184,13 @@ private func reduceTick(_ s: AppState) -> (AppState, [Effect]) {
         s.transient = nil
     }
 
-    // Expire the 500 ms highlight pulse: the tick fires once after 500 ms,
-    // which marks the end of the pulse animation (ux-spec §3.5). Clearing
-    // `jumpPulseLine` causes the renderer to revert to the normal line style
-    // on the next frame.
-    if s.codePane.jumpPulseLine != nil {
+    // Expire the 500 ms highlight pulse only once its deadline has passed
+    // (ux-spec §3.5). Ticks can arrive much earlier than 500 ms when a faster
+    // consumer (the 100 ms run tick) is also armed — those early ticks must
+    // not end the animation, so this mirrors the transient-expiry pattern.
+    if let expiry = s.codePane.jumpPulseExpiry, Date() >= expiry {
         s.codePane.jumpPulseLine = nil
+        s.codePane.jumpPulseExpiry = nil
     }
 
     // Advance spinner phase (wraps at 8 — braille set has 8 frames).
@@ -346,6 +361,10 @@ private func reduceGlobalKey(
         let current = s.paneLayout.bottomPaneHeight ?? PaneLayout.defaultBottomRows
         s.paneLayout.bottomPaneHeight = min(PaneLayout.bottomPaneMaxRatio, current + 1)
         return (s, [])
+
+    // i — open init form in empty state; transient no-op in quick-file mode
+    case (.char("i"), []):
+        return reduceInitFormOpen(s)
 
     default:
         return nil
@@ -867,16 +886,180 @@ private func reducePickerTreeReady(
     return (s, [])
 }
 
+// MARK: - Init form open handler (task 24)
+
+/// Opens the project-initialisation form or shows a transient for quick-file mode.
+///
+/// - Empty state (`LaunchMode.empty`): open the form, fire a directory scan.
+/// - Quick-file mode (`LaunchMode.quickFile`): show a transient; init form
+///   is not available in quick-file mode (ux-spec §3.1 note).
+/// - Project mode: no-op (project already exists).
+private func reduceInitFormOpen(_ s: AppState) -> (AppState, [Effect])? {
+    var s = s
+
+    switch s.launch {
+    case .empty:
+        guard s.initFormState == nil else {
+            // Already open — absorb key.
+            return (s, [])
+        }
+        s.initFormState = InitFormState()
+        s.focus = .initForm
+        return (s, [.scanProjectDirectory(emptyCWD(for: s))])
+
+    case .quickFile:
+        // Quick-file mode: i is a no-op with a transient (task 24 scope note).
+        s.transient = TransientMessage(text: "No project: i unavailable in quick-file mode")
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+
+    case .project:
+        // Project already loaded — i has no meaning.
+        return nil
+    }
+}
+
+/// Returns the working-directory URL for the empty-state scan.
+///
+/// In empty state `s.launch == .empty` and we have no project root URL, so we
+/// fall back to the process current directory (same as what Main resolved when
+/// deciding the launch mode was empty).
+private func emptyCWD(for s: AppState) -> URL {
+    URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+}
+
+// MARK: - Init form key handler (task 24, replaces stub)
+
+/// Handles all keyboard input while the project-init form modal is open.
+///
+/// Key routing (ux-spec §3.1):
+///   Tab / Enter (on luaVersion)  — advance to sourceFiles field
+///   Tab (on sourceFiles)         — wrap back to luaVersion
+///   j / k                        — move cursor in file list
+///   Space / Enter (sourceFiles)  — toggle selection of current file
+///   Enter (on sourceFiles, last) — confirm and write project file
+///   Esc                          — cancel without writing
+///
+/// Fields (ux-spec §3.1):
+///   Field 1 — Lua version: pre-filled "5.4", read-only in P1, Enter/Tab advances.
+///   Field 2 — Source files: multi-select, Space/Enter to toggle, Enter confirms.
 private func reduceInitFormKey(
     _ s: AppState,
     code: KeyCode,
     modifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
     var s = s
-    if case (.escape, []) = (code, modifiers) {
+
+    // If the form was closed (e.g. by a race), return focus to navigator.
+    guard var form = s.initFormState else {
         s.focus = .pane(.navigator)
+        return (s, [])
     }
-    return (s, [])
+
+    switch (code, modifiers) {
+
+    // Esc — cancel without writing (ux-spec §3.1)
+    case (.escape, []):
+        s.initFormState = nil
+        s.focus = .pane(.navigator)
+        return (s, [])
+
+    // Tab — cycle between fields
+    case (.tab, []):
+        switch form.focusedField {
+        case .luaVersion:
+            form.focusedField = .sourceFiles
+        case .sourceFiles:
+            form.focusedField = .luaVersion
+        }
+        s.initFormState = form
+        return (s, [])
+
+    // Enter — confirm current field or submit form
+    case (.enter, []):
+        switch form.focusedField {
+        case .luaVersion:
+            // Advance to the source files field.
+            form.focusedField = .sourceFiles
+            s.initFormState = form
+            return (s, [])
+
+        case .sourceFiles:
+            // Confirm: write the project file with the current selections.
+            return confirmInitForm(s, form: form)
+        }
+
+    // j — move cursor down in the file list (only on sourceFiles field)
+    case (.char("j"), []):
+        if form.focusedField == .sourceFiles, !form.candidateFiles.isEmpty {
+            form.fileListCursor = min(form.fileListCursor + 1, form.candidateFiles.count - 1)
+            s.initFormState = form
+        }
+        return (s, [])
+
+    // k — move cursor up in the file list (only on sourceFiles field)
+    case (.char("k"), []):
+        if form.focusedField == .sourceFiles {
+            form.fileListCursor = max(form.fileListCursor - 1, 0)
+            s.initFormState = form
+        }
+        return (s, [])
+
+    // Space — toggle selection of current file in the list
+    case (.char(" "), []):
+        if form.focusedField == .sourceFiles, form.candidateFiles.indices.contains(form.fileListCursor) {
+            let file = form.candidateFiles[form.fileListCursor]
+            if form.selectedFiles.contains(file) {
+                form.selectedFiles.remove(file)
+            } else {
+                form.selectedFiles.insert(file)
+            }
+            s.initFormState = form
+        }
+        return (s, [])
+
+    default:
+        return (s, [])
+    }
+}
+
+/// Confirm the init form: write moonswift.toml with chosen selections.
+private func confirmInitForm(_ s: AppState, form: InitFormState) -> (AppState, [Effect]) {
+    let sources = form.selectedFiles.sorted()
+    let dir = emptyCWD(for: s)
+    let effect = Effect.writeProjectFile(
+        directory: dir,
+        luaVersion: form.luaVersion,
+        sources: sources
+    )
+    return (s, [effect])
+}
+
+/// Handles the `.projectFileWritten` event — transitions from empty to loaded state.
+private func reduceProjectFileWritten(
+    _ s: AppState,
+    projectURL: URL?,
+    error: String?
+) -> (AppState, [Effect]) {
+    var s = s
+
+    if let err = error {
+        // Write failed: show transient, leave form open.
+        s.transient = TransientMessage(text: "Error writing project file: \(err)")
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+    }
+
+    guard let url = projectURL else { return (s, []) }
+
+    // Close the form.
+    s.initFormState = nil
+    s.focus = .pane(.navigator)
+
+    // Transition launch mode to project with the directory.
+    let dir = url.deletingLastPathComponent()
+    s.launch = .project(dir)
+
+    // Trigger a project reload to populate the navigator.
+    return (s, [.loadProject(url.deletingLastPathComponent())])
 }
 
 // MARK: - Focus cycling
@@ -1258,11 +1441,14 @@ private func jumpCodePaneFromBottomPane(_ s: AppState) -> (AppState, [Effect]) {
     let line = diags[idx].line
     let targetLine = max(0, line - 1)
     s.codePane.cursorLine = targetLine
-    s.codePane.scrollOffset = targetLine
-    // Set the 500 ms highlight pulse (ux-spec §3.5, §6.3 "→ jump to line N"
-    // affordance). Task 31 implements the pulse animation; here we set the
-    // state hook so the reducer's output is correct when task 31 wires it up.
+    // Center the target in view where possible (task 31 jump behavior;
+    // half-page matches the d/u scroll step).
+    s.codePane.scrollOffset = max(0, targetLine - 10)
+    // Start the 500 ms highlight pulse (ux-spec §3.5). The expiry deadline —
+    // not the next tick — ends the animation, because a faster tick consumer
+    // (100 ms run tick) may fire well before 500 ms.
     s.codePane.jumpPulseLine = targetLine
+    s.codePane.jumpPulseExpiry = Date().addingTimeInterval(0.5)
     return (s, [armTickIfNeeded(s)].compactMap { $0 })
 }
 
