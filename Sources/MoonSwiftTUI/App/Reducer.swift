@@ -285,8 +285,12 @@ private func reduceGlobalKey(
         s.focus = .pane(.navigator)
         return (s, [])
 
-    // <C-l> — jump to code pane
+    // <C-l> — jump to code pane; EXCEPT when the bottom pane is focused,
+    // where <C-l> means "clear output buffer" (ux-spec §2.3 bottom-pane
+    // table, §6.4). The pane table takes precedence there, so decline the
+    // key and let per-pane dispatch handle it (Fixes #1).
     case (.char("l"), .ctrl):
+        if case .pane(.bottomPane) = s.focus { return nil }
         s.focus = .pane(.codePane)
         return (s, [])
 

@@ -1566,43 +1566,37 @@ struct CrossCuttingSequenceTests {
         #expect(hasQuit, "q must emit .quit(exitCode: 0)")
     }
 
-    // MARK: Bottom pane C-l — unreachable clear handler (global key intercept)
+    // MARK: Bottom pane C-l — clear output buffer (pane table overrides global)
 
-    // BUG REPORT: The bottom pane `C-l` clear handler in `reduceBottomPaneKey`
-    // (Reducer.swift) is unreachable. The global key dispatch in `reduceGlobalKey`
-    // handles `(.char("l"), .ctrl)` first (jumping focus to codePane), so the
-    // per-pane handler never receives this keystroke. The ux-spec §2.3 lists
-    // `<C-l>` under "Bottom pane keys" as "Clear output buffer", but the reducer
-    // dispatch order means the global jump always wins.
-    //
-    // Repro sequence:
-    //   state.focus = .pane(.bottomPane)
-    //   reduce(state, .key(.char("l"), modifiers: .ctrl))
-    //   → next.focus == .pane(.codePane)   (global handler fired)
-    //   → next.bottomPane.outputBuffer unchanged
-    //
-    // Expected (per spec): outputBuffer cleared, scrollOffset reset to 0
-    // Actual: focus jumps to codePane, buffer untouched
-    //
-    // Spec citation: ux-spec.md §2.3 "Bottom pane keys: `<C-l>` Clear output buffer"
-    // Fix: In `reduceGlobalKey`, the `(.char("l"), .ctrl)` case must be moved to
-    //      per-pane dispatch (only in non-bottomPane panes), or the bottom pane
-    //      handler must run before global dispatch when bottomPane is focused.
+    // History (#1): the global C-l handler used to intercept this key before
+    // per-pane dispatch, making the bottom pane's clear handler unreachable.
+    // Fixed by having the global case decline the key when the bottom pane is
+    // focused (ux-spec §2.3 bottom-pane table, §6.4).
 
-    @Test("C-l while bottomPane focused: global C-l intercepts and jumps focus to codePane")
-    func ctrlLFromBottomPaneJumpsToCodPane() {
-        // This test documents the ACTUAL reducer behavior (global key intercept).
-        // See BUG REPORT above for the discrepancy with ux-spec §2.3.
+    @Test("C-l while bottomPane focused clears the output buffer, focus stays")
+    func ctrlLFromBottomPaneClearsBuffer() {
         var state = AppState()
         state.focus = .pane(.bottomPane)
         state.bottomPane.outputBuffer = Array(repeating: "line", count: 5)
+        state.bottomPane.scrollOffset = 3
 
         let (next, _) = reduce(state, .key(.char("l"), modifiers: .ctrl))
 
-        // Global C-l fires first and jumps focus to codePane.
-        #expect(next.focus == .pane(.codePane), "Global C-l intercepts before bottom-pane handler")
-        // Output buffer is NOT cleared (per-pane handler never ran).
-        #expect(!next.bottomPane.outputBuffer.isEmpty, "Buffer is NOT cleared (global handler intercepts)")
+        #expect(next.bottomPane.outputBuffer.isEmpty, "C-l in bottom pane must clear the output buffer (ux-spec §2.3)")
+        #expect(next.bottomPane.scrollOffset == 0, "Clear resets scroll offset")
+        #expect(next.focus == .pane(.bottomPane), "Focus stays on the bottom pane")
+    }
+
+    @Test("C-l from navigator and codePane still jumps focus to codePane")
+    func ctrlLFromOtherPanesJumpsToCodePane() {
+        for pane in [PaneID.navigator, PaneID.codePane] {
+            var state = AppState()
+            state.focus = .pane(pane)
+
+            let (next, _) = reduce(state, .key(.char("l"), modifiers: .ctrl))
+
+            #expect(next.focus == .pane(.codePane), "Global C-l must jump to codePane from \(pane)")
+        }
     }
 
     // MARK: Bottom pane j/k scroll
