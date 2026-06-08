@@ -720,9 +720,12 @@ private func reducePickerKey(
 ) -> (AppState, [Effect]) {
     var s = s
 
-    // If picker state is nil (unexpected), reset focus.
+    // If picker state is nil (e.g. race between event delivery and state teardown),
+    // absorb non-Esc keys so focus stays in pickerModal; Esc always exits.
     guard var picker = s.pickerState else {
-        s.focus = .pane(.navigator)
+        if case (.escape, []) = (code, modifiers) {
+            s.focus = .pane(.navigator)
+        }
         return (s, [])
     }
 

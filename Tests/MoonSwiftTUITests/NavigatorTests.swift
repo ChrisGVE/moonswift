@@ -41,7 +41,8 @@ private func stateWithNavigator(
     sources: [SourceID: SourceState] = [:],
     selectedIndex: Int = 0,
     filterText: String? = nil,
-    spinnerPhase: Int = 0
+    spinnerPhase: Int = 0,
+    launch: LaunchMode = .empty
 ) -> AppState {
     var state = AppState()
     state.navigatorOrder = ids
@@ -52,6 +53,7 @@ private func stateWithNavigator(
         spinnerPhase: spinnerPhase
     )
     state.focus = .pane(.navigator)
+    state.launch = launch
     return state
 }
 
@@ -192,10 +194,21 @@ struct NavigatorKeyboardTests {
     @Test("m on structured-file entry opens picker modal")
     func mOnStructuredFileOpensPicker() {
         let id = SourceID(path: "data.json", jsonpath: "$.scripts[0]")
-        let state = stateWithNavigator(ids: [id], selectedIndex: 0)
+        let projectRoot = URL(fileURLWithPath: "/project")
+        let state = stateWithNavigator(
+            ids: [id],
+            selectedIndex: 0,
+            launch: .project(projectRoot)
+        )
 
-        let (next, _) = reduce(state, .key(.char("m"), modifiers: []))
+        let (next, effects) = reduce(state, .key(.char("m"), modifiers: []))
         #expect(next.focus == .pickerModal, "m on structured-file entry must open picker modal")
+        #expect(next.pickerState != nil, "pickerState must be seeded when picker opens")
+        let hasLoadEffect = effects.contains {
+            if case .loadPickerTree(let sid, _) = $0 { return sid == id }
+            return false
+        }
+        #expect(hasLoadEffect, "must emit loadPickerTree effect for the selected source")
     }
 }
 
