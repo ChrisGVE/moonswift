@@ -725,10 +725,9 @@ private func renderBottomPane(
     let tabRow = Rect(x: inner.x, y: inner.y, width: inner.width, height: 1)
     let contentRect = Rect(x: inner.x, y: inner.y + 1, width: inner.width, height: inner.height - 1)
 
-    let selectedTabIdx = state.bottomPane.activeTab == .output ? 0 : 1
-    var commands: [RenderCommand] = [
-        .tabBar(rect: tabRow, tabs: ["Output", "Diagnostics"], selectedIndex: selectedTabIdx)
-    ]
+    var commands: [RenderCommand] = []
+    commands += renderBottomPaneTabBar(
+        state: state, rect: tabRow, width: Int(inner.width), theme: theme)
 
     switch state.bottomPane.activeTab {
     case .output:
@@ -740,50 +739,303 @@ private func renderBottomPane(
     return commands
 }
 
+// MARK: Tab bar (ux-spec §6.1)
+
+/// Renders the tab bar row for the bottom pane.
+///
+/// Tab layout (ux-spec §6.1, §8.5 accessibility):
+/// - Active tab: text underlined in `focus_border` color.
+/// - Inactive tab: normal style.
+/// - Exact tab labels: `[ Output ]` and `[ Diagnostics ]` (ux-spec §6.1).
+/// - Source provenance (display name) is right-justified in the same row when
+///   a source is loaded (ux-spec §6.1).
+private func renderBottomPaneTabBar(
+    state: AppState,
+    rect: Rect,
+    width: Int,
+    theme: ThemeState
+) -> [RenderCommand] {
+    let outputLabel = "[ Output ]"
+    let diagLabel = "[ Diagnostics ]"
+
+    // Build the tab line left-to-right with exact labels.
+    let activeIsOutput = state.bottomPane.activeTab == .output
+    // Two spans: active tab underlined, inactive normal.
+    let outputStyle: CellStyle
+    let diagStyle: CellStyle
+    if activeIsOutput {
+        outputStyle = tabActiveStyle(theme)
+        diagStyle = normalStyle(theme)
+    } else {
+        outputStyle = normalStyle(theme)
+        diagStyle = tabActiveStyle(theme)
+    }
+
+    // Separator between the two tab labels.
+    let separator = " "
+    let tabsText = outputLabel + separator + diagLabel
+
+    // Right-justified source provenance (ux-spec §6.1).
+    let provenance: String?
+    if let id = state.selection, case .loaded(let fragment) = state.sources[id] {
+        provenance = fragment.provenance.displayName
+    } else {
+        provenance = nil
+    }
+
+    // Total tab row as cell runs: output tab | sep | diagnostics tab | padding | provenance.
+    var commands: [RenderCommand] = []
+    let row = rect.y
+    let startCol = rect.x
+
+    // Output tab span.
+    commands.append(
+        .cellRun(col: startCol, row: row, text: outputLabel, style: outputStyle)
+    )
+    // Separator.
+    let sepCol = startCol + UInt16(outputLabel.count)
+    commands.append(
+        .cellRun(col: sepCol, row: row, text: separator, style: normalStyle(theme))
+    )
+    // Diagnostics tab span.
+    let diagCol = sepCol + UInt16(separator.count)
+    commands.append(
+        .cellRun(col: diagCol, row: row, text: diagLabel, style: diagStyle)
+    )
+
+    // Provenance and padding fill the rest of the row.
+    let usedCols = tabsText.count
+    let remainingCols = max(0, width - usedCols)
+    if let prov = provenance, !prov.isEmpty, remainingCols > 0 {
+        // Right-justify: pad left so the provenance sits flush at the right edge.
+        let truncated = String(prov.suffix(remainingCols))
+        let padCount = remainingCols - truncated.count
+        let padCol = startCol + UInt16(usedCols)
+        if padCount > 0 {
+            commands.append(
+                .cellRun(
+                    col: padCol, row: row,
+                    text: String(repeating: " ", count: padCount),
+                    style: normalStyle(theme))
+            )
+        }
+        let provCol = padCol + UInt16(padCount)
+        commands.append(
+            .cellRun(col: provCol, row: row, text: truncated, style: dimStyle(theme))
+        )
+    } else if remainingCols > 0 {
+        // Fill remaining space with spaces.
+        let padCol = startCol + UInt16(usedCols)
+        commands.append(
+            .cellRun(
+                col: padCol, row: row,
+                text: String(repeating: " ", count: remainingCols),
+                style: normalStyle(theme))
+        )
+    }
+
+    return commands
+}
+
+/// Style for the active bottom-pane tab (underlined, `focus_border` color).
+///
+/// ux-spec §6.1: "Active tab: underlined text in `focus_border` color."
+/// §8.5 accessibility: underline is the non-color indicator alongside color.
+private func tabActiveStyle(_ theme: ThemeState) -> CellStyle {
+    guard let ts = theme.tokens[.focusBorder] else { return CellStyle.default }
+    let fg: UInt32 = ts.fg.map { terminalColorToUInt32($0) } ?? 0xFFFF_FFFF
+    let bg: UInt32 = ts.bg.map { terminalColorToUInt32($0) } ?? 0xFFFF_FFFF
+    // UNDERLINE bit = 0x0004 (matches shim macro encoding in tokenStyle).
+    return CellStyle(fg: fg, bg: bg, mods: 0x0004)
+}
+
+// MARK: Output tab (ux-spec §6.3, §6.4)
+
+/// Renders the Output tab content.
+///
+/// Structure:
+///   - Run header: `── Run N · HH:MM:SS ──` (ux-spec §6.3, §6.8 narrow elision).
+///   - Streamed output lines from `outputBuffer` (after the header).
+///   - Run footer appended after the last output line (ux-spec §6.3).
+///   - Return value line `→ <display>` before the footer when present.
+///
+/// The buffer stores output as plain strings including the header and footer
+/// lines already appended by the reducer. The renderer displays the buffer
+/// contents as-is, scrolled by `scrollOffset`.
 private func renderOutputTab(
     state: AppState,
     rect: Rect,
     theme: ThemeState
 ) -> [RenderCommand] {
-    let lines = state.bottomPane.outputBuffer.map { [Span($0, style: normalStyle(theme))] }
+    let bp = state.bottomPane
+
+    // Assemble full view: run header (if a run has started), then buffer lines.
+    // The buffer itself already contains footer/notice lines appended by the reducer.
+    var allLines: [String] = []
+
+    // Run header (ux-spec §6.3) — present when at least one run has been made.
+    if bp.runNumber > 0, let startTime = bp.runStartTime {
+        let header = buildRunHeader(runNumber: bp.runNumber, startTime: startTime, width: Int(rect.width))
+        allLines.append(header)
+    }
+
+    // Buffer lines (output, footer, notices).
+    allLines.append(contentsOf: bp.outputBuffer)
+
+    // Scroll window.
+    let scrollOffset = min(bp.scrollOffset, max(0, allLines.count - 1))
+    let visibleLines = allLines.dropFirst(scrollOffset)
+
+    let lines = visibleLines.map { [Span($0, style: normalStyle(theme))] }
     return [.paragraph(rect: rect, lines: lines, block: nil)]
 }
 
+/// Builds the run header string for the given run number and start time,
+/// applying the narrow-width elision ladder (ux-spec §6.8).
+///
+/// Elision steps (ux-spec §6.8, all binding):
+///
+/// | Width | Format                   |
+/// |-------|--------------------------|
+/// | ≥ 80  | `── Run N · HH:MM:SS ──` |
+/// | ≥ 60  | `── Run N · HH:MM ──`    |
+/// | ≥ 40  | `── Run N ──`            |
+/// | < 40  | `──N──`                  |
+func buildRunHeader(runNumber: Int, startTime: Date, width: Int) -> String {
+    let calendar = Calendar.current
+    let h = calendar.component(.hour, from: startTime)
+    let m = calendar.component(.minute, from: startTime)
+    let s = calendar.component(.second, from: startTime)
+    let hms = String(format: "%02d:%02d:%02d", h, m, s)
+    let hm = String(format: "%02d:%02d", h, m)
+
+    if width >= 80 {
+        return "── Run \(runNumber) · \(hms) ──"
+    } else if width >= 60 {
+        return "── Run \(runNumber) · \(hm) ──"
+    } else if width >= 40 {
+        return "── Run \(runNumber) ──"
+    } else {
+        return "──\(runNumber)──"
+    }
+}
+
+// MARK: Run footer helpers (ux-spec §6.3)
+
+/// Builds the run footer string from a `RunOutcome` (ux-spec §6.3 exact format).
+///
+/// | Outcome              | Footer text                                      |
+/// |----------------------|--------------------------------------------------|
+/// | `.done`              | `done — Xms`                                     |
+/// | `.error`             | `error — <message> → jump to line N`             |
+/// | `.cancelled`         | `cancelled`                                      |
+/// | `.limitExceeded`     | `instruction limit exceeded (N instructions)` /  |
+/// |                      | `wall-clock limit exceeded (Xms)`                |
+///
+/// The `→ jump to line N` affordance is interactive in the rendered pane:
+/// pressing Enter on that line triggers the jump (handled by the reducer's
+/// `jumpCodePaneFromBottomPane` function). Exact string per ux-spec §6.3.
+func buildRunFooter(outcome: RunOutcome) -> String {
+    switch outcome {
+    case .done(_, let duration):
+        let ms =
+            duration.components.seconds * 1_000
+            + duration.components.attoseconds / 1_000_000_000_000_000
+        return "done — \(ms)ms"
+    case .error(let diag, _):
+        let lineRef = diag.line > 0 ? " → jump to line \(diag.line)" : ""
+        return "error — \(diag.message)\(lineRef)"
+    case .cancelled:
+        return "cancelled"
+    case .limitExceeded(let kind):
+        switch kind {
+        case .instructions:
+            return "instruction limit exceeded"
+        case .wallClock:
+            return "wall-clock limit exceeded"
+        }
+    }
+}
+
+// MARK: Diagnostics tab (ux-spec §6.5)
+
+/// Renders the Diagnostics tab content.
+///
+/// Structure (ux-spec §6.5, all binding exact strings):
+///   - Overall empty state (no pre-pass result yet, no lint run): `No diagnostics.` centered.
+///   - Syntax pre-pass section: header `── Syntax ──`, then either the
+///     pre-pass diagnostic or `✔ No syntax errors.`.
+///   - Lint section: header `── Lint ──`, then diagnostics sorted by line or
+///     `✔ No issues found.`.
+///
+/// Each diagnostic line format: `<E|W> <line>:<col> <message> [<code>]`
+/// (ux-spec §6.5 — `[<code>]` present only when `code` is non-nil).
 private func renderDiagnosticsTab(
     state: AppState,
     rect: Rect,
     theme: ThemeState
 ) -> [RenderCommand] {
+    let bp = state.bottomPane
+    let hasPrePassResult = bp.prePassDiagnostic != nil
+    let hasLintResult = !bp.diagnostics.isEmpty
+
+    // Overall empty state (ux-spec §6.5: "No diagnostics." centered).
+    if !hasPrePassResult && !hasLintResult {
+        let msg = "No diagnostics."
+        let lineW = msg.count
+        // Center horizontally within the rect.
+        let padLeft = max(0, (Int(rect.width) - lineW) / 2)
+        let padRight = max(0, Int(rect.width) - padLeft - lineW)
+        let centeredText = String(repeating: " ", count: padLeft) + msg + String(repeating: " ", count: padRight)
+        return [
+            .paragraph(
+                rect: rect,
+                lines: [[Span(centeredText, style: dimStyle(theme))]],
+                block: nil)
+        ]
+    }
+
     var lines: [[Span]] = []
 
-    // Syntax section (ux-spec §6.5).
+    // Syntax section (ux-spec §6.5 — exact header string).
     lines.append([Span("── Syntax ──", style: dimStyle(theme))])
-    if let diag = state.bottomPane.prePassDiagnostic {
-        let prefix = diag.severity == .error ? "E" : "W"
-        let colStr = diag.column.map { ":\($0)" } ?? ""
-        let text = "\(prefix) \(diag.line)\(colStr) \(diag.message)"
-        let style = tokenStyle(diag.severity == .error ? .error : .warning, theme: theme)
-        lines.append([Span(text, style: style)])
+    if let diag = bp.prePassDiagnostic {
+        lines.append([Span(formatDiagnosticLine(diag), style: diagStyle(diag, theme: theme))])
     } else {
         lines.append([Span("✔ No syntax errors.", style: normalStyle(theme))])
     }
 
-    // Lint section (ux-spec §6.5).
+    // Lint section (ux-spec §6.5 — exact header string).
     lines.append([Span("── Lint ──", style: dimStyle(theme))])
-    let lintDiags = state.bottomPane.diagnostics
+    let lintDiags = bp.diagnostics.sorted { $0.line < $1.line }
     if lintDiags.isEmpty {
         lines.append([Span("✔ No issues found.", style: normalStyle(theme))])
     } else {
-        for d in lintDiags.sorted(by: { $0.line < $1.line }) {
-            let prefix = d.severity == .error ? "E" : "W"
-            let colStr = d.column.map { ":\($0)" } ?? ""
-            let text = "\(prefix) \(d.line)\(colStr) \(d.message)"
-            let style = tokenStyle(d.severity == .error ? .error : .warning, theme: theme)
-            lines.append([Span(text, style: style)])
+        for d in lintDiags {
+            lines.append([Span(formatDiagnosticLine(d), style: diagStyle(d, theme: theme))])
         }
     }
 
     return [.paragraph(rect: rect, lines: lines, block: nil)]
+}
+
+/// Formats one diagnostic as the ux-spec §6.5 canonical string.
+///
+/// Format: `<E|W> <line>:<col> <message> [<code>]`
+/// - Column omitted when `nil` (no colon separator).
+/// - Code suffix `[<code>]` omitted when `code` is `nil`.
+/// - `E` for error severity, `W` for warning (ux-spec §8.5 accessibility rule:
+///   character prefix required alongside color).
+func formatDiagnosticLine(_ diag: Diagnostic) -> String {
+    let prefix = diag.severity == .error ? "E" : "W"
+    let colStr = diag.column.map { ":\($0)" } ?? ""
+    let codeStr = diag.code.map { " [\($0)]" } ?? ""
+    return "\(prefix) \(diag.line)\(colStr) \(diag.message)\(codeStr)"
+}
+
+/// Returns the cell style for a diagnostic line (error or warning color).
+private func diagStyle(_ diag: Diagnostic, theme: ThemeState) -> CellStyle {
+    return tokenStyle(diag.severity == .error ? .error : .warning, theme: theme)
 }
 
 // MARK: - Status bar (ux-spec.md §5)
