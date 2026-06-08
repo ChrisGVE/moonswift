@@ -11,6 +11,27 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `docs/user/` — user documentation for P1 features:
+  - `docs/user/cli.md` — CLI flags, exit codes (0/64/65/70), environment
+    variables (`NO_COLOR`, `MOONSWIFT_LOG`, contributor build variables)
+  - `docs/user/project-file.md` — full `moonswift.toml` schema reference:
+    `lua_version`, `[[source]]` / `[[source.field]]`, `[run]` (config,
+    instruction_limit, wall_clock_limit_ms), `[lint]` (extra_modules),
+    `[settings]` (theme), forward-compatibility and comment-preservation notes
+  - `docs/user/sources.md` — loading `.lua` files, field designation, JSONPath
+    subset table (supported and unsupported constructs), YAML multi-document
+    `document` key, YAML alias restriction, TOML mapping contract, error states
+  - `docs/user/running.md` — one-shot execution, output capture, return value
+    display, cancellation (honest degradation note: LuaSwift#22 not at current
+    pin), instruction and wall-clock limits (wall-clock inert until #22),
+    sandbox vs unrestricted, `io.write` limitation
+  - `docs/user/linting.md` — two-layer approach (syntax pre-pass + luacheck),
+    catalog v0 base modules, conditional `luaswift.toml`, opt-in modules
+    (iox/http/ui) with `extra_modules` configuration, Lua 5.5 grammar gap note
+- `README.md` — updated with P1 feature list, quick-start examples (minimal
+  `moonswift.toml` with `.lua` source and structured-file field designation),
+  keybinding summary, links to user documentation
+
 - `.github/workflows/release.yml` — `workflow_dispatch` release workflow
   implementing the two-phase release ordering protocol (ARCHITECTURE.md §5.4):
   cross-compile Rust shim (arm64 + x86_64) → lipo universal static lib →
