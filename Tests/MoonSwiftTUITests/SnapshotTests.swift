@@ -124,7 +124,15 @@ private final class CellGridBackend: RenderBackend {
         let row = rect.y
         for (idx, label) in tabs.enumerated() {
             guard col < Int(rect.x) + Int(rect.width) else { break }
-            let style: CellStyle = idx == selectedIndex ? .default : .default
+            // CR-034: selected tab must use a visually distinct style so that
+            // snapshot diffs can detect tab-selection regressions. Use a
+            // bold modifier for the selected label; unselected tabs remain at
+            // .default. BOLD = 1 << 0 = 1 per ratatui_ffi.h, matching what the
+            // production CommandInterpreter forwards to ratatui.
+            let style: CellStyle =
+                idx == selectedIndex
+                ? CellStyle(fg: 0xFFFF_FFFF, bg: 0xFFFF_FFFF, mods: 1)
+                : .default
             try grid.writeCells(col: UInt16(col), row: row, text: label, style: style)
             col += label.count + 1
         }
@@ -298,7 +306,12 @@ private func assertSnapshot(
     }
 
     guard FileManager.default.fileExists(atPath: fileURL.path) else {
-        Issue.record(
+        // CR-034: `Issue.record` alone is non-throwing and the test continues
+        // (and passes). A missing golden must be a hard failure — use
+        // `#expect(Bool(false))` which marks the test failed while still
+        // surfacing the diagnostic message.
+        #expect(
+            Bool(false),
             "Golden file missing for '\(name)'. Run with RECORD_SNAPSHOTS=1 to create it.",
             sourceLocation: sourceLocation
         )
