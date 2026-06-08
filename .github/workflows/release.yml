@@ -52,8 +52,9 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # push bot commit, create tag, create release, upload asset
-  id-token: write   # OIDC token for actions/attest-build-provenance
+  contents: write       # push bot commit, create tag, create release, upload asset
+  id-token: write       # OIDC token for actions/attest-build-provenance
+  attestations: write   # actions/attest-build-provenance persists the attestation
 
 jobs:
   # ── job 1: build ──────────────────────────────────────────────────────────
