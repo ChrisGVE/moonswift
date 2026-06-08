@@ -760,6 +760,8 @@ public final class AppDriver: @unchecked Sendable {
                 msg = "document \(req) requested but only \(avail) available"
             case .nestingTooDeep:
                 msg = "File nesting too deep (exceeds safe recursion limit)"
+            case .tooManyNodes:
+                msg = "File too large to browse (node count exceeds safe limit)"
             }
             return .pickerTreeReady(id, tree: nil, errorMessage: msg)
         } catch {
