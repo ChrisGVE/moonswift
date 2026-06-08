@@ -92,8 +92,8 @@ let cRatatuiFFITarget: Target =
         // URL and checksum are updated by release.yml in the same change-set
         // that tags a release (two-phase release ordering protocol,
         // ARCHITECTURE.md §5.4). During bootstrap these fields are placeholders.
-        url: "https://github.com/ChrisGVE/moonswift/releases/download/placeholder/CRatatuiFFI.xcframework.zip",
-        checksum: "0000000000000000000000000000000000000000000000000000000000000000"
+        url: "https://github.com/ChrisGVE/moonswift/releases/download/v0.1.0/CRatatuiFFI.xcframework.zip",
+        checksum: "32b21eae91f92ff070828ae88d384641308468dd8b30ba81ef14ab6b20a38bd3"
     )
 
 // MARK: - Swift settings applied to every Swift target
