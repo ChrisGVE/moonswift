@@ -32,6 +32,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::{stdout, Stdout};
+use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::OnceLock;
 
@@ -47,9 +48,10 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// -1 = not yet set.
 static TTY_FD: AtomicI32 = AtomicI32::new(-1);
 
-/// The original termios captured at init time.
-/// OnceLock is initialised once by rffi_terminal_init.
-static SAVED_TERMIOS: OnceLock<libc::termios> = OnceLock::new();
+/// The original termios captured at init time, or None if tcgetattr failed
+/// (e.g. stdout is not a tty). OnceLock is initialised once by rffi_terminal_init.
+/// rffi_emergency_restore skips tcsetattr when the value is None.
+static SAVED_TERMIOS: OnceLock<Option<libc::termios>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // Terminal handle (heap-allocated, pointer handed to Swift)
@@ -70,6 +72,11 @@ pub struct RffiTerminal {
 
 /// Capture the current termios from the tty fd and store both in the statics.
 /// Called once from rffi_terminal_init before INITIALIZED is set.
+///
+/// If tcgetattr fails (stdout is not a tty, or any other error), SAVED_TERMIOS
+/// is set to None so that rffi_emergency_restore skips the tcsetattr call rather
+/// than writing a zeroed termios back to the terminal — which would leave it
+/// in an unusable state.
 #[cfg(unix)]
 fn save_termios_and_fd() {
     use std::os::unix::io::AsRawFd;
@@ -77,12 +84,16 @@ fn save_termios_and_fd() {
     TTY_FD.store(fd, Ordering::Release);
 
     let _ = SAVED_TERMIOS.get_or_init(|| {
-        // SAFETY: fd is our own tty; zeroed termios is a valid initialiser.
+        // SAFETY: zeroed termios is a valid memory layout for the struct.
         let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        unsafe {
-            libc::tcgetattr(fd, &mut t);
+        // SAFETY: fd is our own stdout; t is a valid out-pointer.
+        let rc = unsafe { libc::tcgetattr(fd, &mut t) };
+        if rc == 0 {
+            Some(t)
+        } else {
+            // Not a tty or tcgetattr failed — do not store a zeroed struct.
+            None
         }
-        t
     });
 }
 
@@ -168,6 +179,17 @@ pub extern "C" fn rffi_terminal_init() -> *mut () {
 /// Leave the alternate screen, show the cursor, restore termios, and free the
 /// terminal handle. After this call the pointer is invalid.
 ///
+/// # Use-after-free safety
+///
+/// The Box is wrapped in ManuallyDrop so that early returns on I/O errors do
+/// NOT free the allocation. The pointer therefore remains valid across the
+/// fallible I/O calls, and a Swift-side retry (or the emergency-restore path)
+/// will not reconstruct a RffiTerminal from freed memory. The explicit
+/// `ManuallyDrop::drop` at the end of the success path is the single free site.
+///
+/// After any return from this function — success or error — the caller must
+/// treat the handle as invalid and must not pass it to any other rffi_* call.
+///
 /// Thread class: render/terminal (UI thread only).
 #[no_mangle]
 pub extern "C" fn rffi_terminal_teardown(handle: *mut ()) -> i32 {
@@ -176,7 +198,10 @@ pub extern "C" fn rffi_terminal_teardown(handle: *mut ()) -> i32 {
             set_last_error("rffi_terminal_teardown: null handle");
             return crate::error::RFFI_ERR_NULL_PTR;
         }
-        let mut boxed = unsafe { Box::from_raw(handle as *mut RffiTerminal) };
+        // Wrap in ManuallyDrop: fallible I/O below must not leave the pointer
+        // dangling on an error return. We free explicitly only on success.
+        // SAFETY: handle is a valid Box<RffiTerminal> produced by rffi_terminal_init.
+        let mut boxed = ManuallyDrop::new(unsafe { Box::from_raw(handle as *mut RffiTerminal) });
         let _ = boxed.terminal.show_cursor();
         if let Err(e) = execute!(stdout(), LeaveAlternateScreen) {
             set_last_error(format!("rffi_terminal_teardown: LeaveAlternateScreen: {e}"));
@@ -186,7 +211,9 @@ pub extern "C" fn rffi_terminal_teardown(handle: *mut ()) -> i32 {
             set_last_error(format!("rffi_terminal_teardown: disable_raw_mode: {e}"));
             return RFFI_ERR_IO;
         }
-        drop(boxed);
+        // I/O succeeded — now it is safe to drop (free) the allocation.
+        // SAFETY: boxed has not been freed yet; this is the single free site.
+        unsafe { ManuallyDrop::drop(&mut boxed) };
         0
     })
 }
@@ -299,7 +326,11 @@ pub extern "C" fn rffi_emergency_restore() {
         }
 
         // Best-effort termios restore — not signal-safe but best-effort.
-        if let Some(saved) = SAVED_TERMIOS.get() {
+        // Only call tcsetattr if save_termios_and_fd recorded a successful
+        // tcgetattr (Some). A None means stdout was not a tty at init time;
+        // calling tcsetattr with a zeroed struct would leave the terminal
+        // unusable, so we skip it.
+        if let Some(Some(saved)) = SAVED_TERMIOS.get() {
             unsafe {
                 libc::tcsetattr(fd, libc::TCSANOW, saved);
             }
