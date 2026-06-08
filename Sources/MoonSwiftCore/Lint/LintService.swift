@@ -143,19 +143,27 @@ public final class LintService: LintServiceProtocol {
     /// All lint engine operations run exclusively on this queue.
     ///
     /// `LuaEngine` is not thread-safe; the serial queue enforces single-threaded
-    /// access without adding a lock. Declared `nonisolated(unsafe)` because the
-    /// value is set once in `init` and never mutated, but Swift 6 strict
-    /// concurrency requires the annotation for reference types shared across
-    /// isolation boundaries.
-    nonisolated(unsafe) private let lintQueue: DispatchQueue
+    /// access without adding a lock. `DispatchQueue` conforms to `Sendable` so
+    /// no `nonisolated(unsafe)` annotation is needed here.
+    private let lintQueue: DispatchQueue
 
     // MARK: - Lint engine (guarded by lintQueue)
 
     /// The long-lived luacheck engine. `nil` until `prewarm` completes.
     ///
-    /// All reads and writes must happen on `lintQueue`. Declared
-    /// `nonisolated(unsafe)` because `lintQueue` provides the serialisation
-    /// guarantee manually; Swift 6 strict concurrency does not track this.
+    /// ## Isolation invariant (CR-014)
+    ///
+    /// Every read and every write of `lintEngine` **must** execute on `lintQueue`.
+    /// The three access sites are:
+    ///
+    ///   1. `prewarm` — written inside `lintQueue.async { … }` (sets the engine).
+    ///   2. `lint` — read inside `lintQueue.async { … }` via `withCheckedThrowingContinuation`.
+    ///   3. `probeTomlAvailability` — read inside `lintQueue.async { … }` (called from prewarm's queue block).
+    ///
+    /// `nonisolated(unsafe)` is required because Swift 6 strict concurrency
+    /// cannot see that `lintQueue` serialises all accesses; the queue IS the
+    /// synchronisation mechanism. Any new access site added in future must
+    /// likewise be dispatched onto `lintQueue`.
     nonisolated(unsafe) private var lintEngine: LuaEngine?
 
     // MARK: - Init
@@ -226,6 +234,13 @@ public final class LintService: LintServiceProtocol {
         _ fragment: LuaSourceFragment,
         knownGlobals: [String: Any]
     ) async throws -> [Diagnostic] {
+        // `knownGlobals` is [String: Any] — structurally safe to cross the
+        // concurrency boundary: all values are produced by
+        // LuaModuleCatalog.luacheckGlobals, which nests only [String: Any]
+        // and String literals. Swift cannot verify this statically, so we
+        // copy to a nonisolated(unsafe) wrapper to suppress the Sendable
+        // warning without changing the public API. (CR-014)
+        nonisolated(unsafe) let globals = knownGlobals
         // Capture self weakly to avoid reference cycles in the detached task.
         return try await withCheckedThrowingContinuation { continuation in
             lintQueue.async { [weak self] in
@@ -242,7 +257,7 @@ public final class LintService: LintServiceProtocol {
                     let diagnostics = try self.runLuacheck(
                         engine: engine,
                         fragment: fragment,
-                        knownGlobals: knownGlobals
+                        knownGlobals: globals
                     )
                     continuation.resume(returning: diagnostics)
                 } catch let e as LintServiceError {

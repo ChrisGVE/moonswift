@@ -120,10 +120,21 @@ public final class RunService: RunServiceProtocol {
 
     /// Lock-protected reference to the currently executing engine.
     ///
-    /// Nonisolated(unsafe) is correct: all accesses are serialised through `lock`.
-    /// The engine is nonisolated because `LuaEngine` is a class, not an actor,
-    /// and Swift 6 strict concurrency requires explicit annotation for shared
-    /// mutable references that are manually synchronised.
+    /// ## Isolation invariant (CR-014)
+    ///
+    /// Every read and every write of `activeEngine` **must** be bracketed by
+    /// `lock.lock()` / `lock.unlock()`. The three access sites are:
+    ///
+    ///   1. `executeSync` — write under `lock` immediately after engine creation (set).
+    ///   2. `executeSync` `defer` — write under `lock` after execution finishes (clear).
+    ///   3. `cancel` (MOONSWIFT_LUASWIFT_22 path) — read under `lock`, copy out,
+    ///      then call `requestCancellation()` on the local copy outside the lock
+    ///      to avoid holding the lock during a potentially blocking call.
+    ///
+    /// `nonisolated(unsafe)` is required because Swift 6 strict concurrency
+    /// cannot see that `lock` serialises all accesses; `NSLock` IS the
+    /// synchronisation mechanism. Any new access site added in future must
+    /// likewise be bracketed by `lock`.
     private let lock = NSLock()
     nonisolated(unsafe) private var activeEngine: LuaEngine?
 
