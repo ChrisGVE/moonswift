@@ -174,6 +174,8 @@ public final class RunService: RunServiceProtocol {
     ///
     /// This is the only method that touches `activeEngine` and `LuaEngine`; all
     /// setup, execution, and teardown happen here in a straight-line sequence.
+    /// `config` is threaded through so limit outcomes carry the configured
+    /// threshold values for ux-spec §6.3 footer formatting.
     private func executeSync(
         fragment: LuaSourceFragment,
         config: RunConfig,
@@ -243,7 +245,7 @@ public final class RunService: RunServiceProtocol {
         do {
             result = try engine.evaluate(fragment.code)
         } catch let luaError as LuaError {
-            return outcome(for: luaError, provenance: fragment.provenance)
+            return outcome(for: luaError, provenance: fragment.provenance, config: config)
         } catch {
             let diag = Diagnostic(
                 severity: .error,
@@ -342,10 +344,19 @@ public final class RunService: RunServiceProtocol {
     // MARK: - Private: outcome mapping
 
     /// Maps a `LuaError` to a `CoreRunOutcome`.
-    private func outcome(for luaError: LuaError, provenance: FragmentProvenance) -> CoreRunOutcome {
+    ///
+    /// `config` is provided so limit outcomes carry the configured threshold
+    /// values (`instructionLimit` / `wallClockLimitMs`) — the renderer formats
+    /// these as `instruction limit exceeded (N instructions)` / `wall-clock
+    /// limit exceeded (Xms)` per ux-spec §6.3.
+    private func outcome(
+        for luaError: LuaError,
+        provenance: FragmentProvenance,
+        config: RunConfig
+    ) -> CoreRunOutcome {
         switch luaError {
         case .instructionLimitExceeded:
-            return .limitExceeded(kind: .instructions)
+            return .limitExceeded(kind: .instructions(count: config.instructionLimit))
         #if MOONSWIFT_LUASWIFT_22
             case .cancelled:
                 // Distinguish wall-clock vs instruction limit at the call site above;

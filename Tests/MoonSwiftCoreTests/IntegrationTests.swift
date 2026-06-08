@@ -219,7 +219,11 @@ struct RunServiceIntegrationTests {
             Issue.record("Expected .limitExceeded, got \(outcome)")
             return
         }
-        #expect(kind == .instructions)
+        guard case .instructions(let count) = kind else {
+            Issue.record("Expected .instructions limit, got \(kind)")
+            return
+        }
+        #expect(count == 1_000, "Configured instruction limit must be forwarded as the count payload")
     }
 
     // MARK: run-sandbox-test
@@ -272,7 +276,11 @@ struct RunServiceIntegrationTests {
             Issue.record("Expected .limitExceeded, got \(outcome)")
             return
         }
-        #expect(kind == .instructions)
+        guard case .instructions(let count) = kind else {
+            Issue.record("Expected .instructions limit, got \(kind)")
+            return
+        }
+        #expect(count == 5_000, "Configured instruction limit must be forwarded as the count payload")
     }
 }
 

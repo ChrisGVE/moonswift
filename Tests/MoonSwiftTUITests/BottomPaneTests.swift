@@ -324,16 +324,16 @@ struct RunFooterFormatTests {
         #expect(footer == "cancelled")
     }
 
-    @Test("instructions limit: 'instruction limit exceeded'")
+    @Test("instructions limit: 'instruction limit exceeded (N instructions)' (ux-spec §6.3)")
     func instructionsLimitFooter() {
-        let footer = buildRunFooter(outcome: .limitExceeded(kind: .instructions))
-        #expect(footer == "instruction limit exceeded")
+        let footer = buildRunFooter(outcome: .limitExceeded(kind: .instructions(count: 1_000)))
+        #expect(footer == "instruction limit exceeded (1000 instructions)")
     }
 
-    @Test("wall-clock limit: 'wall-clock limit exceeded'")
+    @Test("wall-clock limit: 'wall-clock limit exceeded (Xms)' (ux-spec §6.3)")
     func wallClockLimitFooter() {
-        let footer = buildRunFooter(outcome: .limitExceeded(kind: .wallClock))
-        #expect(footer == "wall-clock limit exceeded")
+        let footer = buildRunFooter(outcome: .limitExceeded(kind: .wallClock(durationMs: 5_000)))
+        #expect(footer == "wall-clock limit exceeded (5000ms)")
     }
 }
 

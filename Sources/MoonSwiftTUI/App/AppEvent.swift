@@ -46,6 +46,7 @@ extension RunOutcome: Equatable {
         case (.cancelled, .cancelled):
             return true
         case (.limitExceeded(let lk), .limitExceeded(let rk)):
+            // LimitKind now carries associated values; delegate to LimitKind.Equatable.
             return lk == rk
         case (.engineError(let lm), .engineError(let rm)):
             return lm == rm
@@ -56,9 +57,16 @@ extension RunOutcome: Equatable {
 }
 
 /// The kind of resource limit that ended a run.
-public enum LimitKind: Sendable {
-    case instructions
-    case wallClock
+///
+/// Each case carries the **configured limit** (not the actual count executed)
+/// so the renderer can emit the exact ux-spec §6.3 footer strings:
+///   - `instruction limit exceeded (N instructions)`
+///   - `wall-clock limit exceeded (Xms)`
+public enum LimitKind: Sendable, Equatable {
+    /// The instruction-count hook fired. `count` is the configured limit.
+    case instructions(count: Int)
+    /// The wall-clock timer expired. `durationMs` is the configured timeout.
+    case wallClock(durationMs: Int)
 }
 
 // MARK: - AppEvent
@@ -117,11 +125,18 @@ public enum AppEvent: Sendable {
     /// A source failed to load (missing file, I/O error, structured-file error).
     case sourceFailed(id: SourceID, state: SourceState)
 
-    /// The project file was (re)loaded.
+    /// The project file was (re)loaded and the Lua version is supported.
     case projectLoaded(ProjectFile, diagnostics: [Diagnostic])
 
     /// The project file is malformed and could not be decoded.
     case projectMalformed(Diagnostic)
+
+    /// The project file decoded but specifies an unsupported Lua version.
+    ///
+    /// The reducer sets `ProjectState.unsupportedVersion` so the renderer
+    /// surfaces the degraded state (ux-spec §3.7): persistent bottom-pane
+    /// header, disabled `r`/`l`, and `[Lua X.X: unsupported]` title badge.
+    case projectUnsupportedVersion(ProjectFile, diagnostics: [Diagnostic])
 
     /// Designations were saved to the project file.
     case designationsSaved

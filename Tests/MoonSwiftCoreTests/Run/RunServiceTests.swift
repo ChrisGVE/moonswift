@@ -301,7 +301,11 @@ struct RunServiceInstructionLimitTests {
             Issue.record("Expected .limitExceeded, got \(outcome)")
             return
         }
-        #expect(kind == .instructions)
+        guard case .instructions(let count) = kind else {
+            Issue.record("Expected .instructions, got \(kind)")
+            return
+        }
+        #expect(count == 1_000, "count must carry the configured limit")
     }
 
     @Test("instruction limit of 0 means unlimited — small script completes normally")
@@ -336,10 +340,12 @@ struct RunServiceInstructionLimitTests {
 
         let lines = collector.lines
         #expect(lines == ["before limit"])
-        if case .limitExceeded(let kind) = outcome {
-            #expect(kind == .instructions)
+        if case .limitExceeded(let kind) = outcome,
+            case .instructions(let count) = kind
+        {
+            #expect(count == 5_000, "count must carry the configured limit (5_000)")
         } else {
-            Issue.record("Expected .limitExceeded, got \(outcome)")
+            Issue.record("Expected .limitExceeded(.instructions(count:)), got \(outcome)")
         }
     }
 }
@@ -477,10 +483,12 @@ struct RunServiceCancellationDegradationTests {
 
         let outcome = await service.run(frag, config: config) { _ in }
 
-        if case .limitExceeded(let kind) = outcome {
-            #expect(kind == .instructions)
+        if case .limitExceeded(let kind) = outcome,
+            case .instructions(let count) = kind
+        {
+            #expect(count == 10_000, "count must carry the configured limit (10_000)")
         } else {
-            Issue.record("Expected .limitExceeded, got \(outcome)")
+            Issue.record("Expected .limitExceeded(.instructions(count:)), got \(outcome)")
         }
     }
 }

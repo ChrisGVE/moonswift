@@ -746,7 +746,11 @@ public final class AppDriver: @unchecked Sendable {
     ///
     /// The two enums are structurally identical but live in different layers
     /// (MoonSwiftCore vs. MoonSwiftTUI) to avoid the core importing TUI types.
-    /// This mapper is the single cross-layer translation point.
+    /// This mapper is the single cross-layer translation point. Associated
+    /// values on `CoreLimitKind` (the configured limit thresholds) are forwarded
+    /// directly to `LimitKind` so `buildRunFooter` can format the ux-spec §6.3
+    /// strings: `instruction limit exceeded (N instructions)` / `wall-clock
+    /// limit exceeded (Xms)`.
     private static func appOutcome(from core: CoreRunOutcome) -> RunOutcome {
         switch core {
         case .done(let value, let duration):
@@ -758,22 +762,20 @@ public final class AppDriver: @unchecked Sendable {
             return .cancelled
         case .limitExceeded(let kind):
             switch kind {
-            case .instructions:
-                return .limitExceeded(kind: .instructions)
-            case .wallClock:
-                return .limitExceeded(kind: .wallClock)
+            case .instructions(let count):
+                return .limitExceeded(kind: .instructions(count: count))
+            case .wallClock(let durationMs):
+                return .limitExceeded(kind: .wallClock(durationMs: durationMs))
             }
         }
     }
 
     /// Maps a `ProjectStore.LoadResult` to the `AppEvent` the reducer expects.
     ///
-    /// `.unsupportedVersion` has no dedicated AppEvent in P1 — it is mapped to
-    /// `.projectLoaded` so the reducer can display the file read-only. A TODO
-    /// comment references CR-003 where a dedicated flow should be added.
-    ///
-    /// - TODO: CR-003 — add `.projectUnsupportedVersion` AppEvent and handle
-    ///   the read-only degraded state explicitly in the reducer.
+    /// `.unsupportedVersion` maps to `.projectUnsupportedVersion` so the reducer
+    /// sets `ProjectState.unsupportedVersion` and the renderer surfaces the
+    /// degraded state (ux-spec §3.7): persistent bottom-pane header, disabled
+    /// `r`/`l`, and `[Lua X.X: unsupported]` title badge.
     private static func projectEvent(from result: ProjectStore.LoadResult) -> AppEvent {
         switch result {
         case .loaded(let file, let diags):
@@ -781,10 +783,7 @@ public final class AppDriver: @unchecked Sendable {
         case .malformed(let diag):
             return .projectMalformed(diag)
         case .unsupportedVersion(let file, let diags):
-            // TODO: CR-003 unsupportedVersion flow — no dedicated AppEvent yet.
-            // Map to projectLoaded so the project is visible; the diagnostics
-            // will include the unsupported-version warning from ProjectValidation.
-            return .projectLoaded(file, diagnostics: diags)
+            return .projectUnsupportedVersion(file, diagnostics: diags)
         }
     }
 

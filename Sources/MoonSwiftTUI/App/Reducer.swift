@@ -86,6 +86,16 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         s.project = .malformed(diag)
         return (s, [])
 
+    case .projectUnsupportedVersion(let file, _):
+        // Degrade to the unsupported-version state (ux-spec §3.7): `r` and `l`
+        // are blocked, the bottom pane shows a persistent error header, and the
+        // title bar shows `[Lua X.X: unsupported]`. The diagnostics are
+        // discarded here because they are already surfaced by the ProjectStore
+        // (they contain the "unsupported version" warning); the ProjectState
+        // enum carries only the version string the renderer needs.
+        s.project = .unsupportedVersion(file.luaVersion)
+        return (s, [])
+
     case .designationsSaved:
         // Close the picker (if open) and reload sources so the navigator
         // reflects the newly saved designations.

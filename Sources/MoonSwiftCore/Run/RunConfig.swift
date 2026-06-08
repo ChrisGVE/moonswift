@@ -17,16 +17,20 @@ import Foundation
 /// The resource limit that ended a run early.
 ///
 /// Produced in `RunOutcome.limitExceeded` when either the instruction count
-/// or wall-clock timer fires before the script completes naturally.
+/// or wall-clock timer fires before the script completes naturally. Each case
+/// carries the **configured limit** (not the actual count executed) so the
+/// renderer can emit the exact ux-spec §6.3 footer strings.
 ///
 /// - Note: `wallClock` requires LuaSwift#22 cooperative cancellation. In
 ///   binaries compiled without that flag the `wallClockLimitMs` setting is
 ///   inert (a `ProjectValidation` warning documents this at load time).
 public enum CoreLimitKind: Sendable, Equatable {
-    /// The Lua instruction-count hook fired (`setInstructionLimit` threshold).
-    case instructions
+    /// The Lua instruction-count hook fired. `count` is the configured limit
+    /// (from `RunConfig.instructionLimit`) — i.e. the threshold that was exceeded.
+    case instructions(count: Int)
     /// The runner-side wall-clock timer expired and cancellation was signalled.
-    case wallClock
+    /// `durationMs` is the configured timeout (from `RunConfig.wallClockLimitMs`).
+    case wallClock(durationMs: Int)
 }
 
 // MARK: - RunOutcome

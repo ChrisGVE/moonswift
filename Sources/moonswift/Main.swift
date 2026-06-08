@@ -199,6 +199,10 @@ private func loadProject(for mode: LaunchMode) -> ProjectState {
 
 /// Maps a `ProjectStore.LoadResult` to the `ProjectState` enum used by the
 /// seed `AppState`. The mapping is one-to-one; no logic beyond translation.
+///
+/// `.unsupportedVersion` maps to `ProjectState.unsupportedVersion` so the
+/// renderer surfaces the degraded state immediately on the first frame
+/// (ux-spec §3.7): bottom-pane persistent header + disabled r/l + title badge.
 private func projectState(from result: ProjectStore.LoadResult) -> ProjectState {
     switch result {
     case .loaded(let file, let diagnostics):
@@ -207,9 +211,10 @@ private func projectState(from result: ProjectStore.LoadResult) -> ProjectState 
     case .malformed(let diagnostic):
         return .malformed(diagnostic)
 
-    case .unsupportedVersion(let file, let diagnostics):
-        // Unsupported Lua version degrades to read-only; the reducer treats this
-        // as a loaded-but-limited state (run/lint disabled, UX §3.7).
-        return .loaded(file, diagnostics: diagnostics)
+    case .unsupportedVersion(let file, _):
+        // Degrade to unsupported-version state (ux-spec §3.7). The diagnostics
+        // are not stored in ProjectState — they are only needed by the runtime
+        // reload path (AppDriver.projectEvent), where the reducer handles them.
+        return .unsupportedVersion(file.luaVersion)
     }
 }

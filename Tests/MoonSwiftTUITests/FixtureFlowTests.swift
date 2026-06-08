@@ -218,13 +218,16 @@ struct RunRunawayLoopFlowTests {
         var base2 = base
         base2.runState = .running(id: UUID(), startedAt: Date())
 
-        let (final, effects) = applyAll(base2, [.runFinished(.limitExceeded(kind: .instructions))])
+        let (final, effects) = applyAll(base2, [.runFinished(.limitExceeded(kind: .instructions(count: 1_000)))])
 
         guard case .completed(.limitExceeded(let kind)) = final.runState else {
             Issue.record("Expected .completed(.limitExceeded), got \(final.runState)")
             return
         }
-        #expect(kind == .instructions)
+        guard case .instructions = kind else {
+            Issue.record("Expected .instructions limit kind, got \(kind)")
+            return
+        }
         #expect(hasStopTick(effects), "stopTick effect must be emitted when run ends")
     }
 }
@@ -269,7 +272,7 @@ struct RunInstructionLimitFlowTests {
             base2,
             [
                 .runOutput(["before limit"]),
-                .runFinished(.limitExceeded(kind: .instructions)),
+                .runFinished(.limitExceeded(kind: .instructions(count: 5_000))),
             ])
 
         #expect(
@@ -280,7 +283,10 @@ struct RunInstructionLimitFlowTests {
             Issue.record("Expected .completed(.limitExceeded), got \(final.runState)")
             return
         }
-        #expect(kind == .instructions)
+        guard case .instructions = kind else {
+            Issue.record("Expected .instructions limit kind, got \(kind)")
+            return
+        }
     }
 }
 

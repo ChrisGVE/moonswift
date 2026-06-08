@@ -1425,13 +1425,14 @@ func buildRunHeader(runNumber: Int, startTime: Date, width: Int) -> String {
 
 /// Builds the run footer string from a `RunOutcome` (ux-spec §6.3 exact format).
 ///
-/// | Outcome              | Footer text                                      |
-/// |----------------------|--------------------------------------------------|
-/// | `.done`              | `done — Xms`                                     |
-/// | `.error`             | `error — <message> → jump to line N`             |
-/// | `.cancelled`         | `cancelled`                                      |
-/// | `.limitExceeded`     | `instruction limit exceeded (N instructions)` /  |
-/// |                      | `wall-clock limit exceeded (Xms)`                |
+/// | Outcome              | Footer text                                          |
+/// |----------------------|------------------------------------------------------|
+/// | `.done`              | `done — Xms`                                         |
+/// | `.error`             | `error — <message> → jump to line N`                 |
+/// | `.cancelled`         | `cancelled`                                          |
+/// | `.limitExceeded`     | `instruction limit exceeded (N instructions)`        |
+/// |                      | `wall-clock limit exceeded (Xms)`                    |
+/// | `.engineError`       | `✖ Engine error: <message>`                          |
 ///
 /// The `→ jump to line N` affordance is interactive in the rendered pane:
 /// pressing Enter on that line triggers the jump (handled by the reducer's
@@ -1450,10 +1451,12 @@ func buildRunFooter(outcome: RunOutcome) -> String {
         return "cancelled"
     case .limitExceeded(let kind):
         switch kind {
-        case .instructions:
-            return "instruction limit exceeded"
-        case .wallClock:
-            return "wall-clock limit exceeded"
+        case .instructions(let count):
+            // ux-spec §6.3 exact format: "instruction limit exceeded (N instructions)"
+            return "instruction limit exceeded (\(count) instructions)"
+        case .wallClock(let durationMs):
+            // ux-spec §6.3 exact format: "wall-clock limit exceeded (Xms)"
+            return "wall-clock limit exceeded (\(durationMs)ms)"
         }
     case .engineError(let message):
         // ux-spec §6.3 exact format: "✖ Engine error: <message>"

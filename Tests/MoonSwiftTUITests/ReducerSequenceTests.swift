@@ -612,17 +612,25 @@ struct RunFlowSequenceTests {
         state.runState = .running(id: UUID(), startedAt: Date())
 
         // Instructions limit
-        let (s1, _) = reduce(state, .runFinished(.limitExceeded(kind: .instructions)))
+        let (s1, _) = reduce(state, .runFinished(.limitExceeded(kind: .instructions(count: 1_000))))
         if case .completed(.limitExceeded(let k)) = s1.runState {
-            #expect(k == .instructions)
+            if case .instructions(let count) = k {
+                #expect(count == 1_000)
+            } else {
+                Issue.record("Expected .instructions limit kind, got \(k)")
+            }
         } else {
             Issue.record("Expected .completed(.limitExceeded(.instructions))")
         }
 
         // Wall-clock limit
-        let (s2, _) = reduce(state, .runFinished(.limitExceeded(kind: .wallClock)))
+        let (s2, _) = reduce(state, .runFinished(.limitExceeded(kind: .wallClock(durationMs: 5_000))))
         if case .completed(.limitExceeded(let k)) = s2.runState {
-            #expect(k == .wallClock)
+            if case .wallClock(let durationMs) = k {
+                #expect(durationMs == 5_000)
+            } else {
+                Issue.record("Expected .wallClock limit kind, got \(k)")
+            }
         } else {
             Issue.record("Expected .completed(.limitExceeded(.wallClock))")
         }
