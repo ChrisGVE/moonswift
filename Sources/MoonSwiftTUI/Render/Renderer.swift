@@ -390,9 +390,19 @@ private func renderCodePane(
         return renderPickerPane(picker: picker, rect: inner, theme: theme)
     }
 
-    // No selection: empty-state prompt (ux-spec §3.1).
+    // Init form modal: replace code pane with the init form (ux-spec §3.1, task 24).
+    if state.focus == .initForm, let form = state.initFormState {
+        return renderInitForm(form: form, rect: inner, theme: theme)
+    }
+
+    // No selection: show state-appropriate placeholder.
     guard let selectionID = state.selection else {
-        return renderCodePanePrompt(rect: inner, theme: theme)
+        // Empty launch mode → empty-state prompt with the init-form hint (ux-spec §3.1).
+        if case .empty = state.launch {
+            return renderEmptyStatePrompt(rect: inner, theme: theme)
+        }
+        // Any other launch with no selection yet → neutral placeholder.
+        return [.paragraph(rect: inner, lines: [[Span("Loading…", style: dimStyle(theme))]], block: nil)]
     }
 
     switch state.sources[selectionID] {
@@ -418,10 +428,20 @@ private func renderCodePane(
     }
 }
 
-private func renderCodePanePrompt(rect: Rect, theme: ThemeState) -> [RenderCommand] {
+/// Renders the empty-state prompt in the code pane (ux-spec §3.1, §4.1).
+///
+/// Exact binding text from ux-spec §3.1:
+/// ```
+/// No project file found.
+/// Press <i> to create moonswift.toml, or open a .lua file directly.
+/// ```
+/// Centered vertically in the available rect (ux-spec §4.1 — "Centered prompt").
+private func renderEmptyStatePrompt(rect: Rect, theme: ThemeState) -> [RenderCommand] {
+    let line1 = "No project file found."
+    let line2 = "Press <i> to create moonswift.toml, or open a .lua file directly."
     let lines: [[Span]] = [
-        [Span("No project file found.", style: normalStyle(theme))],
-        [Span("Press <i> to create moonswift.toml, or open a .lua file directly.", style: dimStyle(theme))],
+        [Span(line1, style: normalStyle(theme))],
+        [Span(line2, style: dimStyle(theme))],
     ]
     return [.paragraph(rect: rect, lines: lines, block: nil)]
 }
@@ -430,6 +450,35 @@ private func renderCodePanePrompt(rect: Rect, theme: ThemeState) -> [RenderComma
 private func paragraphLines(_ text: String, rect: Rect, style: CellStyle) -> [RenderCommand] {
     let lines = text.components(separatedBy: "\n")
         .map { [Span($0, style: style)] }
+    return [.paragraph(rect: rect, lines: lines, block: nil)]
+}
+
+// MARK: - Init form renderer (ux-spec §3.1, task 24)
+
+/// Renders the project init form in the code-pane area.
+///
+/// Stub: full implementation belongs to task 24. Shows field labels and
+/// values so the user can see what they are editing before confirming.
+private func renderInitForm(
+    form: InitFormState,
+    rect: Rect,
+    theme: ThemeState
+) -> [RenderCommand] {
+    let keyStyle = tokenStyle(.keyword, theme: theme)
+    let valStyle = normalStyle(theme)
+    var lines: [[Span]] = [
+        [Span("  Create moonswift.toml", style: keyStyle)],
+        [Span("", style: normalStyle(theme))],
+        [Span("  Lua version: \(form.luaVersion)", style: valStyle)],
+    ]
+    for src in form.selectedFiles.sorted() {
+        lines.append([Span("    \(src)", style: dimStyle(theme))])
+    }
+    if form.isScanning {
+        lines.append([Span("  Scanning for source files…", style: dimStyle(theme))])
+    }
+    lines.append([Span("", style: normalStyle(theme))])
+    lines.append([Span("  <Tab> next field  <Enter> confirm  <Esc> cancel", style: dimStyle(theme))])
     return [.paragraph(rect: rect, lines: lines, block: nil)]
 }
 

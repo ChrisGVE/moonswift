@@ -10,6 +10,7 @@
 //             EventPump (produces key/resize/mouse/paste events),
 //             TickSource (produces .tick), AppDriver (posts service results)
 
+import Foundation
 import MoonSwiftCore
 import RatatuiKit
 

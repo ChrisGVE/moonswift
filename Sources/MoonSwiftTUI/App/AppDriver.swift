@@ -215,6 +215,25 @@ public final class AppDriver: @unchecked Sendable {
                 self.channel.post(tree)
             }
 
+        case .scanProjectDirectory(let dir):
+            // Scan the directory for candidate source files (.lua/.json/.yaml/.toml)
+            // on a background Task. Posts .projectDirectoryScanned when complete.
+            Task {
+                let files = await Self.scanForSourceFiles(in: dir)
+                self.channel.post(.projectDirectoryScanned(files))
+            }
+
+        case .writeProjectFile(let dir, let luaVersion, let sources):
+            // Write moonswift.toml on a background Task, then post .projectFileWritten.
+            Task {
+                let result = await Self.writeProjectFile(
+                    directory: dir, luaVersion: luaVersion, sources: sources)
+                self.channel.post(result)
+                // After a successful write, trigger a project load so the navigator
+                // populates (handled via the .loadProject effect which the reducer
+                // emits from reduceProjectFileWritten).
+            }
+
         case .spawnEditor(let url):
             // Full pump-park + terminal suspend + editor spawn + resume sequence.
             // See ARCHITECTURE.md §5.2 and docs/internals/ffi-boundary.md for the
@@ -355,6 +374,75 @@ public final class AppDriver: @unchecked Sendable {
         pump.stop()
         tickSource.stop()
         // Terminal.teardown() called here in the full implementation (task 13).
+    }
+
+    // MARK: Init form helpers (task 24)
+
+    /// Scans `directory` for candidate source files (.lua/.json/.yaml/.toml).
+    ///
+    /// Returns a sorted list of paths relative to `directory`. Files in
+    /// subdirectories are included. Hidden files and directories are skipped.
+    /// Never throws — errors return an empty array.
+    private static func scanForSourceFiles(in directory: URL) async -> [String] {
+        // Enumerate on a nonisolated closure to avoid the Sendable constraint
+        // on FileManager.DirectoryEnumerator.makeIterator (unavailable from async).
+        return await Task.detached(priority: .utility) {
+            scanSourceFilesSync(in: directory)
+        }.value
+    }
+
+    /// Synchronous helper called from the detached task above.
+    ///
+    /// Walks `directory` for .lua/.json/.yaml/.yml/.toml files, skipping
+    /// hidden files. Returns paths relative to `directory`, sorted.
+    private static func scanSourceFilesSync(in directory: URL) -> [String] {
+        let extensions = Set(["lua", "json", "yaml", "yml", "toml"])
+        var results: [String] = []
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        else {
+            return []
+        }
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                values.isRegularFile == true
+            else { continue }
+            let ext = fileURL.pathExtension.lowercased()
+            guard extensions.contains(ext) else { continue }
+            let rel =
+                fileURL.path.hasPrefix(directory.path)
+                ? String(fileURL.path.dropFirst(directory.path.count + 1))
+                : fileURL.path
+            guard rel != "moonswift.toml" else { continue }
+            results.append(rel)
+        }
+        return results.sorted()
+    }
+
+    /// Writes `moonswift.toml` to `directory` and returns the AppEvent to post.
+    ///
+    /// Uses `ProjectStore.save` to serialise a `ProjectFile` built from the
+    /// chosen `luaVersion` and `sources`. Atomic write via Foundation.
+    private static func writeProjectFile(
+        directory: URL,
+        luaVersion: String,
+        sources: [String]
+    ) async -> AppEvent {
+        let sourceEntries = sources.map { SourceEntry(path: $0) }
+        let projectFile = ProjectFile(luaVersion: luaVersion, sources: sourceEntries)
+        let fileURL = directory.appendingPathComponent(ProjectStore.fileName)
+        do {
+            // Use save (not initialize) to allow overwrite if the form is somehow
+            // re-submitted — initialize would throw fileAlreadyExists.
+            try ProjectStore.save(projectFile, to: fileURL)
+            return .projectFileWritten(projectURL: fileURL, error: nil)
+        } catch {
+            return .projectFileWritten(projectURL: nil, error: error.localizedDescription)
+        }
     }
 
     // MARK: Picker tree loader
