@@ -1,0 +1,3 @@
+[scripts]
+init = "print('hello')"
+path = "C:/old/path"
