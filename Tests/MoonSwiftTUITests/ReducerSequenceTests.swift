@@ -1498,14 +1498,14 @@ struct CrossCuttingSequenceTests {
         let (s1, _) = reduce(state, .key(.char("/"), modifiers: []))
         #expect(s1.navigator.filterText == "", "/ must open filter with empty string")
 
-        // / again closes filter (toggles)
+        // / inside filter mode APPENDS (paths contain slashes); only Esc
+        // closes the filter (ux-spec §2.2).
         let (s2, _) = reduce(s1, .key(.char("/"), modifiers: []))
-        #expect(s2.navigator.filterText == nil, "/ again must close filter")
+        #expect(s2.navigator.filterText == "/", "/ in filter mode must append, not close")
 
-        // Open again and close with Esc
-        let (s3, _) = reduce(state, .key(.char("/"), modifiers: []))
-        let (s4, _) = reduce(s3, .key(.escape, modifiers: []))
-        #expect(s4.navigator.filterText == nil, "Esc must close navigator filter")
+        // Esc closes the filter.
+        let (s3, _) = reduce(s2, .key(.escape, modifiers: []))
+        #expect(s3.navigator.filterText == nil, "Esc must close navigator filter")
     }
 
     // MARK: Navigator Enter selects source

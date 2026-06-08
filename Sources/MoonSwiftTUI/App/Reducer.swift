@@ -453,11 +453,6 @@ private func reduceNavigatorFilter(
         }
         return (s, [])
 
-    case (.char("/"), []):
-        // Second press of / closes the filter (toggle, ux-spec §2.2).
-        s.navigator.filterText = nil
-        return (s, [])
-
     case (.char(let scalar), []) where !CharacterSet.controlCharacters.contains(scalar):
         // Append a printable character to the filter query (ux-spec §2.2: typing feeds
         // the query; navigation is via arrow keys or after Enter commit). This catch-all

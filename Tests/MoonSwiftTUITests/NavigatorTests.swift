@@ -214,6 +214,17 @@ struct NavigatorFilterTests {
         #expect(next.navigator.filterText == "", "/ must set filterText to empty string")
     }
 
+    @Test("/ inside filter mode appends to the query (paths contain slashes)")
+    func slashInFilterModeAppends() {
+        // Regression (#QA-20): a /-as-toggle case made path queries like
+        // "src/foo" impossible. ux-spec §2.2 names only <Esc> as the close key.
+        let ids = [SourceID(path: "src/a.lua")]
+        let state = stateWithNavigator(ids: ids, filterText: "src")
+
+        let (next, _) = reduce(state, .key(.char("/"), modifiers: []))
+        #expect(next.navigator.filterText == "src/", "/ must append to the query, not close the filter")
+    }
+
     @Test("Typing characters in filter mode appends to query")
     func typingAppendsToQuery() {
         let ids = [SourceID(path: "alpha.lua"), SourceID(path: "beta.lua")]

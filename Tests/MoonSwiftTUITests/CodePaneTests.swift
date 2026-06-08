@@ -648,7 +648,11 @@ struct CodePaneHighlightBatchingTests {
         let gutterWidth: UInt16 = 4
         let contentX = innerX + gutterWidth
 
-        let contentRuns = runs.filter { $0.col >= contentX }
+        // Constrain to the first code-content ROW as well as the content
+        // column — the bottom pane's cell-run tab bar (ux-spec §6.1) also
+        // emits runs past contentX on its own rows and must not be counted.
+        let contentY = layout.codePane.y + 1  // border
+        let contentRuns = runs.filter { $0.row == contentY && $0.col >= contentX }
         // 2 runs expected: "hello" (keyword) + "world" (normal).
         #expect(contentRuns.count == 2, "One highlight span on 10-char line must produce exactly 2 content runs")
         #expect(contentRuns[0].text == "hello")
