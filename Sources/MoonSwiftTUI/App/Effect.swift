@@ -69,7 +69,13 @@ public enum Effect: Sendable {
 
     /// Persist updated field designations to `moonswift.toml` and post
     /// `.designationsSaved` when complete.
-    case saveDesignations([FieldDesignation])
+    ///
+    /// `sourcePath` identifies which `SourceEntry` in the project file should
+    /// receive the designations — it is the project-relative path of the file
+    /// the picker was browsing. Passing the path here avoids relying on field
+    /// overlap matching (which silently no-ops when the entry has no prior
+    /// fields — the common first-use case).
+    case saveDesignations([FieldDesignation], sourcePath: String)
 
     /// Parse the structured file for the given `SourceID` into a `TreeValue`
     /// tree and post `.pickerTreeReady` when complete. Used by the picker modal

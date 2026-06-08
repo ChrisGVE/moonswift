@@ -512,12 +512,14 @@ struct PickerReducerTests {
             if case .saveDesignations = $0 { return true }
             return false
         }
-        guard case .saveDesignations(let designations) = saveEffect else {
+        guard case .saveDesignations(let designations, let sourcePath) = saveEffect else {
             #expect(Bool(false), "must emit .saveDesignations effect")
             return
         }
         // Must be sorted alphabetically.
         #expect(designations.map(\.jsonpath) == [aID, bID].sorted())
+        // Must carry the picker's file path so applyDesignations matches by path.
+        #expect(sourcePath == "conf.json")
     }
 
     @Test("designationsSaved event closes picker and returns focus to navigator")

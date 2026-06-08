@@ -246,10 +246,10 @@ public final class AppDriver: @unchecked Sendable {
         case .run(let fragment, let config):
             if let svc = runService {
                 // Dispatch to the real RunService on a background Task.
-                // Capture only Sendable values (channel, coalescer) — not self.
+                // Capture coalescer, channel, and svc explicitly — all Sendable.
                 let coalescer = Coalescer(channel: channel)
                 activeCoalescer = coalescer
-                Task { [channel] in
+                Task { [channel, coalescer, svc] in
                     let outcome = await svc.run(
                         fragment,
                         config: config,
@@ -366,7 +366,12 @@ public final class AppDriver: @unchecked Sendable {
         // Skeleton: no-op.
 
         case .loadProject(let url):
-            if sourceStore != nil {
+            if let store = sourceStore {
+                // Cancel any in-flight source loads from the previous project
+                // before starting a fresh ProjectStore.load (SourceStore contract,
+                // SourceStore.swift §doc). Stale loads posting events for the old
+                // project would create ghost navigator entries.
+                store.cancelAll()
                 Task { [channel] in
                     let result = ProjectStore.load(at: url)
                     channel.post(Self.projectEvent(from: result))
@@ -375,7 +380,10 @@ public final class AppDriver: @unchecked Sendable {
         // Skeleton: no-op.
 
         case .reloadProject:
-            if sourceStore != nil, let projectDir = projectDirectoryURL() {
+            if let store = sourceStore, let projectDir = projectDirectoryURL() {
+                // Cancel stale source loads before reloading the project file
+                // (SourceStore contract, SourceStore.swift §doc).
+                store.cancelAll()
                 Task { [channel] in
                     let result = ProjectStore.load(at: projectDir)
                     channel.post(Self.projectEvent(from: result))
@@ -383,20 +391,21 @@ public final class AppDriver: @unchecked Sendable {
             }
         // Skeleton: no-op.
 
-        case .saveDesignations(let designations):
-            if let store = sourceStore,
+        case .saveDesignations(let designations, let sourcePath):
+            if sourceStore != nil,
                 let projectDir = projectDirectoryURL(),
                 case .loaded(let projectFile, _) = state.project
             {
                 // Build an updated ProjectFile with the new designations merged
-                // into the matching source entry.
+                // into the entry identified by sourcePath. ProjectStore.save is
+                // a static method; no store instance capture is required.
                 let updatedFile = Self.applyDesignations(
                     designations,
+                    sourcePath: sourcePath,
                     to: projectFile
                 )
                 let fileURL = projectDir.appendingPathComponent(ProjectStore.fileName)
                 Task { [channel] in
-                    _ = store  // referenced to suppress capture warning
                     do {
                         try ProjectStore.save(updatedFile, to: fileURL)
                         channel.post(.designationsSaved)
@@ -826,50 +835,24 @@ public final class AppDriver: @unchecked Sendable {
     /// Applies updated `[FieldDesignation]` to the matching source entry in
     /// `projectFile`, returning a new `ProjectFile` with the designations merged.
     ///
-    /// The matching entry is identified by the `SourceID.path` of each designation's
-    /// source. Entries with no matching designation are left unchanged.
+    /// The target entry is identified by `sourcePath` — the project-relative
+    /// file path that the picker was browsing. Matching by path is correct for
+    /// both the common first-use case (entry has zero prior fields) and the
+    /// subsequent edit case (entry already has fields). The previous field-overlap
+    /// strategy silently no-oped when the entry had no prior designations.
     ///
     /// This is the write-back path for the picker modal save (ux-spec §3.6): when
     /// the user confirms marks, the reducer emits `Effect.saveDesignations` and the
     /// AppDriver calls this helper to build the updated file before persisting it.
     private static func applyDesignations(
         _ designations: [FieldDesignation],
+        sourcePath: String,
         to projectFile: ProjectFile
     ) -> ProjectFile {
-        // Group designations by source path so each entry is updated once.
-        var byPath: [String: [FieldDesignation]] = [:]
-        for designation in designations {
-            // FieldDesignation.jsonpath is the path expression; we need to know
-            // which source entry it belongs to. The picker state carries the
-            // sourceID.path for the file being edited, but that context is not
-            // directly in FieldDesignation. We update the entry that currently
-            // has the *same* designations (or any entry — the reducer only emits
-            // saveDesignations for the currently-open picker's source).
-            //
-            // Strategy: because the reducer only emits saveDesignations for one
-            // source file at a time (the picker is single-modal), we match the
-            // entry by comparing its current field jsonpaths against the incoming
-            // designations. The simplest robust approach is to store all incoming
-            // designations into the first structured-file source entry whose path
-            // appears in the picker state. Since we don't have the source ID here,
-            // we rebuild all entries that currently carry FieldDesignation data.
-            //
-            // For P1, the picker updates a single file; the designations replace
-            // that file's fields entirely. We therefore update every source entry
-            // that has at least one field whose jsonpath appears in the incoming
-            // designations list — a direct match.
-            byPath[designation.jsonpath, default: []].append(designation)
-        }
-
-        // Build updated source entries: replace fields on entries whose existing
-        // field jsonpaths overlap with the incoming designation set.
-        let incomingPaths = Set(designations.map(\.jsonpath))
+        // Replace fields only on the entry whose path matches the picker's source.
+        // All other entries are left exactly as-is.
         let updatedSources = projectFile.sources.map { entry -> SourceEntry in
-            let existingPaths = Set(entry.fields.map(\.jsonpath))
-            guard !existingPaths.isEmpty, !existingPaths.isDisjoint(with: incomingPaths) else {
-                return entry
-            }
-            // Replace this entry's fields with the incoming designations.
+            guard entry.path == sourcePath else { return entry }
             return SourceEntry(path: entry.path, fields: designations)
         }
 
