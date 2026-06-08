@@ -941,3 +941,111 @@ struct SourceStoreEscapedStringTests {
         #expect(!fragment.code.contains("\\t"))
     }
 }
+
+// MARK: - File size limit tests (CR-028)
+
+/// Tests that SourceStore rejects files exceeding the configured size limits
+/// before reading their content, preventing OOM from large files or /dev/zero.
+///
+/// These tests write real files to a temporary directory because the size-check
+/// code path uses `FileManager.attributesOfItem` on a real on-disk file.
+@Suite("SourceStore — file size limits (CR-028)")
+struct SourceStoreFileSizeLimitTests {
+
+    /// Create a temporary directory for this test run, return its URL.
+    private func makeTempDir() throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SourceStoreFileSizeLimitTests-\(Int.random(in: 0..<Int.max))")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        return tmp
+    }
+
+    @Test("lua file exceeding sourceFileSizeLimit returns .failed with size error")
+    func luaFileOverLimitFails() async throws {
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Write a file whose byte count exceeds sourceFileSizeLimit.
+        // Use random bytes so it reads as garbage (not a real Lua file).
+        let fileURL = tempDir.appendingPathComponent("huge.lua")
+        let oversizeBytes = sourceFileSizeLimit + 1
+        // Write in 64 KiB chunks to avoid allocating the full oversized buffer.
+        let chunkSize = 65_536
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: fileURL)
+        var written = 0
+        let chunk = Data(repeating: 0x20, count: chunkSize)  // spaces
+        while written < oversizeBytes {
+            let toWrite = min(chunkSize, oversizeBytes - written)
+            handle.write(chunk.prefix(toWrite))
+            written += toWrite
+        }
+        handle.closeFile()
+
+        let id = SourceID(path: "huge.lua", jsonpath: nil, document: 0)
+        let event = await SourceStore.loadLuaFile(at: "huge.lua", projectRoot: tempDir, id: id)
+
+        guard case .failed(_, let state) = event else {
+            Issue.record("Expected .failed, got \(event)")
+            return
+        }
+        guard case .failed(let diag) = state else {
+            Issue.record("Expected .failed(diagnostic), got \(state)")
+            return
+        }
+        #expect(diag.message.contains("limit"), "Expected size limit message, got: \(diag.message)")
+        #expect(diag.severity == .error)
+    }
+
+    @Test("lua file within sourceFileSizeLimit loads successfully")
+    func luaFileAtLimitSucceeds() async throws {
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let fileURL = tempDir.appendingPathComponent("small.lua")
+        let content = "return 42\n"
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let id = SourceID(path: "small.lua", jsonpath: nil, document: 0)
+        let event = await SourceStore.loadLuaFile(at: "small.lua", projectRoot: tempDir, id: id)
+
+        guard case .loaded = event else {
+            Issue.record("Expected .loaded for file within limit, got \(event)")
+            return
+        }
+    }
+
+    @Test("structured file exceeding structuredFileSizeLimit returns .failed")
+    func structuredFileOverLimitFails() async throws {
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let fileURL = tempDir.appendingPathComponent("huge.json")
+        let oversizeBytes = structuredFileSizeLimit + 1
+        let chunkSize = 65_536
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: fileURL)
+        var written = 0
+        let chunk = Data(repeating: 0x20, count: chunkSize)
+        while written < oversizeBytes {
+            let toWrite = min(chunkSize, oversizeBytes - written)
+            handle.write(chunk.prefix(toWrite))
+            written += toWrite
+        }
+        handle.closeFile()
+
+        let fields = [FieldDesignation(jsonpath: "$.x", document: 0)]
+        let events = await SourceStore.loadStructuredFile(
+            at: "huge.json", projectRoot: tempDir, fields: fields
+        )
+
+        #expect(!events.isEmpty, "Expected at least one event")
+        if let event = events.first, case .failed(_, let state) = event,
+            case .failed(let diag) = state
+        {
+            #expect(diag.message.contains("limit"), "Expected size limit message, got: \(diag.message)")
+        } else {
+            Issue.record("Expected .failed(_, .failed) for oversized structured file, got \(events)")
+        }
+    }
+}

@@ -14,6 +14,23 @@ import CryptoKit
 import Foundation
 import Yams
 
+// MARK: - File size limits (CR-028)
+
+/// Maximum byte size for a whole `.lua` source file.
+///
+/// 10 MiB. Files larger than this are rejected with a `.failed` diagnostic
+/// rather than read into memory. This prevents OOM conditions from
+/// `/dev/zero`, oversized blobs, or pipes with no natural EOF.
+/// Adjust here (and update docs) if legitimate large Lua sources are needed.
+let sourceFileSizeLimit: Int = 10 * 1_024 * 1_024  // 10 MiB
+
+/// Maximum byte size for a structured data file (JSON / YAML / TOML).
+///
+/// 50 MiB. Structured files are expected to be config/data files; anything
+/// larger is almost certainly not a config file and would cause excessive
+/// memory use during tree decode. Adjust here (and update docs) if needed.
+let structuredFileSizeLimit: Int = 50 * 1_024 * 1_024  // 50 MiB
+
 // MARK: - SourceStore
 
 /// Loads `.lua` source files from disk, computes provenance, and posts results
@@ -136,6 +153,25 @@ public final class SourceStore: Sendable {
             return .failed(id: id, state: .missing)
         }
 
+        // --- File size guard (CR-028): reject oversized files before reading ---
+        // attributesOfItem reads only the file metadata — no I/O on file content.
+        // This prevents OOM from /dev/zero, pipes, or accidental huge files.
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+            let fileSize = attrs[.size] as? Int,
+            fileSize > sourceFileSizeLimit
+        {
+            let limitMiB = sourceFileSizeLimit / (1_024 * 1_024)
+            let diagnostic = Diagnostic(
+                severity: .error,
+                line: 0,
+                column: nil,
+                code: nil,
+                message: "Cannot read \(path): file size exceeds the \(limitMiB) MiB limit",
+                source: .sourceLoad
+            )
+            return .failed(id: id, state: .failed(diagnostic))
+        }
+
         // --- Read raw bytes ---
         let data: Data
         do {
@@ -225,6 +261,21 @@ public final class SourceStore: Sendable {
             // One .missing event for the whole file (not per field).
             let id = SourceID(path: path, jsonpath: nil, document: 0)
             return [.failed(id: id, state: .missing)]
+        }
+
+        // --- File size guard (CR-028): reject oversized files before reading ---
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+            let fileSize = attrs[.size] as? Int,
+            fileSize > structuredFileSizeLimit
+        {
+            let id = SourceID(path: path, jsonpath: nil, document: 0)
+            let limitMiB = structuredFileSizeLimit / (1_024 * 1_024)
+            let diag = Diagnostic(
+                severity: .error,
+                message: "✖ Cannot parse \(filename): file size exceeds the \(limitMiB) MiB limit",
+                source: .sourceLoad
+            )
+            return [.failed(id: id, state: .failed(diag))]
         }
 
         // --- Read raw bytes ---
