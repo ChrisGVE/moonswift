@@ -53,7 +53,7 @@ If you change the Rust ABI (`rust/ratatui-ffi/src/lib.rs`), regenerate the
 C header:
 
 ```sh
-make shim    # cargo build --release + cbindgen (best-effort header regen)
+make shim    # cargo build --release --features swift_ffi + cbindgen (best-effort header regen)
 ```
 
 If `cbindgen` is not installed, `make shim` still builds the static library
@@ -63,9 +63,23 @@ and logs a warning; the committed header at
 ### Manual build (without Make)
 
 ```sh
-cd rust/ratatui-ffi && cargo build --release
+cd rust/ratatui-ffi && cargo build --release --features swift_ffi
+cd ../..
+swift package reset
 MOONSWIFT_SHIM_SOURCE=1 LUASWIFT_INCLUDE_TOMLKIT=1 swift build
 ```
+
+`--features swift_ffi` is required: it disables `catch_unwind` in
+`ffi_guard!` so Rust's unwind TLS (`LOCAL_PANIC_COUNT`) is never referenced
+from compiled objects, eliminating arm64e SIGBUS from PAC-unsigned
+`tlv_bootstrap` pointers (ARCHITECTURE.md §5.4 arm64-TLS, `guard.rs`
+§note). CI and `make shim` both pass this flag; plain `cargo build --release`
+produces a static lib that may trigger SIGBUS on Apple Silicon test hosts.
+
+`swift package reset` must run after the shim build and before `swift build`
+whenever `MOONSWIFT_SHIM_SOURCE` is toggled; SPM caches manifest evaluation
+and silently reuses a stale shim topology otherwise (see the "Manifest cache
+footgun" section below).
 
 ---
 
@@ -128,9 +142,14 @@ cargo clippy -- -D warnings   # linter (treat all warnings as errors)
 swift-format lint --recursive Sources/ Tests/
 ```
 
-`swift-format` ships with the Swift 6 toolchain (Xcode 16+); no separate
-install is needed. The project configuration lives in `.swift-format` at the
-repository root.
+`swift-format` is **not** bundled with the Xcode 16 toolchain on GitHub
+runners or most macOS machines — install it separately:
+
+```sh
+brew install swift-format
+```
+
+The project configuration lives in `.swift-format` at the repository root.
 
 **Lua sources** (vendor excluded):
 

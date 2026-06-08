@@ -130,14 +130,21 @@ ARCHITECTURE.md §5.4.
 ### Manual build (without Make)
 
 ```sh
-cd rust/ratatui-ffi && cargo build --release
+cd rust/ratatui-ffi && cargo build --release --features swift_ffi
+cd ../..
+swift package reset
 MOONSWIFT_SHIM_SOURCE=1 LUASWIFT_INCLUDE_TOMLKIT=1 swift build
 MOONSWIFT_SHIM_SOURCE=1 LUASWIFT_INCLUDE_TOMLKIT=1 swift test
 ```
 
-Run `swift package reset` first if you previously built without
-`MOONSWIFT_SHIM_SOURCE=1` — SPM caches manifest evaluation and can silently
-reuse a stale shim topology (see ARCHITECTURE.md §5.4).
+`--features swift_ffi` is required: it disables `catch_unwind` in
+`ffi_guard!` so the Rust unwind TLS (`LOCAL_PANIC_COUNT`) is never
+referenced from the compiled objects — eliminating arm64e SIGBUS from
+PAC-unsigned `tlv_bootstrap` pointers (ARCHITECTURE.md §5.4 arm64-TLS).
+
+`swift package reset` must run before `swift build` whenever
+`MOONSWIFT_SHIM_SOURCE` is toggled; SPM caches manifest evaluation and can
+silently reuse a stale shim topology (see ARCHITECTURE.md §5.4).
 
 ## License
 

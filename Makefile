@@ -34,7 +34,13 @@ export LUASWIFT_INCLUDE_TOMLKIT := 1
 # Build the Rust static library and regenerate the cbindgen header.
 #
 # Steps:
-#   1. cargo build --release  — produces libratatui_ffi.a in target/release/
+#   1. cargo build --release --features swift_ffi
+#                     — produces libratatui_ffi.a in target/release/
+#                       with the swift_ffi feature enabled: ffi_guard! omits
+#                       catch_unwind so Rust's unwind TLS (LOCAL_PANIC_COUNT)
+#                       is never referenced from compiled objects, eliminating
+#                       arm64e SIGBUS from PAC-unsigned tlv_bootstrap pointers
+#                       (ARCHITECTURE.md §5.4 arm64-TLS, guard.rs §note).
 #   2. cbindgen               — regenerates ratatui_ffi.h from the Rust sources
 #                               and copies it into Sources/CRatatuiFFI/include/.
 #                               Treated as best-effort: if cbindgen fails (e.g.
@@ -47,8 +53,8 @@ export LUASWIFT_INCLUDE_TOMLKIT := 1
 # cbindgen must be installed (`cargo install cbindgen`) for header regeneration;
 # the underlying cargo build succeeds regardless of cbindgen availability.
 shim:
-	@echo "==> Building Rust shim (cargo build --release)"
-	cd $(SHIM_DIR) && cargo build --release
+	@echo "==> Building Rust shim (cargo build --release --features swift_ffi)"
+	cd $(SHIM_DIR) && cargo build --release --features swift_ffi
 	@echo "==> Regenerating FFI header (cbindgen, best-effort)"
 	@if cbindgen --config $(SHIM_DIR)/cbindgen.toml \
 	             --output $(FFI_HEADER_SRC) \
