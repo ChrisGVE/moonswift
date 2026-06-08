@@ -206,21 +206,6 @@ public struct BottomPaneState: Sendable, Equatable {
     /// no run has been started this session.
     public var runStartTime: Date?
 
-    // MARK: Cleared notice (ux-spec §6.4)
-
-    /// Pending `[cleared]` notice text to prepend to the output buffer.
-    ///
-    /// Set by C-l manual clear and by the FIFO overflow helper. The renderer
-    /// picks this up and inserts it as the first line of the output view.
-    /// Cleared after each render cycle to avoid duplicate display — the
-    /// AppDriver reads it once and then the notice is already in the buffer.
-    ///
-    /// Implementation note: the notice IS stored persistently in the buffer
-    /// itself (via `appendOutputLines` and `clearOutputWithNotice`). This
-    /// field is used only as a signal that a notice was freshly inserted, so
-    /// the renderer can scroll to show it.
-    public var clearedNoticeInserted: Bool
-
     public init(
         activeTab: Tab = .output,
         outputBuffer: [String] = [],
@@ -228,8 +213,7 @@ public struct BottomPaneState: Sendable, Equatable {
         prePassDiagnostic: Diagnostic? = nil,
         scrollOffset: Int = 0,
         runNumber: Int = 0,
-        runStartTime: Date? = nil,
-        clearedNoticeInserted: Bool = false
+        runStartTime: Date? = nil
     ) {
         self.activeTab = activeTab
         self.outputBuffer = outputBuffer
@@ -238,7 +222,6 @@ public struct BottomPaneState: Sendable, Equatable {
         self.scrollOffset = scrollOffset
         self.runNumber = runNumber
         self.runStartTime = runStartTime
-        self.clearedNoticeInserted = clearedNoticeInserted
     }
 
     // MARK: 1000-line FIFO bound (ux-spec §6.4)
@@ -247,20 +230,25 @@ public struct BottomPaneState: Sendable, Equatable {
     ///
     /// When overflow occurs the oldest lines are discarded and a notice line
     /// `[cleared — N lines discarded]` is inserted at the discard boundary
-    /// (ux-spec §6.4 exact format).
+    /// (ux-spec §6.4 exact format). `N` equals the number of content lines
+    /// actually removed (`excess + 1`) — one extra slot is freed to make room
+    /// for the notice itself.
     mutating func appendOutputLines(_ lines: [String]) {
         outputBuffer.append(contentsOf: lines)
         let cap = 1_000
         if outputBuffer.count > cap {
-            // `excess` = number of content lines over the cap. We evict `excess + 1`
-            // old lines to make room for the notice itself, keeping the total at `cap`.
+            // `excess` = number of lines over the cap. We evict `excess + 1`
+            // old content lines: `excess` to get to cap, plus 1 more to make
+            // room for the notice. The notice then fills that slot, keeping
+            // the total at exactly `cap`.
             let excess = outputBuffer.count - cap
-            outputBuffer.removeFirst(excess + 1)
+            let evicted = excess + 1
+            outputBuffer.removeFirst(evicted)
             // Insert the cleared notice at position 0 so it appears at the top
-            // of the visible buffer (ux-spec §6.4 exact format).
-            let notice = "[cleared — \(excess) lines discarded]"
+            // of the visible buffer (ux-spec §6.4 exact format). `evicted` is
+            // the true count of removed content lines.
+            let notice = "[cleared — \(evicted) lines discarded]"
             outputBuffer.insert(notice, at: 0)
-            clearedNoticeInserted = true
         }
     }
 
@@ -269,7 +257,6 @@ public struct BottomPaneState: Sendable, Equatable {
     mutating func clearOutputWithNotice() {
         outputBuffer = ["[cleared]"]
         scrollOffset = 0
-        clearedNoticeInserted = true
     }
 
     /// Record the start of a new run: increment the run counter and capture
@@ -277,7 +264,6 @@ public struct BottomPaneState: Sendable, Equatable {
     mutating func startRun(at date: Date) {
         runNumber += 1
         runStartTime = date
-        clearedNoticeInserted = false
     }
 }
 

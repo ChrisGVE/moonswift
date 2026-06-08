@@ -64,7 +64,8 @@ struct FIFOBufferTests {
         var bp = BottomPaneState()
         bp.appendOutputLines(Array(repeating: "x", count: 500))
         #expect(bp.outputBuffer.count == 500)
-        #expect(!bp.clearedNoticeInserted)
+        let hasNotice = bp.outputBuffer.contains { $0.hasPrefix("[cleared") }
+        #expect(!hasNotice, "No notice expected below cap")
     }
 
     @Test("appendOutputLines at exactly 1000 lines — no overflow, no notice")
@@ -72,21 +73,20 @@ struct FIFOBufferTests {
         var bp = BottomPaneState()
         bp.appendOutputLines(Array(repeating: "x", count: 1_000))
         #expect(bp.outputBuffer.count == 1_000)
-        #expect(!bp.clearedNoticeInserted)
+        let hasNotice = bp.outputBuffer.contains { $0.hasPrefix("[cleared") }
+        #expect(!hasNotice, "No notice expected at exactly cap")
     }
 
     @Test("appendOutputLines overflow: oldest lines evicted, notice inserted")
     func appendOverflowInsertsNotice() {
         var bp = BottomPaneState()
         bp.appendOutputLines(Array(repeating: "x", count: 999))
-        // Adding 5 lines overflows by 4: 999 + 5 = 1004 → evict 4, keep 1000.
+        // Adding 5 lines overflows by 4: 999 + 5 = 1004 → evict 5 (excess+1), keep 1000.
         bp.appendOutputLines(["a", "b", "c", "d", "e"])
         // Buffer must be capped at 1000.
         #expect(bp.outputBuffer.count == 1_000)
         // Last line must be "e".
         #expect(bp.outputBuffer.last == "e")
-        // clearedNoticeInserted flag must be set.
-        #expect(bp.clearedNoticeInserted)
         // Notice must be present in buffer (at index 0 after eviction).
         let hasNotice = bp.outputBuffer.contains { $0.hasPrefix("[cleared —") }
         #expect(hasNotice, "FIFO overflow must insert '[cleared — N lines discarded]' notice")
@@ -95,10 +95,8 @@ struct FIFOBufferTests {
     @Test("FIFO notice format exactly matches ux-spec §6.4")
     func overflowNoticeExactFormat() {
         var bp = BottomPaneState()
-        // 1000 lines → add 3 → overflow by 3 (notice counts as one line too, so
-        // 1003 total before eviction: keep 1000 → evict 3 before notice).
-        // Actually: 1000 + 3 = 1003 appended first, then removeFirst(3), insert notice.
-        // Result: [notice] + (1000 - 3 previous) lines + 3 new lines = 1000 total.
+        // 1000 lines → add 3 → overflow by 3: excess=3, evicted=4 (excess+1).
+        // removeFirst(4), insert notice → 1000 total.
         bp.appendOutputLines(Array(repeating: "old", count: 1_000))
         bp.appendOutputLines(["new1", "new2", "new3"])
         // Check the first line is the correctly formatted notice.
@@ -106,10 +104,10 @@ struct FIFOBufferTests {
             Issue.record("Buffer must not be empty after overflow")
             return
         }
-        // Expected: "[cleared — 3 lines discarded]"
+        // excess=3, evicted=4 → "[cleared — 4 lines discarded]"
         #expect(
-            firstLine == "[cleared — 3 lines discarded]",
-            "FIFO notice must be exactly '[cleared — N lines discarded]' (ux-spec §6.4), got: \(firstLine)")
+            firstLine == "[cleared — 4 lines discarded]",
+            "FIFO notice must be '[cleared — N lines discarded]' where N = evicted count, got: \(firstLine)")
     }
 
     @Test("clearOutputWithNotice inserts [cleared] notice and resets scroll")
@@ -125,7 +123,6 @@ struct FIFOBufferTests {
             bp.outputBuffer.first == "[cleared]",
             "Manual C-l clear must insert '[cleared]' notice (ux-spec §6.4)")
         #expect(bp.scrollOffset == 0, "Clear must reset scroll offset")
-        #expect(bp.clearedNoticeInserted)
     }
 
     @Test("C-l key in bottom pane clears output buffer with notice")
