@@ -1482,9 +1482,15 @@ private func renderDiagnosticsTab(
     let bp = state.bottomPane
     let hasPrePassResult = bp.prePassDiagnostic != nil
     let hasLintResult = !bp.diagnostics.isEmpty
+    let lintEngineFailed: Bool = {
+        if case .failed = state.lintState { return true }
+        return false
+    }()
 
     // Overall empty state (ux-spec §6.5: "No diagnostics." centered).
-    if !hasPrePassResult && !hasLintResult {
+    // A failed lint engine is NOT empty — its error line must render even
+    // when no diagnostics exist (ux-spec §4.2 engine-error precedence).
+    if !hasPrePassResult && !hasLintResult && !lintEngineFailed {
         let msg = "No diagnostics."
         let lineW = msg.count
         // Center horizontally within the rect.
