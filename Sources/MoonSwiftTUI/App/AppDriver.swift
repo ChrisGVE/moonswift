@@ -418,29 +418,28 @@ public final class AppDriver: @unchecked Sendable {
 
         case .loadPickerTree(let id, let projectRoot):
             // Parse the structured file for the picker modal (ux-spec §3.6).
-            // Dispatched to a background Task; result posted as .pickerTreeReady.
-            Task {
+            // Explicit [channel] capture avoids capturing self (CR-013).
+            Task { [channel] in
                 let tree = await Self.loadPickerTreeValue(id: id, projectRoot: projectRoot)
-                self.channel.post(tree)
+                channel.post(tree)
             }
 
         case .scanProjectDirectory(let dir):
             // Scan the directory for candidate source files (.lua/.json/.yaml/.toml)
-            // on a background Task. Posts .projectDirectoryScanned when complete.
-            Task {
+            // on a background Task. Explicit [channel] capture avoids self capture (CR-013).
+            Task { [channel] in
                 let files = await Self.scanForSourceFiles(in: dir)
-                self.channel.post(.projectDirectoryScanned(files))
+                channel.post(.projectDirectoryScanned(files))
             }
 
         case .writeProjectFile(let dir, let luaVersion, let sources):
-            // Write moonswift.toml on a background Task, then post .projectFileWritten.
-            Task {
+            // Write moonswift.toml on a background Task. Explicit [channel] avoids
+            // capturing self (CR-013). After a successful write the reducer emits
+            // .loadProject from reduceProjectFileWritten.
+            Task { [channel] in
                 let result = await Self.writeProjectFile(
                     directory: dir, luaVersion: luaVersion, sources: sources)
-                self.channel.post(result)
-                // After a successful write, trigger a project load so the navigator
-                // populates (handled via the .loadProject effect which the reducer
-                // emits from reduceProjectFileWritten).
+                channel.post(result)
             }
 
         case .spawnEditor(let url):
