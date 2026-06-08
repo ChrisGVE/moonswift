@@ -500,6 +500,68 @@ public struct PickerState: Sendable, Equatable {
     }
 }
 
+// MARK: - InitFormState
+
+/// The state of the project-initialisation form modal (ux-spec §3.1).
+///
+/// Held as an Optional in AppState — non-nil only while the init form is open.
+/// The form has two fields: Lua version (pre-filled "5.4") and source files
+/// (multi-select of .lua/.json/.yaml/.toml files discovered in the cwd).
+/// Opened when the user presses `i` in empty state; closed on confirm or Esc.
+public struct InitFormState: Sendable, Equatable {
+
+    // MARK: Focus within the form
+
+    /// Which field currently has focus.
+    public enum Field: Sendable, Equatable {
+        /// Field 1: Lua version (read-only in P1, pre-filled "5.4").
+        case luaVersion
+        /// Field 2: Source files multi-select list.
+        case sourceFiles
+    }
+
+    // MARK: Fields
+
+    /// The Lua version field value. Pre-filled "5.4"; only valid P1 value.
+    public var luaVersion: String
+
+    /// All candidate files discovered in cwd (.lua / .json / .yaml / .toml).
+    /// Populated by the `.scanProjectDirectory` effect result; empty while scanning.
+    public var candidateFiles: [String]
+
+    /// True while the file scan is still in flight.
+    public var isScanning: Bool
+
+    /// The set of selected candidate file paths (selected = will be added to project).
+    public var selectedFiles: Set<String>
+
+    // MARK: Navigation
+
+    /// Which form field is currently focused.
+    public var focusedField: Field
+
+    /// Cursor index within the `candidateFiles` list (for the source-files field).
+    public var fileListCursor: Int
+
+    // MARK: Init
+
+    public init(
+        luaVersion: String = "5.4",
+        candidateFiles: [String] = [],
+        isScanning: Bool = true,
+        selectedFiles: Set<String> = [],
+        focusedField: Field = .luaVersion,
+        fileListCursor: Int = 0
+    ) {
+        self.luaVersion = luaVersion
+        self.candidateFiles = candidateFiles
+        self.isScanning = isScanning
+        self.selectedFiles = selectedFiles
+        self.focusedField = focusedField
+        self.fileListCursor = fileListCursor
+    }
+}
+
 // MARK: - AppState
 
 /// The entire mutable state of the MoonSwift TUI.
@@ -598,6 +660,15 @@ public struct AppState: Sendable {
     /// the tree loads via Effect.loadPickerTree); cleared on save or cancel.
     public var pickerState: PickerState?
 
+    // MARK: Init form modal
+
+    /// Non-nil while the project-init form is open (ux-spec §3.1).
+    ///
+    /// Opened in `LaunchMode.empty` when the user presses `i`. The form
+    /// occupies the code-pane area. On confirm the project file is written and
+    /// the app transitions to the loaded state.
+    public var initFormState: InitFormState?
+
     // MARK: Initialiser
 
     /// Seed state: constructed by the AppDriver before the first `reduce` call.
@@ -621,7 +692,8 @@ public struct AppState: Sendable {
         transient: TransientMessage? = nil,
         navigator: NavigatorState = NavigatorState(),
         paneLayout: PaneLayout = PaneLayout(),
-        pickerState: PickerState? = nil
+        pickerState: PickerState? = nil,
+        initFormState: InitFormState? = nil
     ) {
         self.launch = launch
         self.project = project
@@ -640,5 +712,6 @@ public struct AppState: Sendable {
         self.navigator = navigator
         self.paneLayout = paneLayout
         self.pickerState = pickerState
+        self.initFormState = initFormState
     }
 }
