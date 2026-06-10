@@ -46,7 +46,25 @@ extension Diagnostic {
                 source: .runtime
             )
 
+        case .runtimeFailure(let failure):
+            // Structured runtime error (LuaSwift #19, v1.11+): the engine's
+            // errfunc message handler already captured the 1-based source line
+            // and stripped the `chunkname:line:` prefix from the message while
+            // the failing stack was intact. Consume those fields directly — the
+            // regex `LuaErrorLineParser` path is neither needed nor as reliable
+            // here (no stack to walk by the time `lua_pcall` returns).
+            return Diagnostic(
+                severity: .error,
+                line: failure.line ?? 0,
+                message: failure.message,
+                source: .runtime
+            )
+
         case .runtimeError(let msg):
+            // Legacy/unstructured runtime error path: coroutine runtime errors
+            // (v1.11 notes) and any case where the structured handler did not
+            // install still arrive as a raw string. Fall back to regex line
+            // extraction + prefix stripping.
             let line = LuaErrorLineParser.lineNumber(from: msg) ?? 0
             return Diagnostic(
                 severity: .error,

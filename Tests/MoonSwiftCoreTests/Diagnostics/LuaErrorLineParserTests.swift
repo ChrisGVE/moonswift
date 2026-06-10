@@ -406,44 +406,37 @@ struct LuaErrorLineParserRealEngineTests {
         }
     }
 
-    @Test("runtime error at line 1 from real engine — parser extracts line 1")
+    @Test("runtime error at line 1 from real engine — structured failure reports line 1")
     func realEngineRuntimeErrorLine1() throws {
         let engine = try LuaEngine()
-        // Engine produces: [string "local x = nil; x()"]:1: attempt to call a nil value (local 'x')
+        // LuaSwift v1.11+ surfaces runtime errors from lua_pcall as the
+        // structured .runtimeFailure case (errfunc message handler, #19), which
+        // carries the 1-based source line directly — no regex parsing needed.
         do {
             try engine.run("local x = nil; x()")
-            Issue.record("Expected runtimeError, got success")
+            Issue.record("Expected runtimeFailure, got success")
         } catch let e as LuaError {
-            guard case .runtimeError(let msg) = e else {
-                Issue.record("Expected .runtimeError, got \(e)")
+            guard case .runtimeFailure(let failure) = e else {
+                Issue.record("Expected .runtimeFailure, got \(e)")
                 return
             }
-            let line = LuaErrorLineParser.lineNumber(from: msg)
-            #expect(line != nil, "Parser must extract a line from real engine error: \(msg)")
-            if let line {
-                #expect(line == 1)
-            }
+            #expect(failure.line == 1, "Structured failure must report line 1: \(failure)")
         }
     }
 
-    @Test("runtime error at line 2 from real engine — parser extracts line 2")
+    @Test("runtime error at line 2 from real engine — structured failure reports line 2")
     func realEngineRuntimeErrorLine2() throws {
         let engine = try LuaEngine()
-        // Engine produces: [string "local x = 1..."]:2: attempt to call a number value (local 'x')
         let code = "local x = 1\nx()"
         do {
             try engine.run(code)
-            Issue.record("Expected runtimeError, got success")
+            Issue.record("Expected runtimeFailure, got success")
         } catch let e as LuaError {
-            guard case .runtimeError(let msg) = e else {
-                Issue.record("Expected .runtimeError, got \(e)")
+            guard case .runtimeFailure(let failure) = e else {
+                Issue.record("Expected .runtimeFailure, got \(e)")
                 return
             }
-            let line = LuaErrorLineParser.lineNumber(from: msg)
-            #expect(line != nil, "Parser must extract a line from real engine error: \(msg)")
-            if let line {
-                #expect(line == 2)
-            }
+            #expect(failure.line == 2, "Structured failure must report line 2: \(failure)")
         }
     }
 }

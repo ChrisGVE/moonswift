@@ -181,7 +181,7 @@ public final class LintService: LintServiceProtocol {
 
     public func syntaxPrePass(_ fragment: LuaSourceFragment) -> Diagnostic? {
         // Create a short-lived unrestricted engine just for compilation.
-        // Unrestricted is used here because the spike confirmed that compile()
+        // Unrestricted is used here because the spike confirmed that precompile()
         // itself does not use load(); a sandboxed engine would also work, but
         // using the same configuration keeps the behaviour predictable.
         let engine: LuaEngine
@@ -201,11 +201,11 @@ public final class LintService: LintServiceProtocol {
         }
 
         do {
-            // compile(_:) throws LuaError.syntaxError on syntax errors.
-            // The returned Data (bytecode) is discarded immediately — this is
-            // purely a syntax-validity check. When LuaSwift ships precompile(_:)
-            // → CompiledChunk this call will be replaced (ARCHITECTURE §5.3).
-            _ = try engine.compile(fragment.code)
+            // precompile(_:) throws LuaError.syntaxError on syntax errors.
+            // The returned CompiledChunk is discarded immediately — this is
+            // purely a syntax-validity check. Replaces the deprecated compile(_:)
+            // raw-Data API (LuaSwift v1.10.0+); see ARCHITECTURE §5.3.
+            _ = try engine.precompile(fragment.code)
             return nil
         } catch let luaError as LuaError {
             if case .syntaxError = luaError {

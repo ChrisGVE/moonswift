@@ -410,6 +410,20 @@ private func luaValueToString(_ value: LuaValue) -> String {
         return "\(re)+\(im)i"
     case .luaFunction:
         return "function"
+    case .opaqueReference(let kind):
+        // LuaSwift v1.12.0 added a typed, non-re-injectable reference case for
+        // read-only introspection of function/table/userdata/thread values.
+        // Display the Lua type name, matching tostring's prefix for these types.
+        switch kind {
+        case .function:
+            return "function"
+        case .table:
+            return "table"
+        case .userdata:
+            return "userdata"
+        case .thread:
+            return "thread"
+        }
     }
 }
 
