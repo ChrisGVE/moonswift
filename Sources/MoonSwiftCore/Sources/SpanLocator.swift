@@ -48,7 +48,11 @@ public enum StructuredFileFormat: Sendable {
 
 extension StructuredFileFormat {
     /// Derive the format from a file extension (case-insensitive).
-    static func from(extension ext: String) -> StructuredFileFormat? {
+    ///
+    /// Public so `WriteBackCoordinator` (MoonSwiftTUI) can drive its format
+    /// dispatch from `FragmentProvenance.file.pathExtension` (ARCHITECTURE.md
+    /// §10.4.9 step 6).
+    public static func from(extension ext: String) -> StructuredFileFormat? {
         switch ext.lowercased() {
         case "json": return .json
         case "yaml", "yml": return .yaml
