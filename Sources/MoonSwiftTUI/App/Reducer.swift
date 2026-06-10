@@ -192,7 +192,78 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
 
     case .projectFileWritten(let projectURL, let error):
         return reduceProjectFileWritten(s, projectURL: projectURL, error: error)
+
+    // MARK: Nvim editing (P4 F8b, ARCHITECTURE.md §10.4.8)
+
+    case .nvimRedrawBatch(let events):
+        return reduceNvimRedrawBatch(s, events: events)
     }
+}
+
+// MARK: - Nvim redraw handler
+
+/// Apply a complete nvim redraw batch to the grid state.
+///
+/// The batch is guaranteed to end with `.flush` (flush invariant — only complete
+/// batches are posted by `NvimRedrawHandler`). Events are applied in order;
+/// `hlAttrDefine` entries populate the hl cache used by subsequent `gridLine`
+/// events in the same batch.
+private func reduceNvimRedrawBatch(_ state: AppState, events: [NvimRedrawEvent]) -> (AppState, [Effect]) {
+    var s = state
+    // Lazily initialise the grid from the first gridResize in the batch.
+    if s.nvimGrid == nil {
+        s.nvimGrid = NvimGridState()
+    }
+
+    for event in events {
+        switch event {
+        case .hlAttrDefine(let id, let rgb):
+            s.nvimGrid!.hlCache[id] = rgb
+
+        case .defaultColorsSet:
+            // Default colour tokens are used by the renderer directly; the
+            // grid does not store them (renderer reads AppState.theme instead).
+            break
+
+        case .gridResize(_, let width, let height):
+            s.nvimGrid!.resize(width: width, height: height)
+
+        case .gridLine(_, let row, let colStart, let cells):
+            // Pre-size the row to grid width before applying colStart-relative
+            // writes (ARCHITECTURE.md §10.4.8 grid_line contract).
+            let w = s.nvimGrid!.width
+            if row < s.nvimGrid!.cells.count && s.nvimGrid!.cells[row].count < w {
+                let blank = NvimCellState()
+                s.nvimGrid!.cells[row].append(
+                    contentsOf: Array(repeating: blank, count: w - s.nvimGrid!.cells[row].count)
+                )
+            }
+            s.nvimGrid!.applyGridLine(row: row, colStart: colStart, cells: cells)
+
+        case .gridCursorGoto(_, let row, let col):
+            s.nvimGrid!.cursorRow = row
+            s.nvimGrid!.cursorCol = col
+
+        case .gridScroll(_, let top, let bot, let left, let right, let rows):
+            s.nvimGrid!.applyScroll(top: top, bot: bot, left: left, right: right, rows: rows)
+
+        case .gridClear:
+            s.nvimGrid!.clearAll()
+
+        case .modeChange:
+            // Mode lives on NvimPaneState, which is carried by the
+            // FocusState.nvimPane case added with the focus wiring in Inc-8
+            // (ARCHITECTURE.md §10.8) — until then a mode change has no
+            // consumer and the event is consumed without state change.
+            break
+
+        case .flush:
+            // Flush terminates the batch. No state change here — the batch is
+            // already complete (NvimRedrawHandler only posts on flush).
+            break
+        }
+    }
+    return (s, [])
 }
 
 // MARK: - Lifecycle handler

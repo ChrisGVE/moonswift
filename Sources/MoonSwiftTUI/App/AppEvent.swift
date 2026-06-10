@@ -196,6 +196,18 @@ public enum AppEvent: Sendable {
     /// The project file write completed. On success `projectURL` is the written
     /// file URL; on failure `error` carries the reason (used for a transient).
     case projectFileWritten(projectURL: URL?, error: String?)
+
+    // MARK: Nvim editing (P4 F8b)
+
+    /// A complete redraw batch from the nvim-rpc reader thread. Posted by
+    /// NvimRedrawHandler exactly once per terminating `.flush` sub-event
+    /// (ARCHITECTURE.md §10.4.8 flush invariant).
+    ///
+    /// The remaining nvim lifecycle events (nvimReady, nvimWriteRequested,
+    /// write-back and conflict results, …) arrive with EditorBridge in Inc-7
+    /// and the modal wiring in Inc-8/9 (ARCHITECTURE.md §10.8), where their
+    /// reducer handling and tests land in the same change-set.
+    case nvimRedrawBatch([NvimRedrawEvent])
 }
 
 // MARK: - HighlightSpan

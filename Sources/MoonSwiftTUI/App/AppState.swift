@@ -44,6 +44,11 @@ public enum FocusState: Sendable, Equatable {
     case pickerModal
     /// The project-initialisation form is open.
     case initForm
+
+    // The four P4 nvim focus cases (nvimPane/nvimSpawning/conflictModal/
+    // diffView, ARCHITECTURE.md §10.4.3) are added with the focus wiring in
+    // Inc-8 (§10.8), where reduceKey's exhaustive switch forces their handling
+    // in the same change-set as their tests.
 }
 
 // MARK: - LaunchMode
@@ -663,6 +668,17 @@ public struct AppState: Sendable {
     /// the app transitions to the loaded state.
     public var initFormState: InitFormState?
 
+    // MARK: Nvim editing state (P4 F8b, ARCHITECTURE.md §10.4.4)
+
+    /// Current rendered nvim cell grid. Non-nil while a nvim session is active
+    /// and the first redraw batch has been applied. The renderer reads this
+    /// independently of `FocusState`; it is top-level in `AppState` for that reason.
+    ///
+    /// The companion fields (`conflictModal`/`diffView`/
+    /// `nvimFallbackNotedThisSession`, §10.4.4) are added with the focus and
+    /// modal wiring in Inc-8/9 (§10.8) alongside their reducer logic and tests.
+    public var nvimGrid: NvimGridState?
+
     // MARK: Initialiser
 
     /// Seed state: constructed by the AppDriver before the first `reduce` call.
@@ -687,7 +703,8 @@ public struct AppState: Sendable {
         navigator: NavigatorState = NavigatorState(),
         paneLayout: PaneLayout = PaneLayout(),
         pickerState: PickerState? = nil,
-        initFormState: InitFormState? = nil
+        initFormState: InitFormState? = nil,
+        nvimGrid: NvimGridState? = nil
     ) {
         self.launch = launch
         self.project = project
@@ -707,5 +724,6 @@ public struct AppState: Sendable {
         self.paneLayout = paneLayout
         self.pickerState = pickerState
         self.initFormState = initFormState
+        self.nvimGrid = nvimGrid
     }
 }

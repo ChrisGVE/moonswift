@@ -25,7 +25,7 @@
 /// `repeatCount` is the nvim run-length indicator: the same cell content applies
 /// to `repeatCount` consecutive columns starting at the cell's position.
 /// A value of 1 (the default) means no repetition.
-public struct NvimCell: Sendable {
+public struct NvimCell: Sendable, Equatable {
     /// The UTF-8 text to display. May be an empty string for wide-character
     /// continuation cells (nvim fills the second column of a wide char with "").
     public let text: String
@@ -45,7 +45,7 @@ public struct NvimCell: Sendable {
 ///
 /// Colours are 24-bit RGB packed as 0x00RRGGBB. `nil` means "inherit from
 /// default" (the foreground or background from defaultColorsSet).
-public struct HLAttrs: Sendable {
+public struct HLAttrs: Sendable, Equatable {
     public let fg: UInt32?
     public let bg: UInt32?
     public let bold: Bool
@@ -63,7 +63,7 @@ public struct HLAttrs: Sendable {
 ///
 /// The full ext_linegrid protocol is documented at:
 /// https://neovim.io/doc/user/ui.html#ui-linegrid
-public enum NvimRedrawEvent: Sendable {
+public enum NvimRedrawEvent: Sendable, Equatable {
 
     /// A highlight attribute definition. The `id` is the integer key used in
     /// subsequent gridLine cells. `rgb` holds the resolved 24-bit RGB values
