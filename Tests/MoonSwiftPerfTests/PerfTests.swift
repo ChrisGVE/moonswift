@@ -382,6 +382,11 @@ struct LuacheckPerfTests {
         }
 
         print("[perf] luacheck pass (1000 lines): \(elapsed)")
+        // History: LuaSwift v1.12.0–1.12.1 armed the cooperative-cancellation
+        // count hook unconditionally (LuaSwift#30), ~2×-ing this pass and
+        // requiring a withKnownIssue wrapper. Fixed in v1.12.2+ via the
+        // `cooperativeCancellation` opt-out, which LintService now sets to
+        // false on both lint engines — the gate is restored.
         #expect(
             elapsed < luacheckThreshold,
             "luacheck pass took \(elapsed) — over 2× PRD informational target of 1 s (CI threshold: 2 s)"

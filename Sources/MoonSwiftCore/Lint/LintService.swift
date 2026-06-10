@@ -186,11 +186,15 @@ public final class LintService: LintServiceProtocol {
         // using the same configuration keeps the behaviour predictable.
         let engine: LuaEngine
         do {
+            // cooperativeCancellation is off: this is a synchronous compile-only
+            // pass that never calls requestCancellation(), and the periodic
+            // count hook costs ~2× on instruction-heavy runs (LuaSwift#30).
             engine = try LuaEngine(
                 configuration: LuaEngineConfiguration(
                     sandboxed: false,
                     packagePath: nil,
-                    memoryLimit: 0
+                    memoryLimit: 0,
+                    cooperativeCancellation: false
                 )
             )
         } catch {
@@ -287,11 +291,16 @@ public final class LintService: LintServiceProtocol {
 
                 // Step 1: Create the lint engine and install the preload shim.
                 do {
+                    // cooperativeCancellation is off: the luacheck pass runs
+                    // synchronously on this queue and never calls
+                    // requestCancellation(); the periodic count hook costs ~2×
+                    // on instruction-heavy runs (LuaSwift#30).
                     let engine = try LuaEngine(
                         configuration: LuaEngineConfiguration(
                             sandboxed: false,
                             packagePath: nil,
-                            memoryLimit: 0
+                            memoryLimit: 0,
+                            cooperativeCancellation: false
                         )
                     )
                     let modules = try vendoredLuacheckModules()
