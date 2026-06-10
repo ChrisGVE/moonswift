@@ -11,11 +11,11 @@
 // the default flips to binaryTarget and this note is updated in the same
 // change-set.
 //
-// LuaSwift pin note: pinned by revision to the main HEAD commit
-// 2fd31bcd4c4dbc1da0cfd41a385c3b8f68e0d331, which carries the
-// precompile(_:)/CompiledChunk API in [Unreleased]. This pin moves to a
-// version range (.from) once that release is tagged (the P1 minimum per
-// ARCHITECTURE.md §5.3).
+// LuaSwift pin note: minor-locked to 1.12 via .upToNextMinor (see the
+// dependency entry below for the not-strict-semver rationale). The
+// precompile(_:)/CompiledChunk API and the v1.11 structured-error surface
+// (LuaError.runtimeFailure) are both shipped in 1.12.x. P1 minimum per
+// ARCHITECTURE.md §5.3.
 
 import Foundation
 import PackageDescription
@@ -129,13 +129,17 @@ let package = Package(
     // except where a floor from() is the established idiom for a mature dep.
     dependencies: [
 
-        // LuaSwift: pinned by revision to main HEAD (2fd31bcd) carrying the
-        // precompile/CompiledChunk API in [Unreleased]. Moves to .from("2.0.0")
-        // (or whatever tag ships the API) when that release lands.
+        // LuaSwift: pinned to the 1.12 minor (.upToNextMinor), which ships the
+        // precompile/CompiledChunk API plus the v1.11 structured-runtime-error
+        // surface (LuaError.runtimeFailure). Minor-locked, NOT .upToNextMajor:
+        // LuaSwift does not follow strict semver — v1.12.0 introduced a BREAKING
+        // CoroutineResult change in a *minor* bump. .upToNextMinor accepts patch
+        // releases inside 1.12.x (audit/hardening fixes flow in automatically)
+        // but stops before 1.13.0, where the next minor-level break could land.
         // See ARCHITECTURE.md §5.3 for the consumed surface and P1 gate.
         .package(
             url: "https://github.com/ChrisGVE/LuaSwift.git",
-            revision: "2fd31bcd4c4dbc1da0cfd41a385c3b8f68e0d331"
+            .upToNextMinor(from: "1.12.0")
         ),
 
         // swift-collections: OrderedDictionary for TreeValue.map, preserving

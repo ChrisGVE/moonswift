@@ -1,12 +1,22 @@
 {
-  "originHash" : "5b0742a2ad2b35fffb76ea05cce850b2be11b1bb83ad3aac4dbca3343a2027b7",
+  "originHash" : "9e3e7bcb55a76948c9b86576533e301daf1408610848422ac0302b00e6f0b310",
   "pins" : [
     {
       "identity" : "luaswift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ChrisGVE/LuaSwift.git",
       "state" : {
-        "revision" : "2fd31bcd4c4dbc1da0cfd41a385c3b8f68e0d331"
+        "revision" : "3d2cad75846a21bba1eacdfed527a8dfda24d605",
+        "version" : "1.12.4"
+      }
+    },
+    {
+      "identity" : "swift-atomics",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-atomics.git",
+      "state" : {
+        "revision" : "b601256eab081c0f92f059e12818ac1d4f178ff7",
+        "version" : "1.3.0"
       }
     },
     {
