@@ -357,9 +357,15 @@ public actor NvimRPCClient {
     /// This avoids the drawbacks of `availableData` (busy-polls) and
     /// `readabilityHandler` (fires on an uncontrolled GCD queue).
     ///
-    /// On EOF (read returns 0) or after a `FramerError`, the loop exits, the
-    /// semaphore is signalled (enabling `shutdownReader()` to return), and a
-    /// Task hop notifies the actor to set `stdinOpen = false`.
+    /// On ANY loop exit — EOF (read returns 0), read error, `FramerError`, or
+    /// the stop flag — the `defer` block first posts a Task hop that sets
+    /// `stdinOpen = false` and fails pending continuations
+    /// (`readerDidObserveEOF`, idempotent), then signals the semaphore so
+    /// `shutdownReader()` can return. The EOF notification MUST be
+    /// unconditional: if the stop flag is set before this thread first checks
+    /// it (a thread that starts late), the loop exits without ever reading —
+    /// skipping the notification would leave `stdinOpen == true` forever and
+    /// any later `request()` would suspend with no one to resume it.
     ///
     /// `nonisolated` because it runs on the nvim-rpc-class Thread, not on the
     /// actor's executor. It accesses only `nonisolated` state (`stopReaderFlag`,
@@ -370,7 +376,10 @@ public actor NvimRPCClient {
         var buf = [UInt8](repeating: 0, count: bufferSize)
         var framer = MsgpackRPCFramer()
 
-        defer { readerExitSemaphore.signal() }
+        defer {
+            signalEOF()
+            readerExitSemaphore.signal()
+        }
 
         while !stopReaderFlag {
             let n = buf.withUnsafeMutableBytes { ptr in
@@ -380,7 +389,6 @@ public actor NvimRPCClient {
             if n == 0 {
                 // EOF: nvim closed its stdout (clean exit or teardown).
                 log.debug("NvimRPCClient reader: EOF on nvim stdout")
-                signalEOF()
                 return
             }
 
@@ -388,7 +396,6 @@ public actor NvimRPCClient {
                 // Error (EINTR is handled by retrying; other errors are fatal).
                 if errno == EINTR { continue }
                 log.debug("NvimRPCClient reader: read(2) error \(errno) — exiting loop")
-                signalEOF()
                 return
             }
 
@@ -399,11 +406,9 @@ public actor NvimRPCClient {
                 decoded = try framer.pushChecked(chunk)
             } catch let e as FramerError {
                 log.debug("NvimRPCClient reader: framer cap violation \(e) — closing")
-                signalEOF()
                 return
             } catch {
                 log.debug("NvimRPCClient reader: unexpected framer error \(error) — closing")
-                signalEOF()
                 return
             }
 

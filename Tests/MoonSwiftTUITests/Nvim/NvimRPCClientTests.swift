@@ -58,21 +58,43 @@ private func extractMsgid(_ v: MessagePackValue) -> Int? {
     }
 }
 
-/// Run `operation` with a hard deadline, throwing `CancellationError` on timeout.
+/// Run `operation` with a hard deadline. On timeout the operation's Task is
+/// cancelled and its (cancellation-induced) error propagates to the caller.
+///
+/// Deadlock-proofing note: an earlier version raced the operation against a
+/// timeout child inside a `withThrowingTaskGroup`. That shape deadlocks on
+/// timeout — the group's scope-exit await waits for the operation child, and
+/// a child suspended on a non-cancellable await (e.g. `Task.value`) never
+/// finishes. Cancelling an unstructured Task that the operation itself owns
+/// (this version) is the only shape that cannot hang: `operation` must be
+/// cancellation-responsive, which `NvimRPCClient.request` and `Task.sleep`
+/// both are.
 private func withTimeout<T: Sendable>(
     nanoseconds: UInt64 = 3_000_000_000,
     operation: @Sendable @escaping () async throws -> T
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await operation() }
-        group.addTask {
-            try await Task.sleep(nanoseconds: nanoseconds)
-            throw CancellationError()
-        }
-        let v = try await group.next()!
-        group.cancelAll()
-        return v
+    let opTask = Task { try await operation() }
+    return try await awaitWithTimeout(opTask, nanoseconds: nanoseconds)
+}
+
+/// Await `task.value` with a watchdog that cancels `task` on timeout.
+///
+/// `Task.value` itself is NOT cancellation-responsive (it waits for the task
+/// to finish no matter what), so the watchdog cancels the awaited task — the
+/// task's own cancellation handling (e.g. `request`'s
+/// `withTaskCancellationHandler`) then completes it with `CancellationError`,
+/// which surfaces here as the thrown error. A test regression therefore fails
+/// within the deadline instead of hanging CI.
+private func awaitWithTimeout<T: Sendable>(
+    _ task: Task<T, Error>,
+    nanoseconds: UInt64 = 3_000_000_000
+) async throws -> T {
+    let watchdog = Task {
+        try? await Task.sleep(nanoseconds: nanoseconds)
+        task.cancel()
     }
+    defer { watchdog.cancel() }
+    return try await task.value
 }
 
 /// Poll `stdinPipe.fileHandleForReading` for stdin bytes using a background
@@ -178,7 +200,7 @@ struct NvimRPCClientTests {
         stdoutPipe.fileHandleForWriting.write(responseData)
 
         // Await the result with a watchdog so a regression can't hang CI.
-        let result = try await withTimeout { try await requestHandle.value }
+        let result = try await awaitWithTimeout(requestHandle)
         #expect(result == .string("hello"))
 
         stdoutPipe.fileHandleForWriting.closeFile()
@@ -229,22 +251,29 @@ struct NvimRPCClientTests {
         let client = NvimRPCClient()
         await client.attachPipes(stdin: stdinPipe, stdout: stdoutPipe)
 
-        // Use a checked continuation to synchronise the handler callback.
-        let received: MessagePackValue = try await withTimeout {
-            try await withCheckedThrowingContinuation { cont in
-                Task {
-                    await client.onNotification("redraw") { params in
-                        cont.resume(returning: .array(params))
-                    }
-
-                    // Write the notification after handler registration.
-                    let frameData = notificationBytes(
-                        method: "redraw",
-                        params: [.string("grid_line"), .int(42)]
-                    )
-                    stdoutPipe.fileHandleForWriting.write(frameData)
+        // Bridge the handler callback through an AsyncStream rather than a bare
+        // checked continuation: `for await` is cancellation-responsive, so the
+        // withTimeout watchdog can fail this test instead of hanging it if the
+        // handler never fires.
+        let stream = AsyncStream<MessagePackValue> { continuation in
+            Task {
+                await client.onNotification("redraw") { params in
+                    continuation.yield(.array(params))
+                    continuation.finish()
                 }
+
+                // Write the notification after handler registration.
+                let frameData = notificationBytes(
+                    method: "redraw",
+                    params: [.string("grid_line"), .int(42)]
+                )
+                stdoutPipe.fileHandleForWriting.write(frameData)
             }
+        }
+
+        let received: MessagePackValue = try await withTimeout {
+            for await value in stream { return value }
+            throw CancellationError()
         }
 
         guard case .array(let arr) = received else {
@@ -328,8 +357,8 @@ struct NvimRPCClientTests {
             responseBytes(msgid: mid1, error: .nil, result: .string("result_a"))
         )
 
-        let v1 = try await withTimeout { try await task1.value }
-        let v2 = try await withTimeout { try await task2.value }
+        let v1 = try await awaitWithTimeout(task1)
+        let v2 = try await awaitWithTimeout(task2)
 
         #expect(v1 == .string("result_a"))
         #expect(v2 == .string("result_b"))
@@ -404,15 +433,23 @@ struct NvimRPCClientTests {
         // Wait for the actor to process the EOF hop and set stdinOpen=false.
         try await Task.sleep(nanoseconds: 100_000_000)
 
+        // Timing note: even if the reader's EOF hop has not landed yet (stdinOpen
+        // still true), the request registers a continuation that the hop then
+        // fails with connectionClosed — both orders converge on the same error.
+        // The withTimeout watchdog turns any regression into a fast failure.
         do {
-            _ = try await client.request(
-                method: "should_fail",
-                params: [],
-                responseDecoder: { v in v }
-            )
+            _ = try await withTimeout {
+                try await client.request(
+                    method: "should_fail",
+                    params: [],
+                    responseDecoder: { v in v }
+                )
+            }
             Issue.record("Expected NvimRPCError.connectionClosed to be thrown")
         } catch NvimRPCError.connectionClosed {
             // Expected path.
+        } catch is CancellationError {
+            Issue.record("request hung past deadline instead of throwing connectionClosed")
         } catch {
             Issue.record("Unexpected error type: \(error)")
         }
@@ -461,7 +498,7 @@ struct NvimRPCClientTests {
         stdoutPipe.fileHandleForWriting.write(errData)
 
         do {
-            _ = try await withTimeout { try await requestHandle.value }
+            _ = try await awaitWithTimeout(requestHandle)
             Issue.record("Expected NvimRPCError.remoteError to be thrown")
         } catch NvimRPCError.remoteError {
             // Expected path.
