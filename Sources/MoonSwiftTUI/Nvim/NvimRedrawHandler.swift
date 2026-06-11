@@ -94,8 +94,11 @@ public final class NvimRedrawHandler: @unchecked Sendable {
 
             // Each sub-array is [eventName, argTuple1, argTuple2, …].
             // Iterate over argument tuples (indices 1…).
-            for argIndex in 1..<subArray.count {
-                let event = decode(eventName: eventName, args: subArray[argIndex])
+            // Special case: sub-events with no argument tuples (e.g. "flush")
+            // have subArray.count == 1. Synthesise a .nil sentinel so the
+            // decoder sees the event name even with no args.
+            if subArray.count == 1 {
+                let event = decode(eventName: eventName, args: .nil)
                 if let event {
                     pending.append(event)
                     if case .flush = event {
@@ -103,10 +106,22 @@ public final class NvimRedrawHandler: @unchecked Sendable {
                         pending = []
                         post(batch)
                     }
-                } else {
-                    Logger.shared.debug(
-                        "NvimRedrawHandler: unrecognised sub-event '\(eventName)' — dropped"
-                    )
+                }
+            } else {
+                for argIndex in 1..<subArray.count {
+                    let event = decode(eventName: eventName, args: subArray[argIndex])
+                    if let event {
+                        pending.append(event)
+                        if case .flush = event {
+                            let batch = pending
+                            pending = []
+                            post(batch)
+                        }
+                    } else {
+                        Logger.shared.debug(
+                            "NvimRedrawHandler: unrecognised sub-event '\(eventName)' — dropped"
+                        )
+                    }
                 }
             }
         }
