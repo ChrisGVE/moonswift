@@ -129,6 +129,9 @@ public actor NvimRPCClient {
     ///   - stdout: The Pipe whose read end the reader thread will consume.
     public func attachPipes(stdin: Pipe, stdout: Pipe) {
         stdinWriteHandle = stdin.fileHandleForWriting
+        // Set once here rather than per write: SIGPIPE becomes a returnable
+        // EPIPE for every subsequent write(2) on this fd.
+        _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         stdinOpen = true
         startReaderThread(stdoutPipe: stdout)
     }
@@ -350,8 +353,9 @@ public actor NvimRPCClient {
     /// short write). On failure also sets `stdinOpen = false`.
     ///
     /// `FileHandle.write(_:)` raises an uncatchable ObjC exception on a closed
-    /// fd; POSIX `write(2)` returns -1/EPIPE instead. F_SETNOSIGPIPE converts
-    /// SIGPIPE to a returnable error (same pattern as FakeNvimServer in tests).
+    /// fd; POSIX `write(2)` returns -1/EPIPE instead. F_SETNOSIGPIPE is set
+    /// once in `attachPipes` so SIGPIPE arrives as a returnable EPIPE here
+    /// (same pattern as FakeNvimServer in tests).
     ///
     /// All callers must check `stdinOpen` before calling this.
     @discardableResult
@@ -361,7 +365,6 @@ public actor NvimRPCClient {
             return false
         }
         let fd = handle.fileDescriptor
-        _ = fcntl(fd, F_SETNOSIGPIPE, 1)
         let ok: Bool = data.withUnsafeBytes { ptr -> Bool in
             guard let base = ptr.baseAddress, ptr.count > 0 else { return true }
             var sent = 0

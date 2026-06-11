@@ -264,8 +264,14 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
         // calls handle.fileDescriptor on a potentially-already-closed handle.
         // teardown() owns the closeFile() call; the thread only uses the raw fd.
         let fd = pipe.fileHandleForReading.fileDescriptor
-        let thread = Thread { [weak self] in
-            self?.runStderrDrain(fd: fd)
+        // Strong capture on purpose: a weak capture lets the supervisor
+        // deallocate before the thread body runs, in which case the drain
+        // never starts and stderrExitSemaphore is never signalled — teardown
+        // would then always burn its full join timeout (same pattern as the
+        // RPC reader thread, CR-035/CR-043). The thread's lifetime is bounded
+        // by teardown(), so no retain cycle.
+        let thread = Thread { [self] in
+            runStderrDrain(fd: fd)
         }
         thread.name = "moonswift.nvim-stderr-drain"
         thread.qualityOfService = .utility
