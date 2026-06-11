@@ -78,17 +78,28 @@ flowchart TB
     subgraph tui["MoonSwiftTUI"]
         PUMP["EventPump<br/>(pump thread, poll-with-timeout)"]
         CHAN["EventChannel<br/>(thread-safe MPSC queue)"]
-        DRV["AppDriver<br/>(UI thread: drain → reduce →<br/>effects → render)"]
+        DRV["AppDriver<br/>(UI thread: drain → reduce →<br/>effects → render)<br/>holds NvimSession? (set on nvimReady)"]
         TICK["Tick source<br/>(AppDriver-owned thread)"]
         RED["Reducer + AppState<br/>(pure)"]
         REN["Renderer<br/>(pure: state → commands)"]
         HL["Highlighter<br/>(span cache; effect-driven parse)"]
         THEME["ThemeEngine"]
+        subgraph nvim["MoonSwiftTUI/Nvim/ (P4 F8b)"]
+            EB["EditorBridge<br/>(static namespace)<br/>edit lifecycle · conflict modal"]
+            WB["WriteBackCoordinator<br/>(static async enum)<br/>format dispatch → SpanSplicer<br/>atomic write · TOCTOU guard"]
+            NPS["NvimProcessSupervisor<br/>spawn · teardown · SIGTERM→SIGKILL"]
+            RPC["NvimRPCClient (actor)<br/>request/notify · stdin-pipe owner<br/>onNotification registry"]
+            RDH["NvimRedrawHandler<br/>redraw batch → NvimGridState<br/>hl cache · grid_scroll shift"]
+            KT["NvimKeyTranslator<br/>KeyCode/Modifiers → nvim notation"]
+            MP["MessagePackValue (vendored)<br/>MoonSwiftCore/Vendor/ · MIT · 7 files"]
+        end
     end
 
     subgraph core["MoonSwiftCore (no terminal I/O)"]
         PS["ProjectStore<br/>(ProjectFile codec + validation)"]
         SS["SourceStore<br/>(fragments + provenance)"]
+        SPC["SpanSplicer<br/>spliceJSON/TOML/YAML · overwriteLua<br/>hasConflict(currentData:expected:)"]
+        SL["SpanLocator<br/>locateSpan(in:format:path:document:)"]
         JP["JSONPathSubset"]
         RS["RunService"]
         LS["LintService"]
@@ -99,7 +110,7 @@ flowchart TB
     end
 
     subgraph ffi["FFI overlay"]
-        RK["RatatuiKit<br/>(safe Swift wrappers,<br/>two API groups + thread asserts)"]
+        RK["RatatuiKit<br/>(safe Swift wrappers,<br/>two API groups + thread asserts)<br/>CellBuffer: write(col:row:char:style:)<br/>+ flush(to:) = nvim-grid blit API<br/>(UI-thread-only, render-class §5.2)"]
         CF["CRatatuiFFI<br/>(C module: header + lib)"]
         RUST["rust/ratatui-ffi<br/>(vendored fork: ffi_guard,<br/>events, widgets, cell API)"]
     end
@@ -129,6 +140,18 @@ flowchart TB
     RS & LS --> LED
     LED --> ELP
     REN --> THEME
+    DRV -- "Effect.spawnNvim/nvimInput/writeBack/…" --> EB
+    EB --> NPS
+    EB --> RPC
+    EB --> WB
+    RPC <--> MP
+    RPC --> RDH
+    RDH -- "AppEvent.nvimRedrawBatch" --> CHAN
+    NPS -- "AppEvent.nvimProcessExited" --> CHAN
+    EB -- "AppEvent.nvimReady / writeBackSucceeded\n/ conflictDetected / diffViewReady" --> CHAN
+    WB --> SPC
+    WB --> SL
+    DRV -- "nvimGrid cells (UI thread, render-class)\nCellBuffer.write + flush(to:writer)" --> RK
 ```
 
 `RatatuiKit` exposes exactly **two API groups** matching the edge labels
@@ -159,7 +182,13 @@ calls.
 | **LintService** | Syntax pre-pass (`precompile`, result discarded) + vendored-luacheck pass in the long-lived lint engine; maps reports to `Diagnostic` with fragment offsets; pre-warmed post-first-frame (§3d) | Owns the lint engine (serial executor — the engine is single-threaded). Invariant: receives only `extraModules` names already validated against the catalog allow-list (§7.3) | Run user code in the lint engine (user code is only ever a *string* input); use the deprecated `compile(_:)` |
 | **LuaModuleCatalog / CatalogGenerator** | Hand-maintained typed catalog v0 (9 `.base` + `luaswift` root + `toml` `.conditional` + 3 `.optIn` = 14 entries); one source of truth, three consumers: luacheck globals (P1), completion items (P3a), LuaLS meta files (P3b); the `.optIn` names define the `extraModules` allow-list; `.conditional` entries (toml) are confirmed by the startup engine probe (§5.4) before being offered to any consumer | Pure data + generator functions; availability of `.conditional` entries comes from the probe, not the literal | Acquire runtime state in P1 beyond the one-shot probe (live-mock entries arrive with #21 in P2+) |
 | **LuaErrorLineParser** | Extract **only the line number** from `LuaError` string payloads. Two formats: `[string "<truncated user source>"]:N: message` (run/lint path — `luaL_loadstring` makes the chunk name the source text itself, truncated to `LUA_IDSIZE` ≈ 60 bytes; the quoted part may contain `"]:` and the *message* may contain `]:N:`, so the parser anchors on the **last** `]:N:` pattern **within the first ~70 bytes** — the bounded-anchor rule, handling both hostile classes; PRD F3) and `bytecode:N: message` (precompile path — the engine hardcodes `=bytecode`). Display names come from `FragmentProvenance` client-side (§4.3), **never** from the engine string | Isolated single file behind the `Diagnostic.from(luaError:provenance:)` helper seam (§6); deleted in P2 when #19 ships | Leak into consumers' types (callers consume `Diagnostic` via the helper, never raw parse results); attempt to extract a name from the engine string |
-| **RatatuiKit** | Safe Swift overlay: status-code → thrown error translation, event struct decoding, widget/cell-buffer wrappers, terminal lifecycle incl. suspend/resume for `$EDITOR`; batches cell writes into per-run FFI calls (§3b) | The only FFI-touching target; exposes the two thread-class API groups (§5.2) with debug thread assertions | Contain domain types; expose raw pointers upward; issue per-cell FFI calls |
+| **EditorBridge** | Static namespace for the nvim edit-session lifecycle: probe → fallback decision → process spawn → RPC handshake → buffer seed → autocmd → `NvimSession` construction → `AppEvent.nvimReady(NvimSession)` posting (§10.4, §10.8 Inc-7). Accepts `SessionOverride?` for unit tests (no real nvim needed). | No instance state; session lifecycle state lives in `NvimSession`, owned by AppDriver as `nvimSession?` | Hold session state; call `render`; issue per-cell FFI calls |
+| **NvimRPCClient** | Actor: owns the stdin `FileHandle`; `request`/`notify`/`onNotification` run on the actor executor; `deliver` enqueued from the nvim-rpc-reader Thread via `Task { await client.deliver(msg) }` (§10.2, §10.4.6) | Actor-isolated; the reader thread never calls render/terminal-class or input-class functions | Block the reader thread on Swift awaits; hold UI state |
+| **WriteBackCoordinator** | Static async enum: 8-step write-back pipeline — size cap → syntax pre-pass → double `validateReadable` → background read → conflict check → format dispatch (SpanSplicer) → TOCTOU guard → atomic write. `lintService` injected for testability. All blocking I/O on `com.moonswift.writeback-io` DispatchQueue via `withCheckedThrowingContinuation` (§10.3c, §10.8 Inc-6). | No instance state; re-locates span from live bytes on every call — `provenance.byteRange` is never reused for the splice | Hold mutable state; call FFI; access AppState |
+| **NvimRedrawHandler** | Decodes nvim `redraw` notification batches (ext_linegrid protocol) into `[NvimRedrawEvent]`; posts `AppEvent.nvimRedrawBatch` only on terminating `.flush`. Carries `hlId` across cells within a `grid_line` run. Runs on the `NvimRPCClient` actor executor (§10.4.7, §10.4.8). | One instance per nvim session; buffer scoped to the actor executor | Access UI thread state; call FFI |
+| **NvimSession** | `Sendable` value carrying the live session references (`NvimProcessSupervisor` @unchecked + `NvimRPCClient` actor). Delivered via `AppEvent.nvimReady`. Owned by AppDriver as `nvimSession?`. | Pure carrier; no methods beyond init | Hold mutable session state |
+| **MessagePackValue (vendored)** | MIT-licensed msgpack value codec vendored at `Sources/MoonSwiftCore/Vendor/MessagePackValue/` (7 files + NOTICE). No imports beyond Foundation. Used by `NvimRPCClient` for wire-protocol encode/decode and `MsgpackRPCFramer` for framing. | Pure value codec; no I/O | Import TUI or RatatuiKit types |
+| **RatatuiKit** | Safe Swift overlay: status-code → thrown error translation, event struct decoding, widget/cell-buffer wrappers, terminal lifecycle incl. suspend/resume for `$EDITOR`; batches cell writes into per-run FFI calls (§3b). `CellBuffer` exposes `write(col:row:char:style:)` and `flush(to:)` for the nvim-grid blit path (render-class, UI-thread-only per §5.2). | The only FFI-touching target; exposes the two thread-class API groups (§5.2) with debug thread assertions | Contain domain types; expose raw pointers upward; issue per-cell FFI calls |
 | **CRatatuiFFI** | C module map + cbindgen-generated umbrella header + linkage to the static lib (binaryTarget or source-mode C target, §5.4) | Pure interface target (one stub `.c` in source mode) | Contain logic |
 | **rust/ratatui-ffi (fork)** | ratatui + crossterm behind the restructured C ABI (PRD §4.5 keep/trim/add lists): terminal lifecycle, poll-based event stream, List/Paragraph/Tabs/Block/layout/Clear, first-class cell API, `ffi_guard`, error protocol, emergency restore (§3f) | Everything behind `extern "C"`; dev/test builds use `panic = "unwind"` + `catch_unwind` in `ffi_guard!`; the `--features swift_ffi` static lib omits `catch_unwind` and uses `panic = "abort"` (arm64e TLS mitigation — §5.2, §5.4) | Let a panic unwind across the ABI (UB); allocate or take locks in the emergency-restore path |
 | **Run engine** | Fresh `LuaEngine` per run, configured sandboxed/unrestricted | Created and discarded inside one `RunService.run` call | Outlive its run (P1; the P2 "session engine" is a separate, gated design — §9 A2) |
@@ -279,6 +308,12 @@ flush-if-pending (§3c) — the loop is otherwise fully idle **[ARCH]**.
 | RatatuiKit + FFI calls | < 10 ms |
 | shim: ratatui buffer diff + terminal write | < 15 ms |
 | **margin** | **≈ 9 ms of 50 ms** |
+
+**nvim hot-path latency budget [ARCH]** (P4 F8b, §10.9): `nvim_input` →
+`AppEvent.nvimRedrawBatch` processed < **15 ms** end-to-end on a 2021 M1
+MacBook Pro at 80×24. The `NvimRedrawHandlerTests` suite in
+`Tests/MoonSwiftPerfTests/` includes a micro-bench that asserts this budget is
+not exceeded on the test host (2× CI threshold: 30 ms).
 
 **FFI batching contract [ARCH].** `RenderCommand` cell writes are issued to
 the shim as **one FFI call per contiguous same-attribute run per row** (or a
@@ -625,6 +660,15 @@ AppState
 ├── runState: .idle | .running(runID, startedAt) | derived footer data
 ├── lintState: .initializing | .idle | .running | .failed(message)
 ├── focus: PaneID + picker/help/init-form modal state
+│          (P4 F8b additions — §10.4.3, §10.4.4):
+│            .nvimPane(NvimPaneState)    // nvim session active; keys forwarded
+│            .nvimSpawning              // between <C-e> and nvimReady
+│            .conflictModal(ConflictModalState)  // [r]/[o]/[d]/[c] prompt
+│            .diffView(DiffViewPhase)   // .building | .ready(DiffViewState)
+├── nvimGrid: NvimGridState?            // P4: live nvim cell grid; nil when no session
+├── conflictModal: ConflictModalState?  // P4: set on .conflictDetected; cleared on resolution
+├── diffView: DiffViewPhase?            // P4: set on Effect.buildDiffView
+├── nvimFallbackNotedThisSession: Bool  // P4: one-time "nvim not found" transient gate
 ├── theme: resolved token table + capability tier
 └── transient: status-bar message + expiry, spinner phase
 ```
@@ -715,6 +759,22 @@ enum Effect: Sendable {
                                    // 100 ms / pulse 500 ms / transient 1.5 s),
                                    // re-emits on change, stopTick when none (§3b)
   case quit(exitCode: Int32)       // executed by the AppDriver, never by reduce
+
+  // P4 F8b nvim editing effects (ARCHITECTURE.md §10.4, §10.8):
+  case spawnNvim(LuaSourceFragment, rect: Rect)
+                                   // → EditorBridge.spawn → AppEvent.nvimReady
+  case nvimInput(String)           // → rpc.notify nvim_input(string)
+  case nvimDetach                  // → rpc.notify nvim_command(":qa!")
+                                   //   → AppEvent.nvimDetached
+  case nvimResize(TerminalSize)    // → rpc.notify nvim_ui_try_resize (debounced)
+  case nvimCleanup                 // → supervisor.teardown(); clear session
+  case writeBack(LuaSourceFragment, editedText: String, force: Bool)
+                                   // → WriteBackCoordinator.write
+  case spawnEditorFallback(LuaSourceFragment)
+                                   // → AppDriver.spawnEditorAndWait (pump-park)
+  case buildDiffView(URL, expectedHash: SHA256Digest,
+                     editedText: String, fragment: LuaSourceFragment)
+                                   // → off-thread Task → AppEvent.diffViewReady
 }
 
 // EventChannel — MPSC, blocking drain on the UI thread
@@ -722,6 +782,23 @@ final class EventChannel: @unchecked Sendable {
   func post(_ event: AppEvent)            // any thread
   func waitAndDrainAll() -> [AppEvent]    // UI thread only — contract below
 }
+```
+
+**P4 F8b AppEvent additions (§10.4.2, §10.8):**
+
+```swift
+// (additional cases in AppEvent — P4 nvim editing)
+case nvimRedrawBatch([NvimRedrawEvent])  // NvimRedrawHandler → reducer → nvimGrid
+case nvimWriteRequested                  // BufWriteCmd autocmd fired (:w)
+case nvimUnavailable(String)             // nvim absent/too-old; fallback activates
+case nvimProcessExited(exitCode: Int32)  // supervisor exit handler
+case nvimReady(NvimSession)              // spawn complete; reducer → .nvimPane
+case nvimDetached                        // :qa! acknowledged; reducer → .nvimCleanup
+case writeBackSucceeded(SourceID)        // file updated on disk
+case writeBackFailed(WriteBackCoordinator.Outcome)  // non-conflict failure
+case writeBackBlocked(Diagnostic)        // syntax pre-pass blocked the write
+case conflictDetected(fileURL: URL, expectedHash: SHA256Digest, editedText: String)
+case diffViewReady(DiffViewState)        // off-thread diff build complete
 ```
 
 **`waitAndDrainAll` contract [ARCH].** Blocks until at least one event is
@@ -812,7 +889,16 @@ Every `extern "C"` entry point follows the fork invariants (PRD §4.3/§4.5):
     from the EventPump thread**; the poll retries on `EINTR` inside the
     shim (SIGTSTP, debugger attach).
   - *render/terminal-class* (init/teardown, suspend/resume, draw, cell
-    writes): called **exclusively from the UI thread**.
+    writes, incl. `CellBuffer.write(col:row:char:style:)` + `flush(to:)`
+    for the nvim-grid blit path — §10.2): called **exclusively from the
+    UI thread**.
+  - *nvim-rpc-class* (P4 F8b addition): the `moonswift.nvim-rpc-reader`
+    Thread reads the nvim stdout pipe via blocking `read(2)` and delivers
+    to `NvimRPCClient` actor via `Task { await client.deliver(msg) }`.
+    The actor dispatches to `NvimRedrawHandler` (posts
+    `AppEvent.nvimRedrawBatch`) and to registered notification handlers
+    (posts `AppEvent.nvimWriteRequested`). **Must NOT** call
+    render/terminal-class or input-class functions.
   This refines, without contradicting, the PRD's single-UI-thread rule:
   crossterm's input decoding is read-side and thread-separable from the
   ratatui write-side; `RatatuiKit` asserts the calling thread in debug
@@ -1050,9 +1136,9 @@ uncaptured `io.write` from unrestricted user code, §3c):
 
 | Class | Examples | Rendering | Exit impact |
 |---|---|---|---|
-| **User-content** | script runtime/syntax errors, lint findings | Output-tab footer with `→ jump to line N`; Diagnostics tab + gutter marks; fragment-relative lines (host-file line in detail) | none — normal workflow |
+| **User-content** | script runtime/syntax errors, lint findings; `WriteBackCoordinator` `.validateReadableRejection` (file type/size/path-escape guard fails); `WriteBackCoordinator` `.spliceError` (SpanSplicer validation or re-parse failure) | Output-tab footer with `→ jump to line N`; Diagnostics tab + gutter marks; fragment-relative lines (host-file line in detail); write-back errors render to status-bar ("Cannot read file: …" / format-specific diagnostic) — never silent clobber | none — normal workflow |
 | **Project-config** | malformed `moonswift.toml`, bad JSONPath, missing source, unsupported Lua version, unknown `extraModules` name, `wall_clock_limit_ms` without #22 | F2/F1.4 diagnostics in the bottom pane; navigator `✖`/`⚠` treatments; degraded-but-usable states (UX §3.7/§4.3) | none in TUI; `65` (EX_DATAERR) when fatal in non-TUI contexts |
-| **Environment** | no `$EDITOR`, editor exec failure, terminal < 80×24, NO_COLOR, missing optional binaries (LuaLS, nvim) | transient status-bar messages / degraded modes; never fatal | none |
+| **Environment** | no `$EDITOR`, editor exec failure, terminal < 80×24, NO_COLOR, missing optional binaries (LuaLS, nvim); `nvim` absent or version < 0.9 (one-time transient, $EDITOR fallback activated; `AppEvent.nvimUnavailable`); nvim crash mid-edit (transient + nvim pane closes; `AppEvent.nvimProcessExited`) | transient status-bar messages / degraded modes; never fatal | none |
 | **Internal** | FFI error codes, lint-engine failure, invariant violations | bottom-pane `✖` + full detail to the log; fatal ones tear down cleanly | `70` (EX_SOFTWARE); `64` (EX_USAGE) for CLI misuse |
 
 Everything user-visible funnels through the `Diagnostic` model or the
@@ -1103,6 +1189,20 @@ on `exit(70)` paths.
   path containing spaces needs a wrapper script (documented). A failed
   exec restores the terminal and shows a graceful transient message —
   never a crash or a stranded screen.
+- **nvim spawn (P4 F8b):** nvim is located via `NVIM_PATH` env override
+  or `PATH` search. When `NVIM_PATH` is set it **must** satisfy
+  `hasPrefix("/")` AND `isExecutableFile` — rejection is logged and
+  `AppEvent.nvimUnavailable` is posted (no silent fall-through). nvim is
+  started with `Process.executableURL`; no shell is involved.
+  `nvim_buf_set_name` (buffer name assignment) is called **after**
+  hardening (step 6 of the 11-step spawn order) so no swapfile race can
+  open a file before security options are applied. XDG isolation: the
+  nvim home/data/cache dirs are redirected to a 0700 temp directory
+  created per-session; this prevents nvim plugins from loading and
+  eliminates cross-session state. `signal(SIGPIPE, SIG_IGN)` is
+  installed at process startup (`Sources/moonswift/main.swift`) so a
+  write to a dead nvim pipe surfaces as `EPIPE` / `.ioFailure` rather
+  than SIGPIPE termination.
 - **Temp files** (P4): created atomically with
   `open(O_WRONLY | O_CREAT | O_EXCL, 0600)` (no pre-existing-file race),
   per-process unique names, deleted on session end. The startup stale
@@ -1233,6 +1333,39 @@ Sources/RatatuiKit/
 
 Sources/CRatatuiFFI/                              module map + generated header
                                                   (+ stub .c in source mode, §5.4)
+
+Sources/MoonSwiftTUI/Nvim/                        P4 F8b — nvim embed subsystem
+  EditorBridge.swift                    ~270  11-step spawn + SessionOverride seam
+  NvimProcessSupervisor.swift           ~290  probe, spawn, 9-step teardown
+  NvimRPCClient.swift                   ~310  actor; msgpack-RPC request/notify/
+                                              onNotification; nvim-rpc-reader thread
+  NvimRedrawHandler.swift               ~330  ext_linegrid decoder; posts nvimRedrawBatch
+  NvimKeyTranslator.swift               ~280  TUI KeyEvent → nvim input string
+  WriteBackCoordinator.swift            ~370  8-step write-back pipeline
+  NvimSession.swift                     ~100  session value type (rpc + supervisor refs)
+  MsgpackRPCFramer.swift                ~180  framing, encode/decode MessagePackValue
+  NvimRedrawTypes.swift                 ~160  RedrawEvent enum; ext_linegrid value types
+  WriteBackCoordinator+SessionOverride  ~40   test seam struct
+  (total ≈ 2,330 lines across 10 files; Renderer.swift in Render/ approaching
+   400-line budget — track separately as Risk-nvim-1, §9)
+
+Sources/MoonSwiftCore/Vendor/MessagePackValue/
+  (7 files; MIT vendored codec; exempt as third-party vendored library)
+  NOTICE.txt                            attribution + MIT license text
+
+Tests/MoonSwiftTUITests/Nvim/
+  WriteBackCoordinatorTests.swift       ~300  unit: format paths, conflict, errors
+  WriteBackIntegrationTests.swift       ~340  e2e / acceptance (PRD §F8)
+  WriteBackTestSupport.swift            ~160  MockLintService, WriteBackFixtures
+  NvimKeyTranslatorTests.swift          ~200  key translation coverage
+  WriteBackCoordinator+SessionOverride  (re-exported by support file)
+
+Modified-file deltas (P4 F8b additions to existing files):
+  Sources/MoonSwiftTUI/App/AppEvent.swift   +40  P4 event cases (§5.1)
+  Sources/MoonSwiftTUI/App/Effect.swift     +50  P4 effect cases (§5.1)
+  Sources/MoonSwiftTUI/App/AppState.swift   +30  nvimGrid, conflictModal, diffView,
+                                                  nvimFallbackNotedThisSession
+  Tests/MoonSwiftPerfTests/PerfTests.swift  +130 NvimRedrawPerfTests suite (§3b)
 ```
 
 P2+ additions follow the same pattern (`Mock/MockStore.swift`,
@@ -1318,6 +1451,8 @@ ThemeEngine → their directories; FFI overlay → `RatatuiKit` + crate.
 | — | **[ARCH-new]** crossterm poll-thread/write-thread separation assumption (§5.2: input-class polls on the pump thread while render-class writes on the UI thread) | verify in the shim-restructure task with a dedicated two-thread cargo test; fallback if violated: move polling onto the UI thread inside the AppDriver loop (`rffi_poll_event(timeout)` already bounds latency) — RatatuiKit/AppDriver-internal change only |
 | — | **[ARCH-new]** `rffi_emergency_restore` best-effort restore on macOS (`write(2)` safe; `tcsetattr` technically unsafe from a handler — §3f) | covered by a manual kill-test in the shim task; restore-on-crash is best-effort by design |
 | — | **[ARCH-new]** upstream LuaSwift engine-level output redirection (would capture `io.write` and harden the print override, §3c) | candidate LuaSwift issue after P1 validates the override mechanism; not a gate |
+| Risk-nvim-1 | `Renderer.swift` in `Sources/MoonSwiftTUI/Render/` is approaching the 400-line file budget as the nvim-grid blit path is added (P4 F8b). The renderer layout pass + eight sub-view call sites + nvim-pane blit may push it over the limit. | Monitor at next tag close via `codesize`; split preemptively into `Renderer+NvimPane.swift` if projection exceeds 360 lines. |
+| OQ-nvim-1 | `BufWriteCmd` autocmd + `rpcnotify` ordering: if nvim delivers the `moonswift_write` notification before the `nvim_create_autocmd` response is processed, the handler registered in step 7 may race the delivery. | Ordering is safe because step 7 (`onNotification` registration on the actor) completes before step 9 (`nvim_create_autocmd` request) is even sent. Confirm with a targeted integration test that captures the first write notification on a freshly seeded buffer. |
 
 ## 10. Editing subsystem (P4 — embedded Neovim + `$EDITOR` fallback)
 
@@ -2094,24 +2229,24 @@ Each increment is independently testable, committable, TDD-first. Ordering respe
 
 ### 10.9 Edits to Existing Sections (checklist for merge)
 
-**§2 Component Map:** add rows for `EditorBridge` (static namespace), `NvimRPCClient` (actor, stdin owner), `WriteBackCoordinator` (static async enum), `NvimRedrawHandler`, `NvimSession` (Sendable), `MessagePackValue` (vendored, 7-file); extend the `RatatuiKit/CellBuffer` row note (`write(col:row:char:style:)` + `flush(to:)` = nvim-grid blit API, UI-thread-only per §5.2); extend the Mermaid flowchart with the new components and edges.
+**§2 Component Map:** add rows for `EditorBridge` (static namespace), `NvimRPCClient` (actor, stdin owner), `WriteBackCoordinator` (static async enum), `NvimRedrawHandler`, `NvimSession` (Sendable), `MessagePackValue` (vendored, 7-file); extend the `RatatuiKit/CellBuffer` row note (`write(col:row:char:style:)` + `flush(to:)` = nvim-grid blit API, UI-thread-only per §5.2); extend the Mermaid flowchart with the new components and edges. — applied (Inc-12)
 
-**§3b Performance budget:** add the nvim hot-path latency budget row: `nvim_input` → `AppEvent.nvimRedrawBatch` processed < 15 ms measured end-to-end on a 2021 M1 MacBook Pro at 80×24. The `NvimRedrawHandlerTests` suite includes a micro-bench that fails CI if the budget is exceeded on the test host.
+**§3b Performance budget:** add the nvim hot-path latency budget row: `nvim_input` → `AppEvent.nvimRedrawBatch` processed < 15 ms measured end-to-end on a 2021 M1 MacBook Pro at 80×24. The `NvimRedrawHandlerTests` suite includes a micro-bench that fails CI if the budget is exceeded on the test host. — applied (Inc-12)
 
-**§4.2 In-memory state tree:** add `nvimGrid: NvimGridState?`, `conflictModal: ConflictModalState?`, `diffView: DiffViewState?`, `nvimFallbackNotedThisSession: Bool`. Add the four new `FocusState` cases (`nvimPane(NvimPaneState)`, `nvimSpawning`, `conflictModal(ConflictModalState)`, `diffView(DiffViewState)`).
+**§4.2 In-memory state tree:** add `nvimGrid: NvimGridState?`, `conflictModal: ConflictModalState?`, `diffView: DiffViewState?`, `nvimFallbackNotedThisSession: Bool`. Add the four new `FocusState` cases (`nvimPane(NvimPaneState)`, `nvimSpawning`, `conflictModal(ConflictModalState)`, `diffView(DiffViewState)`). — applied (Inc-12)
 
-**§5.1 Loop contract:** add the new `Effect` and `AppEvent` cases verbatim (including `Effect.nvimCleanup` and `AppEvent.nvimReady(NvimSession)`); add a `nvim-rpc-class` row to the thread-class contract table: "nvim-rpc-reader Thread only: reads nvim stdout via blocking `read(2)`; delivers to `NvimRPCClient` actor via `Task { await client.deliver(msg) }`; actor dispatches to `NvimRedrawHandler` (posts `AppEvent.nvimRedrawBatch`) and to registered notification handlers (post `AppEvent.nvimWriteRequested`); must NOT call render/terminal-class or input-class functions."
+**§5.1 Loop contract:** add the new `Effect` and `AppEvent` cases verbatim (including `Effect.nvimCleanup` and `AppEvent.nvimReady(NvimSession)`); add a `nvim-rpc-class` row to the thread-class contract table: "nvim-rpc-reader Thread only: reads nvim stdout via blocking `read(2)`; delivers to `NvimRPCClient` actor via `Task { await client.deliver(msg) }`; actor dispatches to `NvimRedrawHandler` (posts `AppEvent.nvimRedrawBatch`) and to registered notification handlers (post `AppEvent.nvimWriteRequested`); must NOT call render/terminal-class or input-class functions." — applied (Inc-12)
 
-**§7.1 Error taxonomy:** add `nvim absent/too-old` (Environment, one-time transient → fallback), `nvim crash mid-edit` (Environment, transient + close pane), `validateReadableRejection` (User-content, status-bar), `SpliceError` write-back (User-content, status-bar, never silent clobber).
+**§7.1 Error taxonomy:** add `nvim absent/too-old` (Environment, one-time transient → fallback), `nvim crash mid-edit` (Environment, transient + close pane), `validateReadableRejection` (User-content, status-bar), `SpliceError` write-back (User-content, status-bar, never silent clobber). — applied (Inc-12)
 
-**§7.3 Security boundaries:** add the nvim-spawn paragraph (direct exec via `Process.executableURL`, resolved absolute path from `NvimProcessSupervisor.probe`, `NVIM_PATH` override with `hasPrefix("/")` + `isExecutableFile` validation, same CR-011 guard as `AppDriver.spawnEditorAndWait`; `nvim_buf_set_name` path-as-parameter; hardening before buffer ops; XDG isolation 0700; `signal(SIGPIPE, SIG_IGN)` at startup in `main.swift`). Also reconcile the pre-existing `$EDITOR` split-on-whitespace documentation inconsistency with the actual `AppDriver.spawnEditorAndWait` behaviour (no whitespace-split): the doc should match the code.
+**§7.3 Security boundaries:** add the nvim-spawn paragraph (direct exec via `Process.executableURL`, resolved absolute path from `NvimProcessSupervisor.probe`, `NVIM_PATH` override with `hasPrefix("/")` + `isExecutableFile` validation, same CR-011 guard as `AppDriver.spawnEditorAndWait`; `nvim_buf_set_name` path-as-parameter; hardening before buffer ops; XDG isolation 0700; `signal(SIGPIPE, SIG_IGN)` at startup in `main.swift`). Also reconcile the pre-existing `$EDITOR` split-on-whitespace documentation inconsistency with the actual `AppDriver.spawnEditorAndWait` behaviour (no whitespace-split): the doc should match the code. — applied (Inc-12)
 
-**§8 Module / Codesize Plan:** add `Sources/MoonSwiftTUI/Nvim/` (ten files, sizes as per §10.7), `Sources/MoonSwiftCore/Vendor/MessagePackValue/` (7 files + NOTICE), the modified-file deltas, and `Tests/MoonSwiftTUITests/Nvim/`.
+**§8 Module / Codesize Plan:** add `Sources/MoonSwiftTUI/Nvim/` (ten files, sizes as per §10.7), `Sources/MoonSwiftCore/Vendor/MessagePackValue/` (7 files + NOTICE), the modified-file deltas, and `Tests/MoonSwiftTUITests/Nvim/`. — applied (Inc-12)
 
 **§9 Risks & Open Questions:**
 
-- **Risk-nvim-1 (pre-existing violation):** `Renderer.swift` is 1,889 lines — 4.7× the 400-line limit. The P4 Renderer work (Inc-11) must not worsen this. New rendering code goes exclusively in the three new files (`NvimGridView.swift`, `NvimConflictView.swift`, `NvimDiffView.swift`). Splitting the pre-existing `Renderer.swift` is tracked as a separate refactor item, not in-scope for P4 but not to be deferred indefinitely.
+- **Risk-nvim-1 (pre-existing violation):** `Renderer.swift` is 1,889 lines — 4.7× the 400-line limit. The P4 Renderer work (Inc-11) must not worsen this. New rendering code goes exclusively in the three new files (`NvimGridView.swift`, `NvimConflictView.swift`, `NvimDiffView.swift`). Splitting the pre-existing `Renderer.swift` is tracked as a separate refactor item, not in-scope for P4 but not to be deferred indefinitely. — applied (Inc-12)
 
-- **OQ-nvim-1:** `BufWriteCmd` + `rpcnotify` ordering — confirm the autocmd fires synchronously before the write completes on nvim 0.9, 0.10, and 0.11-nightly. If async on any version, fall back to polling `b:changedtick`. Inc-7 acceptance criterion includes a version-matrix test.
+- **OQ-nvim-1:** `BufWriteCmd` + `rpcnotify` ordering — confirm the autocmd fires synchronously before the write completes on nvim 0.9, 0.10, and 0.11-nightly. If async on any version, fall back to polling `b:changedtick`. Inc-7 acceptance criterion includes a version-matrix test. — applied (Inc-12)
 
-- **OQ-nvim-2:** `ext_linegrid` grid-1 assumption — confirm `nvim_ui_attach` with `ext_linegrid:true` and no splits delivers all output on grid 1. If nvim allocates extra grids (floating windows, completion popups), the `NvimRedrawHandler` must suppress or composite them. Tracked as an Inc-4 acceptance criterion.
+- **OQ-nvim-2:** `ext_linegrid` grid-1 assumption — confirm `nvim_ui_attach` with `ext_linegrid:true` and no splits delivers all output on grid 1. If nvim allocates extra grids (floating windows, completion popups), the `NvimRedrawHandler` must suppress or composite them. Tracked as an Inc-4 acceptance criterion. — applied (Inc-12)

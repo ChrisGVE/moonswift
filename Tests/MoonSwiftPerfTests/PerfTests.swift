@@ -1,9 +1,10 @@
 // File: Tests/MoonSwiftPerfTests/PerfTests.swift
 // Location: Tests/MoonSwiftPerfTests/
-// Role: Performance benchmarks verifying latency budgets from the PRD. Six
+// Role: Performance benchmarks verifying latency budgets from the PRD. Seven
 //       measurements cover: (1) render pipeline at 200×60, (2) cancellation
 //       latency (gated on MOONSWIFT_LUASWIFT_22), (3) syntax pre-pass,
-//       (4) luacheck pass, (5) source load, (6) cold-start proxy.
+//       (4) luacheck pass, (5) source load, (6) cold-start proxy,
+//       (7) nvim redraw-batch latency (ARCHITECTURE.md §3b, §10.9).
 //
 //       CI thresholds are 2× the PRD target to absorb runner variance (shared
 //       CI runners may starve threads for 80 ms or more). All measurements
@@ -31,11 +32,13 @@ import Testing
 @testable import MoonSwiftCore
 @testable import MoonSwiftTUI
 
+// NOTE: NvimRedrawHandler is in MoonSwiftTUI; imported via @testable above.
+
 // MARK: - Thresholds
 //
 // All thresholds are 2× the PRD target. The 2× multiplier absorbs CI runner
 // variance (thread-starvation spikes of 80 ms+) while still catching genuine
-// regressions. PRD sources: ARCHITECTURE.md §3a, §3b, §3d.
+// regressions. PRD sources: ARCHITECTURE.md §3a, §3b, §3d, §10.9.
 //
 // PRD target → CI threshold (2×):
 //   Render (reduce + render)       <  50 ms  →   100 ms
@@ -44,12 +47,14 @@ import Testing
 //   Luacheck / 1000 lines          <   1  s  →     2  s  (informational + assert)
 //   Source load ≤1 MB              < 100 ms  →   200 ms
 //   Cold start proxy               < 300 ms  →   600 ms
+//   nvim redraw batch (80×24)      <  15 ms  →    30 ms  (ARCHITECTURE.md §10.9)
 
 private let renderThreshold: Duration = .milliseconds(100)
 private let syntaxPrePassThreshold: Duration = .milliseconds(100)
 private let luacheckThreshold: Duration = .seconds(2)
 private let sourceLoadThreshold: Duration = .milliseconds(200)
 private let coldStartThreshold: Duration = .milliseconds(600)
+private let nvimRedrawThreshold: Duration = .milliseconds(30)
 #if MOONSWIFT_LUASWIFT_22
     private let cancellationThreshold: Duration = .milliseconds(400)
 #endif
@@ -574,6 +579,182 @@ struct ColdStartPerfTests {
         #expect(
             elapsed < coldStartThreshold,
             "Cold start proxy took \(elapsed) — over 2× PRD target of 300 ms (CI threshold: 600 ms)"
+        )
+    }
+}
+
+// MARK: - 7. nvim redraw-batch latency (ARCHITECTURE.md §10.9)
+
+/// Measures the end-to-end latency of processing a full nvim redraw batch
+/// through `NvimRedrawHandler` at 80×24 (the standard nvim pane size).
+///
+/// Budget (ARCHITECTURE.md §3b, §10.9): `nvim_input` → `AppEvent.nvimRedrawBatch`
+/// processed < 15 ms end-to-end on a 2021 M1 MacBook Pro at 80×24.
+///
+/// What this test measures:
+///   One call to `NvimRedrawHandler.handleRedraw` with a synthetic 80×24 batch
+///   containing `hl_attr_define` entries, `grid_line` rows for all 24 rows
+///   (each with a full 80-cell line), and a terminating `flush`. This is the
+///   most expensive single-notification case in normal editing (a full-screen
+///   redraw on insert mode entry or `gg`).
+///
+/// What this test does NOT measure:
+///   The RPC framing decode (`MsgpackRPCFramer`), the nvim_input write, and the
+///   EventChannel post — those add < 1 ms and are not in the hot path measured
+///   here. The full §10.9 budget includes all stages; this covers the decoder.
+///
+/// CI threshold: 30 ms (2× the 15 ms PRD target).
+@Suite("Perf — nvim redraw-batch latency (80×24)")
+struct NvimRedrawPerfTests {
+
+    // MARK: - Fixture builder
+
+    /// Builds a realistic 80×24 redraw notification params array.
+    ///
+    /// The batch contains:
+    ///   - 8 `hl_attr_define` entries (keyword, string, comment, cursor, normal, …)
+    ///   - `grid_resize` to 80×24
+    ///   - 24 `grid_line` rows, each with 80 cells across 4 attribute-run groups
+    ///   - `grid_cursor_goto` to row 12, col 40
+    ///   - `flush`
+    private static func makeRedrawBatch() -> [MessagePackValue] {
+        var outer: [MessagePackValue] = []
+
+        // ── hl_attr_define ────────────────────────────────────────────────────
+        let hlIds: [(Int, String, UInt32, UInt32)] = [
+            (1, "normal", 0x00_C0C0C0, 0x00_282828),
+            (2, "keyword", 0x00_FB4934, 0x00_282828),
+            (3, "string", 0x00_B8BB26, 0x00_282828),
+            (4, "comment", 0x00_928374, 0x00_282828),
+            (5, "cursor", 0x00_282828, 0x00_EBDBB2),
+            (6, "cursorline", 0x00_C0C0C0, 0x00_3C3836),
+            (7, "visual", 0x00_C0C0C0, 0x00_504945),
+            (8, "error", 0x00_CC241D, 0x00_282828),
+        ]
+        for (id, _, fg, bg) in hlIds {
+            let rgbMap: MessagePackValue = .map([
+                .string("foreground"): .int(Int64(fg)),
+                .string("background"): .int(Int64(bg)),
+            ])
+            let argTuple: MessagePackValue = .array([
+                .int(Int64(id)),
+                rgbMap,
+                .map([:]),  // cterm attrs (empty)
+                .array([]),  // info
+            ])
+            outer.append(.array([.string("hl_attr_define"), argTuple]))
+        }
+
+        // ── grid_resize ───────────────────────────────────────────────────────
+        outer.append(
+            .array([
+                .string("grid_resize"),
+                .array([.int(1), .int(80), .int(24)]),
+            ])
+        )
+
+        // ── grid_line (24 rows × 80 cells in 4 attribute-run groups) ─────────
+        // Each row: [normal×20, keyword×20, string×20, comment×20] = 80 cells.
+        // hlId for runs 1-4 cycles through the four highlight IDs.
+        let hlCycle: [Int] = [1, 2, 3, 4]
+        let runWidth = 20  // Each of 4 runs is 20 cells.
+
+        for row in 0..<24 {
+            var cellArrayElements: [MessagePackValue] = []
+            for runIdx in 0..<4 {
+                let hl = hlCycle[runIdx]
+                // First cell of each run carries the hlId and a repeat count.
+                cellArrayElements.append(
+                    .array([
+                        .string("a"),
+                        .int(Int64(hl)),
+                        .int(Int64(runWidth)),
+                    ])
+                )
+            }
+            let cellArray = MessagePackValue.array(cellArrayElements)
+            let argTuple: MessagePackValue = .array([
+                .int(1),  // grid id
+                .int(Int64(row)),
+                .int(0),  // col_start
+                cellArray,
+            ])
+            outer.append(.array([.string("grid_line"), argTuple]))
+        }
+
+        // ── grid_cursor_goto ──────────────────────────────────────────────────
+        outer.append(
+            .array([
+                .string("grid_cursor_goto"),
+                .array([.int(1), .int(12), .int(40)]),
+            ])
+        )
+
+        // ── flush ─────────────────────────────────────────────────────────────
+        // nvim encodes flush as ["flush"] — no arg tuples — so handleRedraw
+        // synthesises the flush sentinel internally.
+        outer.append(.array([.string("flush")]))
+
+        return outer
+    }
+
+    // MARK: - Measurement
+
+    /// Measures one full 80×24 redraw batch decode through NvimRedrawHandler.
+    ///
+    /// The handler is called synchronously (it is always invoked on the actor
+    /// executor in production, but the decode logic itself is synchronous). The
+    /// measurement captures the decoder path from raw MessagePackValue params to
+    /// the posted `AppEvent.nvimRedrawBatch` callback — the hot path in normal
+    /// editing. PRD budget: < 15 ms. CI threshold: 30 ms.
+    @Test(
+        "NvimRedrawHandler 80×24 full-screen batch < 30 ms (2× PRD 15 ms target)"
+    )
+    func nvimRedrawBatchLatency() {
+        let batch = NvimRedrawPerfTests.makeRedrawBatch()
+
+        // Count posted batches to verify the flush path fires.
+        // Use a class-based counter so the @Sendable closure captures a reference type.
+        final class Counter: @unchecked Sendable { var value = 0 }
+        let counter = Counter()
+        let handler = NvimRedrawHandler { _ in counter.value += 1 }
+
+        let elapsed = measureSync {
+            handler.handleRedraw(params: batch)
+        }
+
+        print("[perf] nvim redraw-batch (80×24, \(batch.count) outer events): \(elapsed)")
+
+        // The handler must have posted exactly one batch (flush fired once).
+        #expect(counter.value == 1, "Expected 1 posted batch, got \(counter.value)")
+
+        #expect(
+            elapsed < nvimRedrawThreshold,
+            "nvim redraw-batch decode took \(elapsed) — over 2× PRD target of 15 ms (CI threshold: 30 ms)"
+        )
+    }
+
+    /// Warm-up run to confirm that JIT effects (if any) do not hide regressions.
+    @Test("NvimRedrawHandler 80×24 second call also < 30 ms (no warm-up bias)")
+    func nvimRedrawBatchLatencySecondCall() {
+        let batch = NvimRedrawPerfTests.makeRedrawBatch()
+        final class Counter: @unchecked Sendable { var value = 0 }
+        let counter = Counter()
+        let handler = NvimRedrawHandler { _ in counter.value += 1 }
+
+        // Warm-up call.
+        handler.handleRedraw(params: batch)
+        counter.value = 0
+
+        let elapsed = measureSync {
+            handler.handleRedraw(params: batch)
+        }
+
+        print("[perf] nvim redraw-batch second call (80×24): \(elapsed)")
+        #expect(counter.value == 1)
+        #expect(
+            elapsed < nvimRedrawThreshold,
+            "nvim redraw-batch (2nd call) took \(elapsed) — over 2× PRD target"
         )
     }
 }
