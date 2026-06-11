@@ -14,13 +14,17 @@ editor. What happens next depends on whether `nvim` is available:
 
 - **Neovim found** — Neovim opens embedded inside MoonSwift's code pane. The
   source text appears in the nvim buffer ready to edit.
-- **Neovim not found** — a one-time status-bar note appears and your `$EDITOR`
-  is launched instead (the `$EDITOR` path). MoonSwift suspends its terminal,
-  hands control to the editor, then resumes when the editor exits.
+- **Neovim not found** — a one-time status-bar note appears (once per session
+  only; it will not repeat on subsequent edits) and your `$EDITOR` is launched
+  instead. MoonSwift suspends its terminal, hands control to the editor, then
+  resumes when the editor exits.
 
 ---
 
 ## Editing with embedded Neovim
+
+Neovim 0.9 or later is required. MoonSwift probes the version at each `<C-e>`
+press and falls back to `$EDITOR` if the requirement is not met.
 
 The code pane becomes a full Neovim buffer. All standard Neovim commands work:
 navigate with `hjkl`, enter insert mode with `i`, search with `/`, and so on.
@@ -96,13 +100,13 @@ When using `$EDITOR`, if your edit contains a Lua syntax error the editor
 re-opens with a comment block at the top describing the error:
 
 ```lua
--- MoonSwift: syntax error on line 3: unexpected symbol near 'end'
--- Delete this block and save to force-accept, or fix the error and save.
+-- SYNTAX ERROR: unexpected symbol near 'end' (line 3)
+-- Fix the error above, then save to continue. Delete this block to force-accept.
 ```
 
-You can either fix the error or delete the comment block and save to
-force-accept the text as-is. The loop repeats until either the syntax is valid
-or you delete the comment block.
+Fix the error and save, or delete the two-line comment block entirely and save
+to force-accept the text as-is. The loop repeats until the syntax is clean or
+the comment block is absent.
 
 ---
 
@@ -110,17 +114,25 @@ or you delete the comment block.
 
 When Neovim is not available:
 
-- MoonSwift shows a one-time transient: *nvim not found. Using $EDITOR for
-  editing.*
+- MoonSwift shows a one-time transient (once per session):
+  *nvim not found. Using $EDITOR for editing.*
 - For whole `.lua` files: your `$EDITOR` opens the file directly.
 - For structured-file fragments (JSON/YAML/TOML fields): the Lua fragment is
   written to a temporary file; your editor opens the temporary file; on exit the
   content is spliced back into the host file using the same write-back contract.
-- Temporary files use a unique name and 0600 permissions; they are removed after
-  the edit session completes.
+- Temporary files use a UUID-based name and 0600 permissions; they are removed
+  automatically after the edit session completes (on all exit paths, including
+  errors).
 
-If `$EDITOR` is not set, pressing `<C-e>` shows a transient message and no
-editor opens.
+If `$EDITOR` is not set when the fallback activates, pressing `<C-e>` shows
+the transient:
+
+```
+$EDITOR is not set. Set it to open the project file.
+```
+
+No editor opens and no file is modified. Set the `EDITOR` environment variable
+to an absolute path before launching MoonSwift.
 
 ---
 

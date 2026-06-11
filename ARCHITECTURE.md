@@ -668,7 +668,11 @@ AppState
 ├── nvimGrid: NvimGridState?            // P4: live nvim cell grid; nil when no session
 ├── conflictModal: ConflictModalState?  // P4: set on .conflictDetected; cleared on resolution
 ├── diffView: DiffViewPhase?            // P4: set on Effect.buildDiffView
+├── pendingConflictModal: ConflictModalState?  // P4: conflict modal preserved while diff view open
 ├── nvimFallbackNotedThisSession: Bool  // P4: one-time "nvim not found" transient gate
+├── nvimPendingResize: TerminalSize?    // P4: pending resize held during ~50 ms debounce
+├── nvimResizeDeadline: Date?           // P4: debounce deadline; checked on each tick
+├── terminalSize: TerminalSize          // P4: most recent terminal size (seeded 80×24)
 ├── theme: resolved token table + capability tier
 └── transient: status-bar message + expiry, spinner phase
 ```
@@ -716,7 +720,7 @@ tracebacks via #19/#20 (§5.3, §5.4).
 | `~/Library/Application Support/moonswift/config.toml` | user defaults (theme); project file overrides it | P1 |
 | `~/Library/Caches/moonswift/luals/<project-hash>/` | generated `---@meta` files + `.luarc.json` (lazy) | P3b |
 | `~/Library/Logs/moonswift/moonswift.log` | internal log file (§7.2) **[ARCH]** | P1 |
-| `/tmp/moonswift-<pid>-<hash>.lua` (0600, `O_EXCL`) | editor temp buffers; stale-PID sweep at startup (§7.3) | P4 |
+| `$TMPDIR/moonswift-<UUID>.lua` (0600, `O_EXCL`) | `$EDITOR` fallback temp buffers; deleted on all exit paths (§7.3) | P4 |
 
 ---
 
@@ -1183,9 +1187,13 @@ on `exit(70)` paths.
   (panic guards, thread-class partition, error protocol, cargo
   audit/deny in CI), not sandboxing.
 - **Process spawning** (P3b LuaLS, P4 `$EDITOR`/nvim): direct exec with
-  argument vectors, never shell interpretation. The `$EDITOR` value is
-  split on **all whitespace** into an argv (binary + arguments — the
-  common `"code -w"` shape); there is **no quoting support** — an editor
+  argument vectors, never shell interpretation. `$EDITOR` is split on
+  **whitespace** into an argv (binary + leading arguments — the common
+  `"code -w"` shape, implemented in `AppDriver.spawnEditorAndWait`). The
+  **first component must be an absolute path** (checked with
+  `hasPrefix("/")`) and **must be executable** (checked with
+  `FileManager.isExecutableFile`); if either check fails a transient is
+  posted and no editor opens. There is **no quoting support** — an editor
   path containing spaces needs a wrapper script (documented). A failed
   exec restores the terminal and shows a graceful transient message —
   never a crash or a stranded screen.
@@ -1203,11 +1211,29 @@ on `exit(70)` paths.
   installed at process startup (`Sources/moonswift/main.swift`) so a
   write to a dead nvim pipe surfaces as `EPIPE` / `.ioFailure` rather
   than SIGPIPE termination.
-- **Temp files** (P4): created atomically with
-  `open(O_WRONLY | O_CREAT | O_EXCL, 0600)` (no pre-existing-file race),
-  per-process unique names, deleted on session end. The startup stale
-  sweep runs **before** any creation and deletes a stale file only after
-  `kill(pid, 0)` returns `ESRCH` for the embedded PID.
+- **Temp files** (`$EDITOR` fallback path, P4): created atomically with
+  `open(O_WRONLY | O_CREAT | O_EXCL, 0600)` (no pre-existing-file race).
+  Names use `UUID().uuidString` as the filename component (e.g.
+  `moonswift-<UUID>.lua`) under `FileManager.default.temporaryDirectory`
+  (the per-user `/var/folders/…` tree on macOS). Each file is removed
+  with `defer { FileManager.default.removeItem(at:) }` on **all exit
+  paths** — success, syntax error loop, I/O failure — so the plain-text
+  fragment content does not persist in `$TMPDIR` after the edit session.
+  EEXIST on the UUID path is surfaced as an error (no retry loop, since
+  UUID collision is practically impossible).
+  **Residual risk (accepted):** the final atomic write (`Data.write(to:atomically:)`)
+  resolves the destination path at `open(2)` time; a symlink swap
+  between the second `validateReadable` call (step 7) and the write
+  would cause the write to follow the replacement symlink. Practical
+  exploitability requires project-directory write access — the same level
+  needed to simply overwrite the file directly — and is accepted residual
+  risk.
+  **Inherited environment (open decision):** the nvim child process
+  currently inherits the full parent environment (modified only to
+  redirect XDG dirs). An allowlist environment for the nvim child is a
+  hardening improvement that requires a user-visible behaviour decision
+  (users may rely on env vars being visible to nvim); it has been deferred
+  pending explicit sign-off.
 - **Supply chain:** luacheck + ratatui-ffi pinned with NOTICE files;
   `Package.resolved` + `Cargo.lock` committed; release artifacts carry
   sha256 **and GitHub build-provenance attestations**
@@ -1335,37 +1361,53 @@ Sources/CRatatuiFFI/                              module map + generated header
                                                   (+ stub .c in source mode, §5.4)
 
 Sources/MoonSwiftTUI/Nvim/                        P4 F8b — nvim embed subsystem
-  EditorBridge.swift                    ~270  11-step spawn + SessionOverride seam
-  NvimProcessSupervisor.swift           ~290  probe, spawn, 9-step teardown
-  NvimRPCClient.swift                   ~310  actor; msgpack-RPC request/notify/
-                                              onNotification; nvim-rpc-reader thread
-  NvimRedrawHandler.swift               ~330  ext_linegrid decoder; posts nvimRedrawBatch
-  NvimKeyTranslator.swift               ~280  TUI KeyEvent → nvim input string
-  WriteBackCoordinator.swift            ~370  8-step write-back pipeline
-  NvimSession.swift                     ~100  session value type (rpc + supervisor refs)
-  MsgpackRPCFramer.swift                ~180  framing, encode/decode MessagePackValue
-  NvimRedrawTypes.swift                 ~160  RedrawEvent enum; ext_linegrid value types
-  WriteBackCoordinator+SessionOverride  ~40   test seam struct
-  (total ≈ 2,330 lines across 10 files; Renderer.swift in Render/ approaching
-   400-line budget — track separately as Risk-nvim-1, §9)
+  EditorBridge.swift                    ~267  11-step spawn + SessionOverride seam
+  NvimProcessSupervisor.swift           ~309  spawn, 9-step teardown, stderr drain
+  NvimProcessSupervisor+Probe.swift     ~196  probe(): NVIM_PATH + search order + version check
+  NvimRPCClient.swift                   ~387  actor; msgpack-RPC request/notify/deliver;
+                                              stdin ownership; stdinOpen EOF guard
+  NvimRPCClient+Reader.swift            ~139  nvim-rpc-reader Thread: blocking read loop
+  NvimRedrawHandler.swift               ~386  ext_linegrid decoder; posts nvimRedrawBatch
+  NvimKeyTranslator.swift               ~170  TUI KeyEvent → nvim key notation
+  WriteBackCoordinator.swift            ~400  8-step write-back pipeline; re-location
+  MsgpackRPCFramer.swift                ~205  framing; encode/decode MessagePackValue; caps
+  NvimRPCTypes.swift                    ~117  RawRPCMessage + WriteBackResult types
+  NvimGridState.swift                   ~327  NvimGridState/NvimCellState/NvimPaneState/
+                                              NvimSession/ConflictModalState/DiffViewState
+  NvimRedrawEvent.swift                 ~111  NvimRedrawEvent enum; NvimCell/HLAttrs
+  (total ≈ 3,014 lines across 12 files)
+
+Sources/MoonSwiftTUI/Render/ — P4 F8b additions (alongside pre-existing views)
+  NvimGridView.swift                    ~211  NvimGridState → [RenderCommand]
+  NvimConflictView.swift                ~82   ConflictModal → [RenderCommand]
+  NvimDiffView.swift                    ~182  DiffViewState → [RenderCommand] side-by-side
 
 Sources/MoonSwiftCore/Vendor/MessagePackValue/
   (7 files; MIT vendored codec; exempt as third-party vendored library)
   NOTICE.txt                            attribution + MIT license text
 
 Tests/MoonSwiftTUITests/Nvim/
-  WriteBackCoordinatorTests.swift       ~300  unit: format paths, conflict, errors
-  WriteBackIntegrationTests.swift       ~340  e2e / acceptance (PRD §F8)
-  WriteBackTestSupport.swift            ~160  MockLintService, WriteBackFixtures
-  NvimKeyTranslatorTests.swift          ~200  key translation coverage
-  WriteBackCoordinator+SessionOverride  (re-exported by support file)
+  — see Tests/MoonSwiftTUITests/Nvim/ for the full current list (21 files, ~7,035 lines).
+  Key files:
+  WriteBackCoordinatorTests.swift       ~351  unit: format paths, conflict, errors
+  WriteBackIntegrationTests.swift       ~595  e2e / acceptance (PRD §F8)
+  WriteBackTestSupport.swift            ~139  MockLintService, WriteBackFixtures
+  NvimKeyTranslatorTests.swift          ~309  key translation coverage
+  NvimRPCClientTests.swift              ~579  actor, request/notify, EOF, cancellation
+  NvimRedrawHandlerTests.swift          ~327  redraw events, grid state, perf bench
+  NvimRenderSnapshotTests.swift         ~596  cell-grid snapshots for all three views
+  EditorBridgeTests.swift               ~389  spawn ordering, BufWriteCmd, seeded buffer
+  NvimProcessSupervisorTests.swift      ~299  probe, spawn-fail, NVIM_PATH validation
 
 Modified-file deltas (P4 F8b additions to existing files):
-  Sources/MoonSwiftTUI/App/AppEvent.swift   +40  P4 event cases (§5.1)
-  Sources/MoonSwiftTUI/App/Effect.swift     +50  P4 effect cases (§5.1)
-  Sources/MoonSwiftTUI/App/AppState.swift   +30  nvimGrid, conflictModal, diffView,
-                                                  nvimFallbackNotedThisSession
-  Tests/MoonSwiftPerfTests/PerfTests.swift  +130 NvimRedrawPerfTests suite (§3b)
+  Sources/MoonSwiftTUI/App/AppEvent.swift       +40  P4 event cases (§5.1)
+  Sources/MoonSwiftTUI/App/Effect.swift         +50  P4 effect cases (§5.1)
+  Sources/MoonSwiftTUI/App/AppState.swift       +30  nvimGrid, conflictModal, diffView,
+                                                      pendingConflictModal, nvimFallbackNotedThisSession,
+                                                      nvimPendingResize, nvimResizeDeadline, terminalSize
+  Sources/MoonSwiftTUI/App/AppDriver+NvimEffects.swift  ~280  nvim effect arms extracted from AppDriver
+  Sources/MoonSwiftTUI/App/AppDriver+EditorEffects.swift ~356  $EDITOR fallback + syntax loop + clipboard
+  Tests/MoonSwiftPerfTests/PerfTests.swift      +130  NvimRedrawPerfTests suite (§3b)
 ```
 
 P2+ additions follow the same pattern (`Mock/MockStore.swift`,
@@ -1452,6 +1494,8 @@ ThemeEngine → their directories; FFI overlay → `RatatuiKit` + crate.
 | — | **[ARCH-new]** `rffi_emergency_restore` best-effort restore on macOS (`write(2)` safe; `tcsetattr` technically unsafe from a handler — §3f) | covered by a manual kill-test in the shim task; restore-on-crash is best-effort by design |
 | — | **[ARCH-new]** upstream LuaSwift engine-level output redirection (would capture `io.write` and harden the print override, §3c) | candidate LuaSwift issue after P1 validates the override mechanism; not a gate |
 | Risk-nvim-1 | `Renderer.swift` in `Sources/MoonSwiftTUI/Render/` is approaching the 400-line file budget as the nvim-grid blit path is added (P4 F8b). The renderer layout pass + eight sub-view call sites + nvim-pane blit may push it over the limit. | Monitor at next tag close via `codesize`; split preemptively into `Renderer+NvimPane.swift` if projection exceeds 360 lines. |
+| Risk-nvim-2 | `WriteBackCoordinator.swift` sits at exactly 400 lines (at the tolerance boundary). Future hardening (CR-014 partial-write check, CR-029 size re-check) risks tipping it over. | Extract the re-location pipeline into `WriteBackCoordinator+ReLocation.swift` if the file exceeds 420 lines after any fix wave. |
+| Risk-nvim-3 | `NvimRedrawHandler.swift` (386 lines) and `NvimRPCClient.swift` (387 lines) are each within 10% of the 400-line limit. Both grew significantly in P4 and are candidates for the next split boundary. | Track at each tag close; split if either exceeds 420 lines. |
 | OQ-nvim-1 | `BufWriteCmd` autocmd + `rpcnotify` ordering: if nvim delivers the `moonswift_write` notification before the `nvim_create_autocmd` response is processed, the handler registered in step 7 may race the delivery. | Ordering is safe because step 7 (`onNotification` registration on the actor) completes before step 9 (`nvim_create_autocmd` request) is even sent. Confirm with a targeted integration test that captures the first write notification on a freshly seeded buffer. |
 
 ## 10. Editing subsystem (P4 — embedded Neovim + `$EDITOR` fallback)
@@ -1827,7 +1871,11 @@ public struct NvimPaneState: Sendable, Equatable {
 public var nvimGrid: NvimGridState?              // current rendered nvim cell grid
 public var conflictModal: ConflictModalState?    // non-nil while conflict modal open
 public var diffView: DiffViewState?              // non-nil while diff view open
+public var pendingConflictModal: ConflictModalState?  // conflict modal preserved during diff view
 public var nvimFallbackNotedThisSession: Bool    // one-time fallback note gate
+public var nvimPendingResize: TerminalSize?      // pending resize during ~50 ms debounce
+public var nvimResizeDeadline: Date?             // debounce deadline for nvim resize
+public var terminalSize: TerminalSize            // most recent terminal size; seeded to 80×24
 ```
 
 `NvimPaneState` lives inside `FocusState.nvimPane(…)`, not as a top-level optional. `NvimGridState` is top-level because the renderer reads it independently of `FocusState`.
@@ -2164,36 +2212,40 @@ The Swift 400-line/file, 50-line/function limit (coding.md §VIII, 10% tolerance
 **`Sources/MoonSwiftTUI/Nvim/`:**
 
 ```
-NvimProcessSupervisor.swift    ~230  probe (NVIM_PATH validation + search), spawn (XDG 0700),
-                                     teardown (9-step), stderr drain (chunked + cap), SIGTERM→SIGKILL
-MsgpackRPCFramer.swift         ~180  framing, encode/decode MessagePackValue array, caps
-NvimRPCClient.swift            ~340  actor, stdin ownership, request/notify/deliver, msgid map, reader loop
-NvimRedrawHandler.swift        ~280  redraw parsing, NvimGridState update, hl cache
-NvimKeyTranslator.swift        ~180  KeyCode/Modifiers → nvim key notation (+ <lt>)
-EditorBridge.swift             ~350  static namespace: spawn ordering, seed, BufWriteCmd, options,
-                                     write-back orch, NvimSession construction + nvimReady posting
-WriteBackCoordinator.swift     ~240  static enum async: format dispatch, YAML strip, re-location pipeline,
+NvimProcessSupervisor.swift    ~309  spawn (XDG 0700), teardown (9-step), stderr drain (chunked + cap),
+                                     SIGTERM→SIGKILL escalation
+NvimProcessSupervisor+Probe.swift ~196  probe(): NVIM_PATH validation + search order + version check
+MsgpackRPCFramer.swift         ~205  framing, encode/decode MessagePackValue array, caps
+NvimRPCClient.swift            ~387  actor, stdin ownership, request/notify/deliver, msgid map,
+                                     stdinOpen EOF guard
+NvimRPCClient+Reader.swift     ~139  nvim-rpc-reader Thread: blocking read(2) loop, stop flag
+NvimRedrawHandler.swift        ~386  redraw parsing, NvimGridState update, hl cache
+NvimKeyTranslator.swift        ~170  KeyCode/Modifiers → nvim key notation (+ <lt>)
+EditorBridge.swift             ~267  static namespace: spawn ordering, seed, BufWriteCmd, options,
+                                     NvimSession construction + nvimReady posting
+WriteBackCoordinator.swift     ~400  static enum async: format dispatch, YAML strip, re-location pipeline,
                                      double validateReadable, background-queue I/O, splice, atomic write
-NvimGridState.swift            ~120  NvimGridState/NvimCellState/NvimPaneState/NvimSession
-ConflictModalState.swift        ~80  ConflictModalState/DiffViewState/DiffViewPhase
-NvimRedrawEvent.swift          ~120  NvimRedrawEvent/NvimCell/HLAttrs
+NvimRPCTypes.swift             ~117  RawRPCMessage parse; WriteBackResult/Outcome types
+NvimGridState.swift            ~327  NvimGridState/NvimCellState/NvimPaneState/NvimSession/
+                                     ConflictModalState/DiffViewState/DiffViewPhase
+NvimRedrawEvent.swift          ~111  NvimRedrawEvent/NvimCell/HLAttrs
 ```
 
 **`Sources/MoonSwiftCore/Vendor/MessagePackValue/`:** The complete 7-file tree from `a2/MessagePack.swift` (`MessagePack.swift`, `Pack.swift`, `Unpack.swift`, `Subdata.swift`, `LiteralConvertibles.swift`, `ConvenienceInitializers.swift`, `ConvenienceProperties.swift`) vendored verbatim, plus a `NOTICE` file carrying the upstream copyright header and MIT licence text. Same vendoring pattern as `Vendor/luacheck/` and `rust/ratatui-ffi/`. Total vendored line count: ~650 lines across 7 files.
 
-**Modified `Sources/MoonSwiftTUI/App/`:** `Effect.swift` +50 (8 cases including `nvimCleanup`), `AppEvent.swift` +75 (11 cases; `nvimReady` carries `NvimSession`), `AppState.swift` +35 (4 optionals + bool + `FocusState` enum extension).
+**Modified `Sources/MoonSwiftTUI/App/`:** `Effect.swift` +50 (8 cases including `nvimCleanup`), `AppEvent.swift` +75 (11 cases; `nvimReady` carries `NvimSession`), `AppState.swift` +35 (4 optionals + bool + 3 resize/size fields + `FocusState` enum extension). New files: `AppDriver+NvimEffects.swift` (~280, nvim effect arms), `AppDriver+EditorEffects.swift` (~356, `$EDITOR` fallback + syntax loop + clipboard).
 
-**Modified `Sources/MoonSwiftTUI/Render/`:** The pre-existing `Renderer.swift` is 1,889 lines — already a flagged violation of the 400-line limit (see §10.9 Risks). New nvim/conflict/diff rendering **must not** be added to `Renderer.swift`. Three new files are created on day one of Inc-11:
+**Modified `Sources/MoonSwiftTUI/Render/`:** The pre-existing `Renderer.swift` is a flagged violation of the 400-line limit (see §10.9 Risks). New nvim/conflict/diff rendering was added in three dedicated files:
 
 ```
-NvimGridView.swift      ~180  NvimGridState → [RenderCommand] (cell-grid walk, coalesced runs)
-NvimConflictView.swift   ~80  ConflictModal → [RenderCommand] (exact §7.4 string)
-NvimDiffView.swift      ~160  DiffViewState → [RenderCommand] (side-by-side highlight)
+NvimGridView.swift      ~211  NvimGridState → [RenderCommand] (cell-grid walk, coalesced runs)
+NvimConflictView.swift   ~82  ConflictModal → [RenderCommand] (exact §7.4 string)
+NvimDiffView.swift      ~182  DiffViewState → [RenderCommand] (side-by-side highlight)
 ```
 
-`Renderer.swift` gains only a delegation call at the appropriate `FocusState` branch — no new content logic.
+`Renderer.swift` gains only delegation calls at the appropriate `FocusState` branches — no new content logic.
 
-**Tests:** `Tests/MoonSwiftTUITests/Nvim/` — `NvimKeyTranslatorTests` (~120), `NvimRedrawHandlerTests` (~200), `WriteBackCoordinatorTests` (~240, includes mock `LintServiceProtocol`), `EditorBridgeTests` (~160).
+**Tests:** `Tests/MoonSwiftTUITests/Nvim/` — 21 test files totalling ~7,035 lines. Key files: `NvimKeyTranslatorTests` (~309), `NvimRedrawHandlerTests` (~327), `WriteBackCoordinatorTests` (~351, includes mock `LintServiceProtocol`), `WriteBackIntegrationTests` (~595), `NvimRenderSnapshotTests` (~596), `NvimRPCClientTests` (~579), `EditorBridgeTests` (~389), `NvimProcessSupervisorTests` (~299). Perf bench lives in `Tests/MoonSwiftPerfTests/PerfTests.swift` (NvimRedrawPerfTests suite, §3b).
 
 **Rust crate:** no changes (`cells.rs` already documents the P4 nvim grid blit).
 
@@ -2235,7 +2287,7 @@ Each increment is independently testable, committable, TDD-first. Ordering respe
 
 **§4.2 In-memory state tree:** add `nvimGrid: NvimGridState?`, `conflictModal: ConflictModalState?`, `diffView: DiffViewState?`, `nvimFallbackNotedThisSession: Bool`. Add the four new `FocusState` cases (`nvimPane(NvimPaneState)`, `nvimSpawning`, `conflictModal(ConflictModalState)`, `diffView(DiffViewState)`). — applied (Inc-12)
 
-**§5.1 Loop contract:** add the new `Effect` and `AppEvent` cases verbatim (including `Effect.nvimCleanup` and `AppEvent.nvimReady(NvimSession)`); add a `nvim-rpc-class` row to the thread-class contract table: "nvim-rpc-reader Thread only: reads nvim stdout via blocking `read(2)`; delivers to `NvimRPCClient` actor via `Task { await client.deliver(msg) }`; actor dispatches to `NvimRedrawHandler` (posts `AppEvent.nvimRedrawBatch`) and to registered notification handlers (post `AppEvent.nvimWriteRequested`); must NOT call render/terminal-class or input-class functions." — applied (Inc-12)
+**§5.1 Loop contract / §5.2 C ABI boundary:** add the new `Effect` and `AppEvent` cases verbatim (including `Effect.nvimCleanup` and `AppEvent.nvimReady(NvimSession)`); add the `nvim-rpc-class` thread class to §5.2's threading contract (the class lives there alongside render/terminal-class and input-class): "nvim-rpc-reader Thread only: reads nvim stdout via blocking `read(2)`; delivers to `NvimRPCClient` actor via `Task { await client.deliver(msg) }`; actor dispatches to `NvimRedrawHandler` (posts `AppEvent.nvimRedrawBatch`) and to registered notification handlers (post `AppEvent.nvimWriteRequested`); must NOT call render/terminal-class or input-class functions." — applied (Inc-12)
 
 **§7.1 Error taxonomy:** add `nvim absent/too-old` (Environment, one-time transient → fallback), `nvim crash mid-edit` (Environment, transient + close pane), `validateReadableRejection` (User-content, status-bar), `SpliceError` write-back (User-content, status-bar, never silent clobber). — applied (Inc-12)
 

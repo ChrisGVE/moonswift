@@ -9,6 +9,95 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+#### Editing subsystem (embedded Neovim + `$EDITOR` fallback)
+
+- In-place editing via embedded Neovim (`<C-e>`): spawns `nvim --embed --clean`
+  sized to the code pane, renders the ext_linegrid output cell-by-cell using
+  the existing RatatuiKit cell API. All standard Neovim commands work inside the
+  pane; `:w` triggers write-back.
+- Write-back pipeline: `:w` inside the nvim pane splices the edited text
+  precisely into the source file without re-encoding anything outside the edited
+  span. JSON, YAML, TOML, and whole `.lua` files are each handled by the
+  existing `SpanSplicer` format dispatch.
+- Conflict detection: if the source file was modified on disk between load and
+  `:w`, a prompt offers `[r]eload / [o]verwrite / [d]iff / [c]ancel`. The diff
+  path opens a side-by-side view of the on-disk fragment vs. the edited buffer.
+- `$EDITOR` fallback: when Neovim ≥ 0.9 is not available, a one-time
+  status-bar note appears and the existing `$EDITOR` mechanism is used instead.
+  A syntax-error loop re-opens the editor with an injected comment block until
+  the edit is clean or the block is deleted.
+- Neovim minimum version: 0.9.0 (required for `ext_linegrid` and
+  `nvim_create_autocmd`).
+
+#### New components (`Sources/MoonSwiftTUI/Nvim/`)
+
+- `EditorBridge` — static namespace implementing the 11-step nvim spawn
+  sequence: probe → fallback decision → `NvimProcessSupervisor.spawn` → RPC
+  handshake → buffer seed → autocmd → `NvimSession` construction →
+  `AppEvent.nvimReady` posting.
+- `NvimProcessSupervisor` + `NvimProcessSupervisor+Probe` — nvim binary
+  discovery (NVIM_PATH override + Homebrew/MacPorts/PATH search, version ≥ 0.9
+  check), XDG-isolated spawn (0700 temp dir), stderr drain with 1 MiB cap, and
+  a 9-step teardown (SIGTERM → 2 s deadline → SIGKILL).
+- `NvimRPCClient` (actor) + `NvimRPCClient+Reader` — actor owns the stdin
+  `FileHandle`; `request`/`notify`/`onNotification` run on the actor executor;
+  blocking `read(2)` reader loop on a dedicated `moonswift.nvim-rpc-reader`
+  thread delivers to the actor via `Task { await client.deliver(msg) }`.
+- `NvimRedrawHandler` — decodes nvim `redraw` notification batches
+  (`ext_linegrid` protocol) into `NvimGridState`; posts
+  `AppEvent.nvimRedrawBatch` only on the terminating `flush` sub-event.
+- `NvimKeyTranslator` — translates `KeyCode`/`Modifiers` to nvim key notation
+  (printable, `<CR>`/`<Esc>`/`<BS>`/`<Tab>`, F-keys, `<C-x>`/`<S-x>`/`<M-x>`,
+  `<lt>` for literal `<`).
+- `WriteBackCoordinator` — static async 8-step write-back pipeline: size cap →
+  syntax pre-pass → double `validateReadable` (TOCTOU guard) → background read
+  → conflict check → format dispatch → atomic write.
+- `MsgpackRPCFramer` — length-prefixed msgpack-RPC framing with 16 MiB frame
+  cap, 64-level depth cap, and 1 M element cap.
+- `NvimRPCTypes` — `RawRPCMessage` parse, `WriteBackResult`/`Outcome` types.
+- `NvimGridState` — `NvimGridState`/`NvimCellState`/`NvimPaneState`/
+  `NvimSession`/`ConflictModalState`/`DiffViewState`/`DiffViewPhase` value types.
+- `NvimRedrawEvent` — `NvimRedrawEvent` enum, `NvimCell`, `HLAttrs`.
+
+#### New render views (`Sources/MoonSwiftTUI/Render/`)
+
+- `NvimGridView` — renders `NvimGridState` into `[RenderCommand]` with
+  coalesced attribute runs.
+- `NvimConflictView` — renders the conflict-resolution prompt
+  (`[r]eload / [o]verwrite / [d]iff / [c]ancel`).
+- `NvimDiffView` — side-by-side diff view with changed/added/removed line
+  colouring.
+
+#### Vendored codec
+
+- `MessagePackValue` — vendored MIT-licensed msgpack value codec
+  (`a2/MessagePack.swift`, 7 files) at
+  `Sources/MoonSwiftCore/Vendor/MessagePackValue/`. Used by `NvimRPCClient`
+  and `MsgpackRPCFramer` for wire-protocol encode/decode. No imports beyond
+  Foundation.
+
+### Changed
+
+- `AppState` gains four nvim-related `FocusState` cases (`nvimPane`,
+  `nvimSpawning`, `conflictModal`, `diffView`) and several new top-level fields
+  (`nvimGrid`, `conflictModal`, `diffView`, `pendingConflictModal`,
+  `nvimFallbackNotedThisSession`, `nvimPendingResize`, `nvimResizeDeadline`,
+  `terminalSize`).
+- `AppDriver` split: nvim effect arms extracted into
+  `AppDriver+NvimEffects.swift`; `$EDITOR` / clipboard helpers into
+  `AppDriver+EditorEffects.swift`.
+- LuaSwift bumped to 1.12.4; `cooperativeCancellation` performance fix
+  included in that release resolves a long-tail latency regression in the
+  instruction-limit hook path.
+
+### Fixed
+
+- `NvimRPCClient` EOF guard: `stdinOpen` flag prevents writes to a closed
+  `FileHandle` after teardown (`NSFileHandleOperationException` is uncatchable
+  in Swift).
+
 ## [0.1.0] - 2026-06-08
 
 First public preview (P1 feature set). MoonSwift is a terminal UI editor and

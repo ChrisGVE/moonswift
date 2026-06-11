@@ -24,6 +24,11 @@ A terminal (TUI) workbench for testing Lua code written against
 - **Instruction limits** — stop runaway scripts via `run.instruction_limit`
 - **NO_COLOR support** — full compliance: character prefixes replace all
   color-only distinctions
+- **In-place editing** — press `<C-e>` to open the selected fragment in an
+  embedded Neovim session directly inside the code pane; `:w` splices the
+  edited text back into the source file with format-preserving write-back and
+  conflict detection. When Neovim ≥ 0.9 is not available, `$EDITOR` is used
+  instead (one-time notice on first use)
 
 ## Quick start
 
@@ -84,6 +89,7 @@ MoonSwift loads the string value at `$.scripts.init` as a Lua fragment.
 | `x` | Cancel run |
 | `q` | Quit |
 | `?` | Help overlay (full keybinding list) |
+| `<C-e>` | Open selected fragment in embedded Neovim (or `$EDITOR` fallback) |
 | `<C-p>` | Open project file in `$EDITOR` |
 | `<C-r>` | Reload project file |
 | `<Tab>` | Cycle panes; cycle tabs when bottom pane is focused |
@@ -101,6 +107,7 @@ Press `?` inside MoonSwift for the complete per-pane reference.
 - [Sources](docs/user/sources.md) — loading .lua files, field designations, JSONPath subset
 - [Running](docs/user/running.md) — execution, output capture, limits, sandbox
 - [Linting](docs/user/linting.md) — two-layer lint, catalog modules, extra_modules
+- [Editing and write-back](docs/user/editing-and-write-back.md) — embedded Neovim, `$EDITOR` fallback, write-back contract, conflict handling
 
 ## Building from source
 

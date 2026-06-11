@@ -139,3 +139,11 @@ Each source entry in the navigator reflects the current load state.
 
 When a source fails to load, other sources are unaffected. The code pane
 shows the error message when the failed entry is selected.
+
+---
+
+## See also
+
+- [Editing and write-back](editing-and-write-back.md) — how to edit loaded
+  fragments in Neovim or `$EDITOR` and write the result back into the source
+  file.

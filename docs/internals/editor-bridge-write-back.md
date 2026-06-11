@@ -160,7 +160,7 @@ offsets since the fragment was loaded.
 | `com.moonswift.writeback-io` DispatchQueue | `Data(contentsOf:)` and `Data.write` |
 
 The nvim-rpc-reader thread is the **nvim-rpc-class** defined in
-ARCHITECTURE.md §5.1. It must not call render/terminal-class or input-class
+ARCHITECTURE.md §5.2. It must not call render/terminal-class or input-class
 functions.
 
 ---
