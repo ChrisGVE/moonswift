@@ -10,8 +10,8 @@
 //   2. diffView [c] cancel returns to .nvimPane (focus restored).
 //   3. diffView j/k scrolling increments/decrements scrollOffset on .ready state.
 //   4. Keys in .diffView(.building) are absorbed (no state change).
-//   5. Syntax pre-pass failure in WriteBackCoordinator returns .spliceError whose
-//      reason contains "line N" (integration with MockLintService seam).
+//   5. Syntax pre-pass failure in WriteBackCoordinator returns .syntaxPrePassBlocked
+//      carrying the full Diagnostic (CR-006; integration with MockLintService seam).
 //   6. writeBackBlocked event reducer path: transient text contains the message
 //      and line number from the diagnostic (exact "Syntax error: <msg> (line N)").
 //   7. DiffViewState equality — scrollOffset changes produce a new value.
@@ -264,14 +264,15 @@ struct DiffViewStateValueSemanticsTests {
 @Suite("NvimDiffView — WriteBackCoordinator syntax pre-pass failure")
 struct WriteBackSyntaxPrePassTests {
 
-    @Test("syntaxPrePass failure returns .spliceError(.reparseFailed) containing 'line N'")
+    /// CR-006: syntax pre-pass failure now returns `.syntaxPrePassBlocked(Diagnostic)`.
+    /// The diagnostic carries the line number directly — no string formatting needed.
+    @Test("syntaxPrePass failure returns .syntaxPrePassBlocked carrying line and message")
     func syntaxPrePassFailureProducesReparseFailed() async throws {
         let dir = try WriteBackFixtures.tempDir()
         let fileURL = try WriteBackFixtures.copyFixture("hello.lua", into: dir)
         let provenance = try WriteBackFixtures.luaProvenance(fileURL: fileURL)
         let fragment = LuaSourceFragment(code: "return 1\n", provenance: provenance)
 
-        // Stub: diagnostic whose message contains "(line N)" as the coordinator formats it.
         let diagnostic = Diagnostic(
             severity: .error,
             line: 5,
@@ -288,20 +289,17 @@ struct WriteBackSyntaxPrePassTests {
             force: false
         )
 
-        guard case .spliceError(let err) = result.outcome else {
-            Issue.record("Expected .spliceError, got \(result.outcome)")
-            return
-        }
-        // The coordinator formats the reason as "<message> (line <line>)".
-        if case .reparseFailed(let reason) = err {
-            #expect(reason.contains("line"))
-            #expect(reason.contains("5"))
+        // CR-006: coordinator returns .syntaxPrePassBlocked with the full Diagnostic.
+        if case .syntaxPrePassBlocked(let diag) = result.outcome {
+            #expect(diag.line == 5)
+            #expect(diag.message == "unexpected symbol")
         } else {
-            Issue.record("Expected .reparseFailed, got \(err)")
+            Issue.record("Expected .syntaxPrePassBlocked, got \(result.outcome)")
         }
         #expect(result.newData == nil)
     }
 
+    /// CR-006: diagnostic message propagates verbatim inside .syntaxPrePassBlocked.
     @Test("syntaxPrePass failure reason propagates the diagnostic message")
     func syntaxPrePassReasonContainsDiagnosticMessage() async throws {
         let dir = try WriteBackFixtures.tempDir()
@@ -325,11 +323,13 @@ struct WriteBackSyntaxPrePassTests {
             force: false
         )
 
-        guard case .spliceError(.reparseFailed(let reason)) = result.outcome else {
-            Issue.record("Expected .spliceError(.reparseFailed), got \(result.outcome)")
-            return
+        // CR-006: message is in the diagnostic, not encoded in a string reason.
+        if case .syntaxPrePassBlocked(let diag) = result.outcome {
+            #expect(diag.message == "unexpected symbol near '<eof>'")
+            #expect(diag.line == 3)
+        } else {
+            Issue.record("Expected .syntaxPrePassBlocked, got \(result.outcome)")
         }
-        #expect(reason.contains("unexpected symbol near '<eof>'"))
     }
 }
 

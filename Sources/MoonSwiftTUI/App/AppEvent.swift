@@ -232,9 +232,9 @@ public enum AppEvent: Sendable {
     /// as `nvimSession`; the reducer transitions focus to `.nvimPane` (Inc-8).
     case nvimReady(NvimSession)
 
-    /// nvim acknowledged the `:qa!` detach command.
+    /// nvim acknowledged the `qa!` detach command.
     ///
-    /// Posted by AppDriver after the `nvim_command ":qa!"` notify completes
+    /// Posted by AppDriver after the `nvim_command "qa!"` notify completes
     /// (see `Effect.nvimDetach` execution body). The reducer emits
     /// `Effect.nvimCleanup` (Inc-8).
     case nvimDetached

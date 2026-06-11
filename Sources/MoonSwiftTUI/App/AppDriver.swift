@@ -39,12 +39,19 @@ import RatatuiKit
 public final class AppDriver: @unchecked Sendable {
 
     // MARK: Dependencies
+    //
+    // Access level note: properties used by AppDriver+NvimEffects.swift (a same-
+    // module extension in a separate file) require at least `internal` visibility.
+    // `private` restricts to the declaring file; `fileprivate` to the declaring
+    // file; only `internal` (the default) crosses file boundaries within a module.
+    // All UI-thread-only mutation invariants are upheld by the driver's single-
+    // threaded execution model, not by the access modifier.
 
-    private let channel: EventChannel
-    private let pump: EventPump
-    private let tickSource: TickSource
+    let channel: EventChannel
+    let pump: EventPump
+    let tickSource: TickSource
     private let highlighter: Highlighter
-    private let suspender: (any TerminalSuspender)?
+    let suspender: (any TerminalSuspender)?
 
     /// The render pipeline: interprets [RenderCommand] against a RenderBackend.
     /// `nil` in skeleton/test mode when no backend is injected.
@@ -63,7 +70,7 @@ public final class AppDriver: @unchecked Sendable {
     /// Runs syntax pre-pass and full luacheck passes. When non-nil, Effect.lint /
     /// .syntaxPrePass / .prewarmLint are dispatched to this service; when nil the
     /// skeleton posts synthetic results immediately.
-    private let lintService: (any LintServiceProtocol)?
+    let lintService: (any LintServiceProtocol)?
 
     /// Loads source files and dispatches results via its injected callback. When
     /// non-nil, Effect.loadSources / .loadSource are dispatched to this store;
@@ -81,15 +88,36 @@ public final class AppDriver: @unchecked Sendable {
 
     // MARK: Nvim session (P4 F8b, ARCHITECTURE.md §10.6)
 
-    /// The live nvim session, set on `.nvimReady` and cleared at the start of
-    /// `Effect.nvimCleanup` execution (before any async teardown). Clearing it
-    /// first prevents in-flight `Effect.nvimInput` tasks from writing to a
-    /// closing FileHandle (`NSFileHandleOperationException` is uncatchable).
+    /// The live nvim session.
+    ///
+    /// **Permitted writers (CR-025 / §10.6 invariant):**
+    /// 1. The event drain loop in `run()` — assigns when `.nvimReady` arrives,
+    ///    *before* `reduce`, so effects produced in the same drain batch can
+    ///    reference the session immediately (§10.4.6 pre-reduce capture).
+    /// 2. `executeNvimCleanup()` in `AppDriver+NvimEffects.swift` — sets to `nil`
+    ///    synchronously at the start of cleanup, before any async teardown work,
+    ///    so in-flight `.nvimInput` Tasks see nil and skip the write — the
+    ///    §10.6 nil-before-teardown invariant.
+    ///
+    /// No other site may write this property. `internal` (not `private`) because
+    /// `AppDriver+NvimEffects.swift` reads it from its extension methods; `private`
+    /// is not possible across file boundaries within a module. All mutation is
+    /// UI-thread-only — the access modifier does not enforce this, the driver's
+    /// single-threaded execution model does.
     var nvimSession: NvimSession?
+
+    // MARK: Nvim cleanup Task handle (CR-003)
+
+    /// Handle for the in-flight nvim cleanup Task.
+    ///
+    /// Stored when `Effect.nvimCleanup` is processed so `teardown()` can await
+    /// completion before restoring the terminal. This ensures pipe writes, SIGTERM,
+    /// and `waitUntilExit` are fully settled before the render backend tears down.
+    var nvimCleanupTask: Task<Void, Never>?
 
     // MARK: State
 
-    private var state: AppState
+    var state: AppState
 
     /// Last known terminal size, updated from `.resize` events.
     ///
@@ -205,10 +233,10 @@ public final class AppDriver: @unchecked Sendable {
                     activeCoalescer = nil
                 }
 
-                // Capture the nvim session from nvimReady before the reduce call
-                // so it is available immediately for subsequent effects in the same
-                // drain batch. AppDriver is the authoritative owner of nvimSession
-                // (ARCHITECTURE.md §10.4.6 NvimSession ownership note).
+                // Pre-reduce session capture: store the NvimSession before calling
+                // reduce so that effects produced in the same drain batch (e.g.
+                // a queued nvimInput) can reference it immediately. This is the
+                // designated assignment site for nvimSession (CR-025 / §10.4.6).
                 if case .nvimReady(let session) = event {
                     nvimSession = session
                 }
@@ -250,7 +278,6 @@ public final class AppDriver: @unchecked Sendable {
         switch effect {
 
         case .quit(let code):
-            // Only set the flag; the loop breaks, then teardown runs.
             quitCode = code
 
         case .startTick(let interval):
@@ -260,207 +287,55 @@ public final class AppDriver: @unchecked Sendable {
             tickSource.disarm()
 
         case .run(let fragment, let config):
-            if let svc = runService {
-                // Dispatch to the real RunService on a background Task.
-                // Capture coalescer, channel, and svc explicitly — all Sendable.
-                let coalescer = Coalescer(channel: channel)
-                activeCoalescer = coalescer
-                Task { [channel, coalescer, svc] in
-                    let outcome = await svc.run(
-                        fragment,
-                        config: config,
-                        output: { line in coalescer.onOutput(line) }
-                    )
-                    coalescer.finish()
-                    channel.post(.runFinished(Self.appOutcome(from: outcome)))
-                }
-            } else {
-                // Skeleton: post a synthetic .done immediately.
-                channel.post(.runFinished(.done(value: nil, duration: .zero)))
-            }
+            executeRun(fragment, config: config)
 
         case .cancelRun:
-            if let svc = runService {
-                svc.cancel()
-            }
-        // Skeleton: no-op (break is implicit via fall-through to next event).
+            runService?.cancel()
+        // Skeleton: no-op.
 
         case .syntaxPrePass(let fragment):
-            if let svc = lintService {
-                // syntaxPrePass is synchronous but creates a fresh engine; run off
-                // the UI thread to avoid a momentary freeze on large files.
-                Task { [channel] in
-                    let diag = svc.syntaxPrePass(fragment)
-                    channel.post(.prePassResult(diag))
-                }
-            } else {
-                // Skeleton: post clean result immediately.
-                channel.post(.prePassResult(nil))
-            }
+            executeSyntaxPrePass(fragment)
 
         case .lint(let fragment, let extraModules):
-            if let svc = lintService {
-                // Build the luacheck globals from the catalog using the current
-                // tomlModuleAvailable probe result from state.
-                let tomlProbed = state.tomlModuleAvailable ?? false
-                let globals = LuaModuleCatalog.v0.luacheckGlobals(
-                    extraModules: extraModules,
-                    tomlProbed: tomlProbed
-                )
-                Task { [channel] in
-                    do {
-                        let diags = try await svc.lint(fragment, knownGlobals: globals)
-                        channel.post(.lintFinished(diags))
-                    } catch {
-                        // Engine not ready or internal failure — post empty diagnostics
-                        // so the reducer can clear the .running lint state.
-                        channel.post(.lintFinished([]))
-                    }
-                }
-            } else {
-                // Skeleton: empty diagnostics.
-                channel.post(.lintFinished([]))
-            }
+            executeLint(fragment, extraModules: extraModules)
 
         case .prewarmLint:
-            if let svc = lintService {
-                Task { [channel] in
-                    await svc.prewarm(
-                        onReady: { channel.post(.lintEngineReady) },
-                        onCatalogProbed: { avail in channel.post(.catalogProbed(tomlAvailable: avail)) },
-                        onFailed: { msg in channel.post(.lintEngineFailed(msg)) }
-                    )
-                }
-            } else {
-                // Skeleton: post ready + no-toml immediately.
-                channel.post(.lintEngineReady)
-                channel.post(.catalogProbed(tomlAvailable: false))
-            }
+            executePrewarmLint()
 
         case .highlight(let id):
-            // Dispatch to the Highlighter's serial parse executor.
-            // The source text is extracted from the current state here, on the
-            // UI thread, before the async dispatch — so there is no data race:
-            // AppState is a value type and we copy the text string into the
-            // closure (Sendable capture).
-            if case .loaded(let fragment) = state.sources[id] {
-                let text = fragment.code
-                highlighter.highlight(id, text: text, via: channel)
-            } else {
-                // Source not loaded yet — post empty spans so the reducer's
-                // first-access-unhighlighted contract is satisfied.
-                channel.post(.highlightReady(id, spans: []))
-            }
+            executeHighlight(id: id)
 
         case .loadSources:
-            if let store = sourceStore {
-                // Derive project root and entry list from current state.
-                if let projectDir = projectDirectoryURL(),
-                    case .loaded(let projectFile, _) = state.project
-                {
-                    store.loadAll(entries: projectFile.sources, projectRoot: projectDir)
-                }
-                // If the project isn't loaded yet (e.g. quickFile mode), the
-                // reducer won't emit this effect, so no load is needed.
-            }
-        // Skeleton: no-op.
+            executeLoadSources()
 
         case .loadSource(let id):
-            if let store = sourceStore,
-                let projectDir = projectDirectoryURL(),
-                case .loaded(let projectFile, _) = state.project
-            {
-                // Find the matching entry and load it as a one-element batch.
-                let entry = projectFile.sources.first { entry in
-                    // Match by path; for structured files match by id.path too.
-                    entry.path == id.path
-                }
-                if let entry {
-                    store.loadAll(entries: [entry], projectRoot: projectDir)
-                }
-            }
-        // Skeleton: no-op.
+            executeLoadSource(id: id)
 
         case .loadProject(let url):
-            if let store = sourceStore {
-                // Cancel any in-flight source loads from the previous project
-                // before starting a fresh ProjectStore.load (SourceStore contract,
-                // SourceStore.swift §doc). Stale loads posting events for the old
-                // project would create ghost navigator entries.
-                store.cancelAll()
-                Task { [channel] in
-                    let result = ProjectStore.load(at: url)
-                    channel.post(Self.projectEvent(from: result))
-                }
-            }
-        // Skeleton: no-op.
+            executeLoadProject(url: url)
 
         case .reloadProject:
-            if let store = sourceStore, let projectDir = projectDirectoryURL() {
-                // Cancel stale source loads before reloading the project file
-                // (SourceStore contract, SourceStore.swift §doc).
-                store.cancelAll()
-                Task { [channel] in
-                    let result = ProjectStore.load(at: projectDir)
-                    channel.post(Self.projectEvent(from: result))
-                }
-            }
-        // Skeleton: no-op.
+            executeReloadProject()
 
         case .saveDesignations(let designations, let sourcePath):
-            if sourceStore != nil,
-                let projectDir = projectDirectoryURL(),
-                case .loaded(let projectFile, _) = state.project
-            {
-                // Build an updated ProjectFile with the new designations merged
-                // into the entry identified by sourcePath. ProjectStore.save is
-                // a static method; no store instance capture is required.
-                let updatedFile = Self.applyDesignations(
-                    designations,
-                    sourcePath: sourcePath,
-                    to: projectFile
-                )
-                let fileURL = projectDir.appendingPathComponent(ProjectStore.fileName)
-                Task { [channel] in
-                    do {
-                        try ProjectStore.save(updatedFile, to: fileURL)
-                        channel.post(.designationsSaved)
-                    } catch {
-                        // Save failure: post a projectMalformed diagnostic so the
-                        // reducer surfaces the error rather than silently swallowing it.
-                        let diag = Diagnostic(
-                            severity: .error,
-                            message: "Could not save designations: \(error.localizedDescription)",
-                            source: .projectConfig
-                        )
-                        channel.post(.projectMalformed(diag))
-                    }
-                }
-            } else {
-                // Skeleton: acknowledge immediately.
-                channel.post(.designationsSaved)
-            }
+            executeSaveDesignations(designations, sourcePath: sourcePath)
 
         case .loadPickerTree(let id, let projectRoot):
-            // Parse the structured file for the picker modal (ux-spec §3.6).
-            // Explicit [channel] capture avoids capturing self (CR-013).
+            // Short: one-liner Task dispatch (CR-013 [channel] capture).
             Task { [channel] in
                 let tree = await Self.loadPickerTreeValue(id: id, projectRoot: projectRoot)
                 channel.post(tree)
             }
 
         case .scanProjectDirectory(let dir):
-            // Scan the directory for candidate source files (.lua/.json/.yaml/.toml)
-            // on a background Task. Explicit [channel] capture avoids self capture (CR-013).
+            // Short: one-liner Task dispatch (CR-013 [channel] capture).
             Task { [channel] in
                 let files = await Self.scanForSourceFiles(in: dir)
                 channel.post(.projectDirectoryScanned(files))
             }
 
         case .writeProjectFile(let dir, let luaVersion, let sources):
-            // Write moonswift.toml on a background Task. Explicit [channel] avoids
-            // capturing self (CR-013). After a successful write the reducer emits
-            // .loadProject from reduceProjectFileWritten.
+            // Short: one-liner Task dispatch (CR-013 [channel] capture).
             Task { [channel] in
                 let result = await Self.writeProjectFile(
                     directory: dir, luaVersion: luaVersion, sources: sources)
@@ -468,570 +343,230 @@ public final class AppDriver: @unchecked Sendable {
             }
 
         case .spawnEditor(let url):
-            // Full pump-park + terminal suspend + editor spawn + resume sequence.
-            // See ARCHITECTURE.md §5.2 and docs/internals/ffi-boundary.md for the
-            // handshake diagram and thread-class invariants.
+            // Full pump-park + terminal suspend + editor spawn + resume.
+            // ARCHITECTURE.md §5.2, ffi-boundary.md §EDITOR suspend/resume.
             spawnEditorAndWait(url: url)
 
         case .yank(let text):
-            // Copy text to the system clipboard via pbcopy (ux-spec §2.3 bottom-pane `y`).
-            // Purely additive: spawn pbcopy, write text to stdin, let it exit.
+            // Clipboard write via pbcopy (ux-spec §2.3 bottom-pane `y`).
             yankToPasteboard(text)
 
         // MARK: Nvim effects (P4 F8b, ARCHITECTURE.md §10.4.1, §10.6)
+        // Bodies extracted to AppDriver+NvimEffects.swift.
 
         case .spawnNvim(let fragment, let rect):
-            // Launch the EditorBridge spawn sequence on a background Task.
-            // Explicit [channel] capture — never capture self (CR-013).
-            Task { [channel] in
-                await EditorBridge.spawn(fragment: fragment, rect: rect, channel: channel)
-            }
+            executeSpawnNvim(fragment: fragment, rect: rect)
 
         case .nvimInput(let keyNotation):
-            // Forward a key-notation string to the running nvim instance.
-            // Guard with the session reference captured synchronously on the UI
-            // thread; if teardown already nil-ed the session this is a no-op.
-            guard let session = nvimSession else { return }
-            Task { [channel] in
-                await session.rpc.notify(
-                    method: "nvim_input",
-                    params: [.string(keyNotation)]
-                )
-                // nvim_input is fire-and-forget; no response expected.
-                _ = channel  // Satisfy capture for potential future use.
-            }
+            executeNvimInput(keyNotation)
 
         case .nvimDetach:
-            // Send `:qa!` to detach; post .nvimDetached after the notify returns.
-            guard let session = nvimSession else { return }
-            Task { [channel] in
-                await session.rpc.notify(
-                    method: "nvim_command",
-                    params: [.string(":qa!")]
-                )
-                channel.post(.nvimDetached)
-            }
+            executeNvimDetach()
 
         case .nvimResize(let size):
-            // Fire-and-forget resize notification. Debouncing is applied by Inc-8's
-            // reducer dispatch; at this layer we just forward the call.
-            guard let session = nvimSession else { return }
-            Task {
-                await session.rpc.notify(
-                    method: "nvim_ui_try_resize",
-                    params: [
-                        .int(Int64(size.cols)),
-                        .int(Int64(size.rows)),
-                    ]
-                )
-            }
+            executeNvimResize(size)
 
         case .nvimCleanup:
-            // Step 1 (ARCHITECTURE.md §10.4.5): nil the session reference
-            // synchronously before any async work to prevent in-flight nvimInput
-            // tasks from writing to closing pipes.
-            guard let session = nvimSession else { return }
-            nvimSession = nil
-            // Shut down the RPC reader thread, then tear down the process.
-            Task {
-                session.rpc.shutdownReader()
-                session.supervisor.teardown()
-            }
+            executeNvimCleanup()
 
         // MARK: Write-back effects (Inc-9, ARCHITECTURE.md §10.4.1, §10.3c)
+        // Bodies extracted to AppDriver+NvimEffects.swift.
 
         case .writeBack(let fragment, let editedText, let force):
-            // Resolve the project root and lint service before dispatching to
-            // the background Task. Both are value captures — no self retained.
-            guard let projectRoot = projectDirectoryURL() else { return }
-            let lint: any LintServiceProtocol
-            if let svc = lintService {
-                lint = svc
-            } else {
-                // Skeleton: no lint service — post success immediately.
-                let sid = state.selection
-                Task { [channel] in
-                    if let sid {
-                        channel.post(.writeBackSucceeded(sid))
-                    }
-                }
-                return
-            }
-            // Fetch the buffer text from nvim when editedText is empty.
-            // The empty-string sentinel is the nvimWriteRequested path
-            // (ARCHITECTURE.md §10.3c): AppDriver calls nvim_buf_get_lines
-            // before invoking WriteBackCoordinator.write.
-            let session = nvimSession
-            let sid = state.selection
-            Task { [channel] in
-                let resolvedText: String
-                if editedText.isEmpty, let session {
-                    do {
-                        let lines = try await session.rpc.request(
-                            method: "nvim_buf_get_lines",
-                            params: [
-                                .int(0),  // buffer 0 = current
-                                .int(0),  // start line
-                                .int(-1),  // end = all
-                                .bool(false),
-                            ]
-                        ) { value -> [String] in
-                            guard case .array(let arr) = value else { return [] }
-                            return arr.compactMap {
-                                if case .string(let s) = $0 { return s }
-                                return nil
-                            }
-                        }
-                        resolvedText = lines.joined(separator: "\n") + "\n"
-                    } catch {
-                        channel.post(
-                            .writeBackFailed(.ioFailure("Buffer read failed: \(error.localizedDescription)"))
-                        )
-                        return
-                    }
-                } else {
-                    resolvedText = editedText
-                }
-
-                let result = await WriteBackCoordinator.write(
-                    fragment: fragment,
-                    editedText: resolvedText,
-                    projectRoot: projectRoot,
-                    lintService: lint,
-                    force: force
-                )
-
-                switch result.outcome {
-                case .success:
-                    if let sid {
-                        channel.post(.writeBackSucceeded(sid))
-                    }
-                case .conflictDetected:
-                    // Surface the conflict modal (ARCHITECTURE.md §10.3d).
-                    channel.post(
-                        .conflictDetected(
-                            fileURL: fragment.provenance.file,
-                            expectedHash: fragment.provenance.contentHash,
-                            editedText: resolvedText
-                        )
-                    )
-                case .spliceError(let err):
-                    if case .reparseFailed(let reason) = err,
-                        reason.contains("line")
-                    {
-                        // Syntax pre-pass failure: surface as writeBackBlocked.
-                        let diag = Diagnostic(
-                            severity: .error,
-                            line: 1,
-                            message: reason,
-                            source: .syntaxPrePass
-                        )
-                        channel.post(.writeBackBlocked(diag))
-                    } else {
-                        channel.post(.writeBackFailed(.spliceError(err)))
-                    }
-                case .validateReadableRejection(let rejection):
-                    channel.post(.writeBackFailed(.validateReadableRejection(rejection)))
-                case .ioFailure(let reason):
-                    channel.post(.writeBackFailed(.ioFailure(reason)))
-                }
-            }
+            executeWriteBack(fragment: fragment, editedText: editedText, force: force)
 
         case .spawnEditorFallback(let fragment):
             // $EDITOR fallback path for nvim-absent/too-old (ARCHITECTURE.md §10.8
-            // Inc-10, ux-spec §7.3). Reuses spawnEditorAndWait mechanics (pump-park,
-            // terminal suspend/resume). For structured-file fragments a temp file is
-            // created with O_EXCL / 0600; whole .lua files are opened directly.
-            // After the editor exits, the syntax loop injects a comment block on error
-            // and re-opens the editor until the text is clean or no-op (no $EDITOR).
-            // On success, write-back is dispatched exactly as Effect.writeBack does.
+            // Inc-10, ux-spec §7.3). Body in AppDriver+NvimEffects.swift.
             spawnEditorFallbackAndWait(fragment: fragment)
 
         case .buildDiffView(let fileURL, let expectedHash, let editedText, let fragment):
-            // Build the DiffViewState off the UI thread (ARCHITECTURE.md §10.4.10).
-            // Re-reads the on-disk file, re-locates the span via SpanLocator,
-            // and constructs left/right line arrays.
-            Task { [channel] in
-                do {
-                    let currentData = try Data(contentsOf: fileURL)
-                    // Left side: on-disk span text.
-                    let leftText: String
-                    if let jsonpath = fragment.provenance.jsonpath,
-                        let fmt = StructuredFileFormat.from(
-                            extension: fileURL.pathExtension)
-                    {
-                        let expr = try JSONPathExpression(parsing: jsonpath)
-                        guard let text = String(data: currentData, encoding: .utf8)
-                        else {
-                            channel.post(
-                                .writeBackFailed(
-                                    .ioFailure("File is not valid UTF-8")))
-                            return
-                        }
-                        let tree = try Self.decodeTreeForDiff(text, format: fmt, document: fragment.provenance.document)
-                        let matches = expr.evaluate(on: tree)
-                        guard let first = matches.first else {
-                            channel.post(
-                                .writeBackFailed(
-                                    .ioFailure("JSONPath matched nothing in current file")))
-                            return
-                        }
-                        let loc = try SpanLocator.locateSpan(
-                            in: currentData,
-                            format: fmt,
-                            path: first.path.steps,
-                            document: fragment.provenance.document
-                        )
-                        let spanData = currentData[loc.byteRange]
-                        leftText = String(data: spanData, encoding: .utf8) ?? ""
-                    } else {
-                        leftText = String(data: currentData, encoding: .utf8) ?? ""
-                    }
-
-                    let isConflict = SpanSplicer.hasConflict(
-                        currentData: currentData, expected: expectedHash)
-                    let leftTitle =
-                        isConflict
-                        ? "On disk (changed) — \(fileURL.lastPathComponent)"
-                        : "On disk — \(fileURL.lastPathComponent)"
-                    let rightTitle = "Edited"
-
-                    let diffState = DiffViewState(
-                        leftTitle: leftTitle,
-                        rightTitle: rightTitle,
-                        leftLines: leftText.components(separatedBy: "\n"),
-                        rightLines: editedText.components(separatedBy: "\n")
-                    )
-                    channel.post(.diffViewReady(diffState))
-                } catch {
-                    channel.post(
-                        .writeBackFailed(
-                            .ioFailure("Diff build failed: \(error.localizedDescription)")))
-                }
-            }
-        }
-    }
-
-    // MARK: Editor fallback spawn (Inc-10)
-
-    /// Execute the full `$EDITOR` fallback sequence for the given source fragment.
-    ///
-    /// Implements ARCHITECTURE.md §10.8 Inc-10 and ux-spec §7.3:
-    ///
-    /// 1. For structured-file fragments: create a temp file in
-    ///    `FileManager.default.temporaryDirectory` with a UUID name, opened with
-    ///    `O_EXCL | O_WRONLY | O_CREAT` and mode 0600. A pre-existing file at
-    ///    the path is surfaced as `.writeBackFailed(.ioFailure(…))` and returns.
-    ///    For whole `.lua` files: use `fragment.provenance.file` directly.
-    /// 2. Cap `editedText` at `structuredFileSizeLimit` before the pre-pass.
-    /// 3. Syntax loop (ux-spec §7.3 §7):
-    ///    a. Spawn `$EDITOR <path>` via the existing `spawnEditorAndWait` mechanics
-    ///       (pump-park, terminal suspend/resume). Returns immediately on no `$EDITOR`.
-    ///    b. Read the edited bytes from the temp file (or the file directly).
-    ///    c. Run `LintService.syntaxPrePass`. On error: inject the normative
-    ///       comment block at the top of the file and loop back to (a). On success:
-    ///       break.
-    /// 4. Dispatch `WriteBackCoordinator.write(…lintService:…)` in a background
-    ///    `Task`, posting the appropriate `AppEvent` on completion — same events
-    ///    as `Effect.writeBack` (writeBackSucceeded / writeBackFailed /
-    ///    conflictDetected).
-    ///
-    /// Must be called from the UI thread (render/terminal-class, same constraint as
-    /// `spawnEditorAndWait`).
-    private func spawnEditorFallbackAndWait(fragment: LuaSourceFragment) {
-        // Resolve the project root early; no-op if unavailable.
-        guard let projectRoot = projectDirectoryURL() else {
-            channel.post(.writeBackFailed(.ioFailure("Project root unavailable")))
-            return
-        }
-
-        // Determine whether this is a structured-file fragment or a whole .lua file.
-        let isStructured = fragment.provenance.jsonpath != nil
-
-        // For structured fragments, create a temp file. For whole .lua files, edit
-        // the source file directly (same behaviour as the existing spawnEditor path).
-        let editURL: URL
-        if isStructured {
-            // Create temp file with a UUID name, O_EXCL, mode 0600.
-            // EEXIST on the UUID path is surfaced as an error (no retry loop).
-            let tmpDir = FileManager.default.temporaryDirectory
-            let name = "moonswift-\(UUID().uuidString).lua"
-            let url = tmpDir.appendingPathComponent(name)
-            let fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
-            if fd == -1 {
-                let reason =
-                    errno == EEXIST
-                    ? "Temp file already exists: \(url.lastPathComponent)"
-                    : "Cannot create temp file: \(String(cString: strerror(errno)))"
-                channel.post(.writeBackFailed(.ioFailure(reason)))
-                return
-            }
-            // Write the fragment text to the temp file via the open fd, then close.
-            let fragmentData = Data(fragment.code.utf8)
-            let written = fragmentData.withUnsafeBytes { ptr in
-                write(fd, ptr.baseAddress, ptr.count)
-            }
-            close(fd)
-            if written < 0 {
-                channel.post(
-                    .writeBackFailed(.ioFailure("Cannot write temp file: \(url.lastPathComponent)"))
-                )
-                return
-            }
-            editURL = url
-        } else {
-            editURL = fragment.provenance.file
-        }
-
-        // Validate $EDITOR before entering the loop; spawnEditorAndWait posts its
-        // own transient and returns early when $EDITOR is absent or non-executable.
-        // We call it directly — any guard failure is handled inside that function.
-
-        // Skeleton path: if no lint service is injected, skip the pre-pass loop
-        // and post synthetic success immediately (same skeleton contract as writeBack).
-        guard let lint = lintService else {
-            spawnEditorAndWait(url: editURL)
-            let sid = state.selection
-            Task { [channel] in
-                if let sid { channel.post(.writeBackSucceeded(sid)) }
-            }
-            return
-        }
-
-        // Syntax loop — ux-spec §7.3 §7:
-        // Each iteration: park/suspend/spawn/resume (via spawnEditorAndWait),
-        // read file, syntax pre-pass. On error: inject comment block and loop.
-        // On success: break and dispatch write-back.
-        while true {
-            spawnEditorAndWait(url: editURL)
-
-            // Read the edited bytes from the temp file (or the source file).
-            let editedText: String
-            do {
-                let data = try Data(contentsOf: editURL)
-                // Cap at structuredFileSizeLimit before the pre-pass.
-                if data.count > structuredFileSizeLimit {
-                    channel.post(
-                        .writeBackFailed(.ioFailure("Edited text exceeds size limit"))
-                    )
-                    return
-                }
-                editedText = String(data: data, encoding: .utf8) ?? ""
-            } catch {
-                channel.post(
-                    .writeBackFailed(
-                        .ioFailure("Cannot read temp file: \(error.localizedDescription)"))
-                )
-                return
-            }
-
-            // Syntax pre-pass.
-            let prePassFrag = LuaSourceFragment(
-                code: editedText,
-                provenance: fragment.provenance
+            executeBuildDiffView(
+                fileURL: fileURL,
+                expectedHash: expectedHash,
+                editedText: editedText,
+                fragment: fragment
             )
-            if let diag = lint.syntaxPrePass(prePassFrag) {
-                // Error: inject normative comment block (ux-spec §7.3) at the top
-                // of the temp file, then loop back to open the editor again.
-                let commentBlock = Self.syntaxErrorCommentBlock(diag)
-                let newText = commentBlock + editedText
-                do {
-                    try Data(newText.utf8).write(to: editURL, options: .atomic)
-                } catch {
-                    // If we cannot write back the comment, abort.
-                    channel.post(
-                        .writeBackFailed(
-                            .ioFailure(
-                                "Cannot annotate temp file: \(error.localizedDescription)"))
-                    )
-                    return
-                }
-                // Loop: re-open the editor with the annotated file.
-                continue
-            }
+        }
+    }
 
-            // Syntax clean — break out of the loop and proceed to write-back.
-            // Dispatch WriteBackCoordinator.write on a background Task (same shape
-            // as Effect.writeBack execution in executeSingle).
-            let capturedText = editedText
-            let capturedFragment = fragment
-            let sid = state.selection
-            Task { [channel] in
-                let result = await WriteBackCoordinator.write(
-                    fragment: capturedFragment,
-                    editedText: capturedText,
-                    projectRoot: projectRoot,
-                    lintService: lint,
-                    force: false
+    // MARK: Effect helpers — core services
+
+    /// Dispatch a run to the live `RunService`, or post a synthetic result in skeleton mode.
+    private func executeRun(_ fragment: LuaSourceFragment, config: RunConfig) {
+        if let svc = runService {
+            // Dispatch to the real RunService on a background Task.
+            // Capture coalescer, channel, and svc explicitly — all Sendable.
+            let coalescer = Coalescer(channel: channel)
+            activeCoalescer = coalescer
+            Task { [channel, coalescer, svc] in
+                let outcome = await svc.run(
+                    fragment,
+                    config: config,
+                    output: { line in coalescer.onOutput(line) }
                 )
-                switch result.outcome {
-                case .success:
-                    if let sid { channel.post(.writeBackSucceeded(sid)) }
-                case .conflictDetected:
-                    channel.post(
-                        .conflictDetected(
-                            fileURL: capturedFragment.provenance.file,
-                            expectedHash: capturedFragment.provenance.contentHash,
-                            editedText: capturedText
-                        )
-                    )
-                case .spliceError(let err):
-                    channel.post(.writeBackFailed(.spliceError(err)))
-                case .validateReadableRejection(let rejection):
-                    channel.post(.writeBackFailed(.validateReadableRejection(rejection)))
-                case .ioFailure(let reason):
-                    channel.post(.writeBackFailed(.ioFailure(reason)))
+                coalescer.finish()
+                channel.post(.runFinished(Self.appOutcome(from: outcome)))
+            }
+        } else {
+            // Skeleton: post a synthetic .done immediately.
+            channel.post(.runFinished(.done(value: nil, duration: .zero)))
+        }
+    }
+
+    /// Run the syntax pre-pass off the UI thread; post `.prePassResult` on completion.
+    ///
+    /// `syntaxPrePass` is synchronous but creates a fresh engine; running off the
+    /// UI thread avoids a momentary freeze on large files.
+    private func executeSyntaxPrePass(_ fragment: LuaSourceFragment) {
+        if let svc = lintService {
+            Task { [channel] in
+                let diag = svc.syntaxPrePass(fragment)
+                channel.post(.prePassResult(diag))
+            }
+        } else {
+            channel.post(.prePassResult(nil))
+        }
+    }
+
+    /// Run the full luacheck lint pass on a background Task; post `.lintFinished`.
+    ///
+    /// Builds the luacheck globals from the catalog using the current
+    /// `tomlModuleAvailable` probe result from state before dispatching.
+    private func executeLint(_ fragment: LuaSourceFragment, extraModules: [String]) {
+        if let svc = lintService {
+            let tomlProbed = state.tomlModuleAvailable ?? false
+            let globals = LuaModuleCatalog.v0.luacheckGlobals(
+                extraModules: extraModules,
+                tomlProbed: tomlProbed
+            )
+            Task { [channel] in
+                do {
+                    let diags = try await svc.lint(fragment, knownGlobals: globals)
+                    channel.post(.lintFinished(diags))
+                } catch {
+                    // Engine not ready or internal failure — post empty diagnostics
+                    // so the reducer can clear the .running lint state.
+                    channel.post(.lintFinished([]))
                 }
             }
-            return
+        } else {
+            channel.post(.lintFinished([]))
         }
     }
 
-    /// Build the normative comment block injected at the top of a temp file when
-    /// the syntax pre-pass fails (ux-spec §7.3, snapshot-tested exact format).
-    ///
-    /// Format (two lines, terminated by newline):
-    /// ```lua
-    /// -- SYNTAX ERROR: <message> (line N)
-    /// -- Fix the error above, then save to continue. Delete this block to force-accept.
-    /// ```
-    static func syntaxErrorCommentBlock(_ diag: Diagnostic) -> String {
-        "-- SYNTAX ERROR: \(diag.message) (line \(diag.line))\n"
-            + "-- Fix the error above, then save to continue."
-            + " Delete this block to force-accept.\n"
+    /// Prewarm the lint engine in the background; posts `.lintEngineReady`,
+    /// `.catalogProbed`, or `.lintEngineFailed` via the supplied callbacks.
+    private func executePrewarmLint() {
+        if let svc = lintService {
+            Task { [channel] in
+                await svc.prewarm(
+                    onReady: { channel.post(.lintEngineReady) },
+                    onCatalogProbed: { avail in channel.post(.catalogProbed(tomlAvailable: avail)) },
+                    onFailed: { msg in channel.post(.lintEngineFailed(msg)) }
+                )
+            }
+        } else {
+            // Skeleton: post ready + no-toml immediately.
+            channel.post(.lintEngineReady)
+            channel.post(.catalogProbed(tomlAvailable: false))
+        }
     }
 
-    // MARK: Editor spawn
+    /// Dispatch a highlight request to the `Highlighter`'s serial parse executor.
+    ///
+    /// The source text is extracted from state on the UI thread before the async
+    /// dispatch — no data race because `AppState` is a value type.
+    private func executeHighlight(id: SourceID) {
+        if case .loaded(let fragment) = state.sources[id] {
+            let text = fragment.code
+            highlighter.highlight(id, text: text, via: channel)
+        } else {
+            // Source not loaded yet — post empty spans so the reducer's
+            // first-access-unhighlighted contract is satisfied.
+            channel.post(.highlightReady(id, spans: []))
+        }
+    }
 
-    /// Execute the full $EDITOR handshake for the given file URL.
+    /// Trigger a full project source-file load via the `SourceStore`.
     ///
-    /// Sequence (ARCHITECTURE.md §5.2, ffi-boundary.md §EDITOR suspend/resume):
-    /// 1. Park the pump — blocks until the pump acknowledges (≤ 50 ms).
-    ///    No input-class shim call is in flight after this returns.
-    /// 2. Suspend the terminal (leave alt screen, restore termios).
-    /// 3. Spawn `$EDITOR <path>` — direct exec, no shell interpretation.
-    /// 4. Wait for the editor process to exit (any exit code is accepted).
-    /// 5. Resume the terminal (raw mode, alt screen).
-    /// 6. Unpark the pump.
+    /// Derives the project root and entry list from the current state. If the
+    /// project is not yet loaded (e.g. quickFile mode) the reducer will not emit
+    /// this effect, so no guard is needed here beyond the store availability check.
+    private func executeLoadSources() {
+        guard let store = sourceStore,
+            let projectDir = projectDirectoryURL(),
+            case .loaded(let projectFile, _) = state.project
+        else { return }
+        store.loadAll(entries: projectFile.sources, projectRoot: projectDir)
+    }
+
+    /// Reload a single source entry identified by `id` via the `SourceStore`.
+    private func executeLoadSource(id: SourceID) {
+        guard let store = sourceStore,
+            let projectDir = projectDirectoryURL(),
+            case .loaded(let projectFile, _) = state.project
+        else { return }
+        // Find the matching entry and load it as a one-element batch.
+        if let entry = projectFile.sources.first(where: { $0.path == id.path }) {
+            store.loadAll(entries: [entry], projectRoot: projectDir)
+        }
+    }
+
+    /// Cancel in-flight source loads and start a fresh project load from `url`.
     ///
-    /// If `$EDITOR` is not set: posts a transient and returns immediately
-    /// without touching the pump or the terminal.
+    /// Cancelling stale source loads before the new project load prevents ghost
+    /// navigator entries from old results (SourceStore contract, SourceStore.swift §doc).
+    private func executeLoadProject(url: URL) {
+        guard let store = sourceStore else { return }
+        store.cancelAll()
+        Task { [channel] in
+            let result = ProjectStore.load(at: url)
+            channel.post(Self.projectEvent(from: result))
+        }
+    }
+
+    /// Cancel in-flight source loads and reload the project file from the current directory.
+    private func executeReloadProject() {
+        guard let store = sourceStore, let projectDir = projectDirectoryURL() else { return }
+        store.cancelAll()
+        Task { [channel] in
+            let result = ProjectStore.load(at: projectDir)
+            channel.post(Self.projectEvent(from: result))
+        }
+    }
+
+    /// Persist updated field designations and post `.designationsSaved` (or `.projectMalformed`).
     ///
-    /// If terminal suspend/resume is unavailable (no `suspender` injected):
-    /// the pump is still parked/unparked around the spawn so the handshake
-    /// contract is upheld even in skeleton/test mode.
-    ///
-    /// Must be called from the UI thread (render/terminal-class).
-    private func spawnEditorAndWait(url: URL) {
-        // Guard: $EDITOR must be set. The exact transient string is normative
-        // (ux-spec.md §6.4 — "No $EDITOR" entry).
-        guard let editor = ProcessInfo.processInfo.environment["EDITOR"],
-            !editor.isEmpty
+    /// Applies `designations` to the source entry identified by `sourcePath`
+    /// in the current project file, then writes the updated file via `ProjectStore.save`.
+    private func executeSaveDesignations(
+        _ designations: [FieldDesignation],
+        sourcePath: String
+    ) {
+        guard sourceStore != nil,
+            let projectDir = projectDirectoryURL(),
+            case .loaded(let projectFile, _) = state.project
         else {
-            let msg = "$EDITOR is not set. Set it to open the project file."
-            // Set the transient directly on state (AppDriver owns state mutation)
-            // and arm the tick source so the transient expiry is processed.
-            state.transient = TransientMessage(text: msg)
-            tickSource.arm(interval: TickInterval.transientExpiry)
+            // Skeleton: acknowledge immediately.
+            channel.post(.designationsSaved)
             return
         }
-
-        // CR-011: validate that $EDITOR names an absolute, existing, executable
-        // file before passing it to Process.executableURL. A relative, non-existent,
-        // or non-executable value would otherwise allow arbitrary code execution
-        // with the permissions of the moonswift process.
-        //
-        // IMPORTANT: check the raw `editor` string — not `URL(fileURLWithPath:).path`
-        // — because URL(fileURLWithPath:) resolves relative paths against the
-        // process working directory, producing an absolute path even for a bare
-        // name like "vim". The guard must reject anything that is not already
-        // written as an absolute path by the user.
-        guard editor.hasPrefix("/") else {
-            state.transient = TransientMessage(text: "$EDITOR must be an absolute path.")
-            tickSource.arm(interval: TickInterval.transientExpiry)
-            return
-        }
-        let editorURL = URL(fileURLWithPath: editor)
-        guard FileManager.default.fileExists(atPath: editorURL.path),
-            FileManager.default.isExecutableFile(atPath: editorURL.path)
-        else {
-            state.transient = TransientMessage(
-                text: "$EDITOR '\(editorURL.lastPathComponent)' is not executable.")
-            tickSource.arm(interval: TickInterval.transientExpiry)
-            return
-        }
-
-        // 1. Park the pump — guaranteed no input-class call in flight after this.
-        pump.parkAndWait()
-
-        // 2. Suspend the terminal (TTY-gated: only when a suspender is injected).
-        if let suspender {
+        let updatedFile = Self.applyDesignations(
+            designations, sourcePath: sourcePath, to: projectFile)
+        let fileURL = projectDir.appendingPathComponent(ProjectStore.fileName)
+        Task { [channel] in
             do {
-                try suspender.suspend()
+                try ProjectStore.save(updatedFile, to: fileURL)
+                channel.post(.designationsSaved)
             } catch {
-                // Terminal suspend failed — unpark and continue; the UI loop is
-                // still healthy. A render after unpark will restore the view.
-                pump.unparkAfterResume()
-                return
+                let diag = Diagnostic(
+                    severity: .error,
+                    message: "Could not save designations: \(error.localizedDescription)",
+                    source: .projectConfig
+                )
+                channel.post(.projectMalformed(diag))
             }
-        }
-
-        // 3 + 4. Spawn the editor with the file path as a direct argument vector
-        //         (no shell — no word splitting, no glob expansion, no injection).
-        //         editorURL was validated above (absolute + executable).
-        let process = Process()
-        process.executableURL = editorURL
-        process.arguments = [url.path]
-        do {
-            try process.run()
-            process.waitUntilExit()
-            // Non-zero exit is accepted: the editor may exit with an error code
-            // (e.g. nvim exits 1 on :cquit) but we continue regardless
-            // (ARCHITECTURE.md §5.2 "non-zero editor exit → continue anyway").
-        } catch {
-            // Editor could not be launched (executable not found, permission
-            // denied, etc.). Fall through to resume — the terminal must always
-            // be restored.
-        }
-
-        // 5. Resume the terminal (TTY-gated).
-        if let suspender {
-            do {
-                try suspender.resume()
-            } catch {
-                // Resume failure is serious but unrecoverable without crashing;
-                // log and continue — the loop will render over whatever state
-                // the terminal is in. Emergency restore is the crash-handler
-                // path (ARCHITECTURE.md §3f); this is not a crash path.
-            }
-        }
-
-        // 6. Unpark the pump — resumes normal input polling.
-        pump.unparkAfterResume()
-    }
-
-    // MARK: Clipboard
-
-    /// Write `text` to the system clipboard by piping it through `pbcopy`.
-    ///
-    /// macOS-only (`pbcopy` is a standard utility). Failure (pbcopy not on PATH,
-    /// or stdin write fails) is silently swallowed — clipboard is a best-effort
-    /// feature; the UI does not change either way. Must be called from the UI
-    /// thread (all effects are executed on the UI thread by `executeSingle`).
-    private func yankToPasteboard(_ text: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pbcopy")
-        let pipe = Pipe()
-        process.standardInput = pipe
-        do {
-            try process.run()
-            if let data = text.data(using: .utf8) {
-                pipe.fileHandleForWriting.write(data)
-            }
-            pipe.fileHandleForWriting.closeFile()
-            process.waitUntilExit()
-        } catch {
-            // pbcopy unavailable or failed — silent no-op (see doc comment).
         }
     }
 
@@ -1066,7 +601,24 @@ public final class AppDriver: @unchecked Sendable {
     /// `Terminal.teardown()`; callers (Main.swift) must not call it separately
     /// when a backend is active. Background threads are stopped before teardown
     /// so no render/input calls are in flight during terminal restore.
+    ///
+    /// CR-003: awaits `nvimCleanupTask` first so that any in-flight pipe writes,
+    /// SIGTERM, and `waitUntilExit` are fully settled before the terminal backend
+    /// tears down. The blocking wait runs here on the UI thread (which is quitting
+    /// anyway) so it does not starve the cooperative pool.
     private func teardown() {
+        // Await the nvim cleanup Task if one is in flight (CR-003). This blocks
+        // the UI thread, but teardown is the last thing the UI thread does before
+        // the process exits, so blocking here is the correct pattern.
+        if let cleanupTask = nvimCleanupTask {
+            let sema = DispatchSemaphore(value: 0)
+            Task {
+                await cleanupTask.value
+                sema.signal()
+            }
+            sema.wait()
+            nvimCleanupTask = nil
+        }
         pump.stop()
         tickSource.stop()
         if let interp = interpreter {
@@ -1230,23 +782,48 @@ public final class AppDriver: @unchecked Sendable {
 
     /// Decode `text` in the given `format` to a `TreeValue` for diff construction.
     ///
-    /// Mirrors `WriteBackCoordinator.decodeTree` — kept separate to avoid
-    /// coupling AppDriver to WriteBackCoordinator internals. Used exclusively
-    /// by the `buildDiffView` effect arm to re-locate the on-disk span for the
-    /// left column of the diff view.
-    private static func decodeTreeForDiff(
+    /// CR-031: delegates to `WriteBackCoordinator.decodeTree` (the single
+    /// authoritative decode switch) rather than duplicating the format dispatch.
+    /// Used exclusively by the `buildDiffView` effect arm to re-locate the
+    /// on-disk span for the left column of the diff view.
+    /// `internal` (not `private`) — called from `AppDriver+NvimEffects.swift`
+    /// inside `executeBuildDiffView`; `private` would restrict to this file only.
+    static func decodeTreeForDiff(
         _ text: String,
         format: StructuredFileFormat,
         document: Int
     ) throws -> TreeValue {
-        switch format {
-        case .json: return try decodeJSON(text)
-        case .yaml: return try decodeYAML(text, document: document)
-        case .toml: return try decodeTOML(text)
-        }
+        try WriteBackCoordinator.decodeTree(text, format: format, document: document)
     }
 
     // MARK: Service helpers
+
+    /// Derive the `SourceID` for a `LuaSourceFragment` relative to `projectRoot`.
+    ///
+    /// The `path` component is the fragment's file URL made relative to the project
+    /// root. If the file is not under the root (unusual — would have been rejected
+    /// by validateReadable), the absolute path is used as a fallback. The
+    /// `jsonpath` and `document` fields are taken directly from the provenance
+    /// so the ID matches the key already present in `AppState.sources`.
+    ///
+    /// Called on the UI thread before dispatching write-back Tasks so that
+    /// navigator-cursor moves during the async edit do not retarget the post-write
+    /// reload (CR-023).
+    static func sourceID(for fragment: LuaSourceFragment, projectRoot: URL) -> SourceID {
+        let filePath = fragment.provenance.file.path
+        let rootPath = projectRoot.path
+        let relPath: String
+        if filePath.hasPrefix(rootPath + "/") {
+            relPath = String(filePath.dropFirst(rootPath.count + 1))
+        } else {
+            relPath = filePath
+        }
+        return SourceID(
+            path: relPath,
+            jsonpath: fragment.provenance.jsonpath,
+            document: fragment.provenance.document
+        )
+    }
 
     /// Returns the project root directory URL derived from the current launch mode.
     ///
@@ -1255,7 +832,7 @@ public final class AppDriver: @unchecked Sendable {
     /// - `.empty` → nil (no project context).
     ///
     /// Called on the UI thread when dispatching source / project effects.
-    private func projectDirectoryURL() -> URL? {
+    func projectDirectoryURL() -> URL? {
         switch state.launch {
         case .project(let dir):
             return dir

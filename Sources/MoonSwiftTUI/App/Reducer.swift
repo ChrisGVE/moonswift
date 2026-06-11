@@ -223,15 +223,16 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // on unexpected (non-zero) exit (ARCHITECTURE.md §10.8, §10.6 error taxonomy).
         return reduceNvimExited(s, exitCode: exitCode)
 
-    case .nvimReady(let session):
+    case .nvimReady:
         // Spawn + handshake succeeded. Transition to .nvimPane so the grid is shown.
         // AppDriver already stored the session before calling reduce (see AppDriver
         // drain loop); the reducer only changes focus and state.
-        return reduceNvimReady(s, session: session)
+        return reduceNvimReady(s)
 
     case .nvimDetached:
-        // nvim acknowledged `:qa!`. Tear down the session and return to the code pane.
-        return reduceNvimCleanupFocus(s, transientText: nil)
+        // nvim acknowledged `qa!`. Tear down the session and return to the code pane.
+        // Pass .nvimCleanup explicitly so both cleanup paths are uniform (CR-024).
+        return reduceNvimCleanupFocus(s, transientText: nil, extraEffects: [.nvimCleanup])
 
     // MARK: Write-back outcomes (Inc-9, ARCHITECTURE.md §10.4.2, §10.3c)
 
@@ -274,15 +275,15 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
 /// events in the same batch.
 private func reduceNvimRedrawBatch(_ state: AppState, events: [NvimRedrawEvent]) -> (AppState, [Effect]) {
     var s = state
-    // Lazily initialise the grid from the first gridResize in the batch.
-    if s.nvimGrid == nil {
-        s.nvimGrid = NvimGridState()
-    }
+    // Local mutable copy of the grid; single write-back at the end of the function.
+    // Lazily initialised from the first event in the batch (grid may not yet exist
+    // if this is the very first redraw after spawn).
+    var grid = s.nvimGrid ?? NvimGridState()
 
     for event in events {
         switch event {
         case .hlAttrDefine(let id, let rgb):
-            s.nvimGrid!.hlCache[id] = rgb
+            grid.hlCache[id] = rgb
 
         case .defaultColorsSet:
             // Default colour tokens are used by the renderer directly; the
@@ -290,29 +291,29 @@ private func reduceNvimRedrawBatch(_ state: AppState, events: [NvimRedrawEvent])
             break
 
         case .gridResize(_, let width, let height):
-            s.nvimGrid!.resize(width: width, height: height)
+            grid.resize(width: width, height: height)
 
         case .gridLine(_, let row, let colStart, let cells):
             // Pre-size the row to grid width before applying colStart-relative
             // writes (ARCHITECTURE.md §10.4.8 grid_line contract).
-            let w = s.nvimGrid!.width
-            if row < s.nvimGrid!.cells.count && s.nvimGrid!.cells[row].count < w {
+            let w = grid.width
+            if row < grid.cells.count && grid.cells[row].count < w {
                 let blank = NvimCellState()
-                s.nvimGrid!.cells[row].append(
-                    contentsOf: Array(repeating: blank, count: w - s.nvimGrid!.cells[row].count)
+                grid.cells[row].append(
+                    contentsOf: Array(repeating: blank, count: w - grid.cells[row].count)
                 )
             }
-            s.nvimGrid!.applyGridLine(row: row, colStart: colStart, cells: cells)
+            grid.applyGridLine(row: row, colStart: colStart, cells: cells)
 
         case .gridCursorGoto(_, let row, let col):
-            s.nvimGrid!.cursorRow = row
-            s.nvimGrid!.cursorCol = col
+            grid.cursorRow = row
+            grid.cursorCol = col
 
         case .gridScroll(_, let top, let bot, let left, let right, let rows):
-            s.nvimGrid!.applyScroll(top: top, bot: bot, left: left, right: right, rows: rows)
+            grid.applyScroll(top: top, bot: bot, left: left, right: right, rows: rows)
 
         case .gridClear:
-            s.nvimGrid!.clearAll()
+            grid.clearAll()
 
         case .modeChange(let name, _):
             // Mode is stored on NvimPaneState, carried by FocusState.nvimPane.
@@ -328,6 +329,9 @@ private func reduceNvimRedrawBatch(_ state: AppState, events: [NvimRedrawEvent])
             break
         }
     }
+
+    // Write back the mutated grid (single assignment, no force-unwrap needed).
+    s.nvimGrid = grid
     return (s, [])
 }
 
@@ -358,12 +362,13 @@ private func reduceCodePaneSpawnNvim(_ s: AppState) -> (AppState, [Effect]) {
 
 /// Handle `AppEvent.nvimReady`: transition focus to `.nvimPane`.
 ///
-/// AppDriver already owns the session (stored before the reduce call). The
-/// reducer only updates `FocusState`; `NvimPaneState.attachedRect` is recomputed
-/// from the current layout so the pane state reflects the live dimensions.
-private func reduceNvimReady(_ s: AppState, session: NvimSession) -> (AppState, [Effect]) {
+/// AppDriver already owns the session (stored before the reduce call via the
+/// drain loop). The reducer only updates `FocusState`; `NvimPaneState.attachedRect`
+/// is recomputed from the current layout so the pane state reflects the live
+/// dimensions. The `session` parameter is intentionally omitted: the reducer
+/// is pure and the session lives in `AppDriver.nvimSession`.
+private func reduceNvimReady(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
-    _ = session  // The driver owns the session; reducer does not store it.
     let layout = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout)
     let paneState = NvimPaneState(attachedRect: layout.codePane)
     s.focus = .nvimPane(paneState)
@@ -435,8 +440,9 @@ private func reduceNvimExited(_ s: AppState, exitCode: Int32) -> (AppState, [Eff
 
 /// Restore state to `.pane(.codePane)` and clear nvim-session fields.
 ///
-/// Called by both `.nvimProcessExited` and `.nvimDetached` paths. `extraEffects`
-/// carries any effects already decided by the caller (e.g. `.nvimCleanup`).
+/// Called by both `.nvimProcessExited` and `.nvimDetached` paths. Both callers
+/// pass `extraEffects:[.nvimCleanup, ...]` so the cleanup effect list is uniform
+/// and inspectable at the call site — no contains-guard needed here (CR-024).
 private func reduceNvimCleanupFocus(
     _ s: AppState,
     transientText: String?,
@@ -453,14 +459,6 @@ private func reduceNvimCleanupFocus(
     if let text = transientText {
         s.transient = TransientMessage(text: text)
         if let tick = armTickIfNeeded(s) { effects.append(tick) }
-    }
-
-    // Ensure .nvimCleanup is in the effect list exactly once.
-    if !effects.contains(where: {
-        if case .nvimCleanup = $0 { return true }
-        return false
-    }) {
-        effects.append(.nvimCleanup)
     }
 
     return (s, effects)
@@ -512,7 +510,7 @@ private func reduceWriteBackFailed(
         message = "Write failed: \(err.localizedDescription)"
     case .ioFailure(let reason):
         message = "Write failed: \(reason)"
-    case .conflictDetected, .success:
+    case .conflictDetected, .success, .syntaxPrePassBlocked:
         // These outcomes are handled by their own AppEvent cases and should
         // never arrive as writeBackFailed. Log defensively and no-op.
         Logger.shared.debug("writeBackFailed received unexpected outcome: \(outcome)")
@@ -586,7 +584,10 @@ private func reduceConflictModalKey(
 
     case (.char("d"), []):
         // Diff: build a side-by-side diff view off the UI thread.
+        // Preserve the conflict modal in pendingConflictModal so [c] in the diff
+        // view can restore it exactly — spec §10.3d (CR-022).
         var s = s
+        s.pendingConflictModal = modal
         s.focus = .diffView(.building)
         return (
             s,
@@ -616,7 +617,7 @@ private func reduceConflictModalKey(
 /// Handle key events while `FocusState.diffView` is active.
 ///
 /// Key map (ARCHITECTURE.md §10.3d, §10.8 Inc-9):
-///   [c] — cancel: return to the conflict modal with state preserved
+///   [c] — cancel: return to the conflict modal with state preserved (CR-022)
 ///   j / down — scroll down one line
 ///   k / up   — scroll up one line
 private func reduceDiffViewKey(
@@ -635,13 +636,18 @@ private func reduceDiffViewKey(
 
     switch (code, modifiers) {
     case (.char("c"), []):
-        // Cancel: per ARCHITECTURE.md §10.3d, [c] returns to the conflict modal.
-        // The ConflictModalState must be reconstructed from the diffState's fragment.
-        // However the fragment is held in the diff effect, not in diffState.
-        // We return to the nvim pane instead (the fragment is no longer accessible).
+        // Cancel: restore to the conflict modal with state preserved (§10.3d, CR-022).
+        // `pendingConflictModal` was set when [d] transitioned to the diff view; if
+        // it is non-nil we can restore .conflictModal exactly. If it is nil (unexpected
+        // path) fall back to the nvim pane so the user is not stranded.
         var s = s
-        let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
-        s.focus = .nvimPane(NvimPaneState(attachedRect: rect))
+        if let pending = s.pendingConflictModal {
+            s.pendingConflictModal = nil
+            s.focus = .conflictModal(pending)
+        } else {
+            let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
+            s.focus = .nvimPane(NvimPaneState(attachedRect: rect))
+        }
         return (s, [])
 
     case (.char("j"), []), (.down, []):

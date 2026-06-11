@@ -242,7 +242,9 @@ struct ConflictTests {
 @Suite("WriteBackCoordinator — SpliceError propagation")
 struct SpliceErrorTests {
 
-    @Test("syntax pre-pass diagnostic returns .spliceError")
+    /// CR-006: syntax pre-pass failure returns `.syntaxPrePassBlocked(diagnostic)`
+    /// so callers can map it to `AppEvent.writeBackBlocked` without string inspection.
+    @Test("syntax pre-pass diagnostic returns .syntaxPrePassBlocked")
     func syntaxPrePassDiagnostic() async throws {
         let dir = try WriteBackFixtures.tempDir()
         let fileURL = try WriteBackFixtures.copyFixture("hello.lua", into: dir)
@@ -264,10 +266,12 @@ struct SpliceErrorTests {
             lintService: lint,
             force: false
         )
-        if case .spliceError = result.outcome {
-            // Expected
+        // CR-006: must be .syntaxPrePassBlocked carrying the exact diagnostic.
+        if case .syntaxPrePassBlocked(let diag) = result.outcome {
+            #expect(diag.message == diagnostic.message)
+            #expect(diag.line == diagnostic.line)
         } else {
-            Issue.record("Expected .spliceError, got \(result.outcome)")
+            Issue.record("Expected .syntaxPrePassBlocked, got \(result.outcome)")
         }
         #expect(result.newData == nil)
     }

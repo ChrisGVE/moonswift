@@ -130,7 +130,7 @@ public enum Effect: Sendable {
     /// by AppDriver before the Task fires).
     case nvimInput(String)
 
-    /// Detach from the running nvim instance cleanly via `nvim_command ":qa!"`.
+    /// Detach from the running nvim instance cleanly via `nvim_command "qa!"`.
     ///
     /// AppDriver posts `.nvimDetached` after the notify completes. The reducer
     /// emits `.nvimCleanup` on `.nvimDetached` (Inc-8).

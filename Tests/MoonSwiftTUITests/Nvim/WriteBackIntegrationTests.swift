@@ -53,7 +53,11 @@ private func outsideSpanIndices(
 struct YAMLSyntaxErrorAcceptanceTests {
 
     /// Step 1: A write with syntactically invalid Lua is blocked by the pre-pass.
-    @Test("syntax error in edited text blocks write-back via spliceError")
+    ///
+    /// CR-006: the outcome is `.syntaxPrePassBlocked(diagnostic)` (not `.spliceError`)
+    /// so the caller can map it directly to `AppEvent.writeBackBlocked` without
+    /// inspecting message strings.
+    @Test("syntax error in edited text blocks write-back via syntaxPrePassBlocked")
     func yamlSyntaxErrorBlocksWrite() async throws {
         let dir = try WriteBackFixtures.tempDir()
         let fileURL = try WriteBackFixtures.copyFixture("scripts.yaml", into: dir)
@@ -79,12 +83,13 @@ struct YAMLSyntaxErrorAcceptanceTests {
             force: false
         )
 
-        // Must be blocked by the pre-pass (reported as .spliceError).
-        if case .spliceError = result.outcome {
-            // Correct: write was blocked by the syntax pre-pass.
+        // Must be blocked by the pre-pass as .syntaxPrePassBlocked (CR-006).
+        if case .syntaxPrePassBlocked(let diag) = result.outcome {
+            // Correct: write was blocked; verify the diagnostic is the injected one.
+            #expect(diag.message == syntaxDiag.message)
         } else {
             Issue.record(
-                "Expected .spliceError from syntax pre-pass, got \(result.outcome)")
+                "Expected .syntaxPrePassBlocked from syntax pre-pass, got \(result.outcome)")
         }
         #expect(result.newData == nil)
 

@@ -714,6 +714,14 @@ public struct AppState: Sendable {
     /// The diff view's key handling is wired in Inc-9 (ARCHITECTURE.md §10.8 Inc-9).
     public var diffView: DiffViewState?
 
+    /// The conflict modal state preserved while the diff view is open.
+    ///
+    /// Set when `[d]` transitions from `.conflictModal` to `.diffView(.building)`;
+    /// cleared when `[c]` in the diff view restores focus to `.conflictModal`.
+    /// Implements ARCHITECTURE.md §10.3d: diff-view `[c]` must return to the
+    /// conflict modal with state preserved, not to an empty nvim pane (CR-022).
+    public var pendingConflictModal: ConflictModalState?
+
     /// True once the one-time "nvim not found" fallback note has been posted this
     /// session. Prevents the transient from repeating on subsequent `nvimUnavailable`
     /// events (ARCHITECTURE.md §10.6 "One-time fallback note"; ux-spec §7.4 step 6).
@@ -766,6 +774,7 @@ public struct AppState: Sendable {
         nvimGrid: NvimGridState? = nil,
         conflictModal: ConflictModalState? = nil,
         diffView: DiffViewState? = nil,
+        pendingConflictModal: ConflictModalState? = nil,
         nvimFallbackNotedThisSession: Bool = false,
         nvimPendingResize: TerminalSize? = nil,
         nvimResizeDeadline: Date? = nil,
@@ -792,6 +801,7 @@ public struct AppState: Sendable {
         self.nvimGrid = nvimGrid
         self.conflictModal = conflictModal
         self.diffView = diffView
+        self.pendingConflictModal = pendingConflictModal
         self.nvimFallbackNotedThisSession = nvimFallbackNotedThisSession
         self.nvimPendingResize = nvimPendingResize
         self.nvimResizeDeadline = nvimResizeDeadline

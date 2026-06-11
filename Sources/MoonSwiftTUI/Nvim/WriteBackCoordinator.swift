@@ -44,12 +44,18 @@ public enum WriteBackCoordinator {
         /// `SourceStore.validateReadable` rejected the file before or after the read.
         case validateReadableRejection(SourceStore.FileReadRejection)
         /// `SpanSplicer` returned an error (reparse, span-leak, field-mismatch,
-        /// unrepresentable, or syntax pre-pass diagnostic).
+        /// unrepresentable — but NOT a syntax pre-pass failure; see below).
         case spliceError(SpliceError)
         /// A blocking I/O operation failed or the file bytes were not valid UTF-8.
         case ioFailure(String)
         /// The file was modified externally between load and write-back.
         case conflictDetected
+        /// The syntax pre-pass (step 2) failed with a lint diagnostic.
+        ///
+        /// Distinct from `spliceError` so AppDriver can map it directly to
+        /// `AppEvent.writeBackBlocked(diagnostic)` without inspecting string
+        /// content (CR-006 heuristic elimination).
+        case syntaxPrePassBlocked(Diagnostic)
     }
 
     /// The return value of `write`.
@@ -96,16 +102,15 @@ public enum WriteBackCoordinator {
         }
 
         // Step 2: Syntax pre-pass.
+        // On failure return `.syntaxPrePassBlocked(diagnostic)` so the caller can
+        // map it directly to `AppEvent.writeBackBlocked` without any string heuristic
+        // (CR-006: eliminates the `reason.contains("line")` pattern in AppDriver).
         let prePassFragment = LuaSourceFragment(
             code: editedText,
             provenance: fragment.provenance
         )
         if let diagnostic = lintService.syntaxPrePass(prePassFragment) {
-            let reason = "\(diagnostic.message) (line \(diagnostic.line))"
-            return WriteBackResult(
-                outcome: .spliceError(.reparseFailed(reason)),
-                newData: nil
-            )
+            return WriteBackResult(outcome: .syntaxPrePassBlocked(diagnostic), newData: nil)
         }
 
         // Step 3: First validateReadable — CR-028/CR-030 guard.
@@ -323,7 +328,10 @@ public enum WriteBackCoordinator {
     // MARK: - Decode helpers
 
     /// Decode `text` in the given `format`, selecting the correct decoder.
-    private static func decodeTree(
+    ///
+    /// `internal` visibility allows `AppDriver.buildDiffView` to call this
+    /// instead of duplicating the switch (CR-031 readability fix).
+    static func decodeTree(
         _ text: String,
         format: StructuredFileFormat,
         document: Int
@@ -338,10 +346,29 @@ public enum WriteBackCoordinator {
     // MARK: - Blocking I/O helpers
 
     /// Read the file at `url` on the background I/O queue.
+    ///
+    /// Re-checks the file size immediately before reading to guard against a file
+    /// growing past `structuredFileSizeLimit` between the step-3 `validateReadable`
+    /// call and the actual read (CR-029). Throws an `IOSizeError` on oversize.
     private static func readFile(at url: URL) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             ioQueue.async {
                 do {
+                    // Re-check size to close the gap between validateReadable (step 3)
+                    // and the actual read (step 4). `.mappedIfSafe` is intentionally
+                    // avoided here: we need the byte count before mapping and the
+                    // file attr call is cheap compared to a multi-MiB read.
+                    let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+                    let fileSize = (attrs[.size] as? Int) ?? 0
+                    if fileSize > structuredFileSizeLimit {
+                        continuation.resume(
+                            throwing: ReadFileSizeError(
+                                message:
+                                    "File size \(fileSize) exceeds the \(structuredFileSizeLimit / (1024 * 1024)) MiB limit"
+                            )
+                        )
+                        return
+                    }
                     let data = try Data(contentsOf: url)
                     continuation.resume(returning: data)
                 } catch {
@@ -349,6 +376,12 @@ public enum WriteBackCoordinator {
                 }
             }
         }
+    }
+
+    /// Thrown by `readFile` when the file has grown past `structuredFileSizeLimit`.
+    private struct ReadFileSizeError: Error {
+        let message: String
+        var localizedDescription: String { message }
     }
 
     /// Write `data` atomically to `url` on the background I/O queue.
