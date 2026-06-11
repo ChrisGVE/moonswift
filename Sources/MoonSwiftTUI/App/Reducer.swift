@@ -6,6 +6,14 @@
 //       effects — effects are *requested*, not executed (ARCHITECTURE.md §5.1).
 // Upstream: AppState, AppEvent, Effect
 // Downstream: AppDriver (calls reduce(_:_:) on the UI thread)
+//
+// Inc-8 additions (ARCHITECTURE.md §10.8):
+//   - Four FocusState cases added: nvimPane/nvimSpawning/conflictModal/diffView.
+//   - reduceKey modal switch is now exhaustive (no default:) — every new case
+//     must be handled here at compile time.
+//   - nvim event arms: nvimReady, nvimProcessExited, nvimDetached, nvimUnavailable.
+//   - resize → nvimResize debounce (~50 ms) while nvim pane active.
+//   - <C-e> in code pane: spawnNvim; <C-e> in nvim pane: nvimDetach.
 
 import Foundation
 import MoonSwiftCore
@@ -37,13 +45,12 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     case .key(let code, let modifiers):
         return reduceKey(s, code: code, modifiers: modifiers)
 
-    case .resize:
-        // Terminal resize: no state change beyond what the renderer computes
-        // from the AppState + size parameter. We just need to trigger a render
-        // which the AppDriver does after every drain. Record the size if we
-        // ever need it in AppState — for now a no-op state change is sufficient
-        // to cause the AppDriver to re-render.
-        return (s, [])
+    case .resize(let size):
+        // Terminal resize: no broad state change needed — the renderer derives
+        // layout from AppState + the size parameter. We do need to notify nvim
+        // when its pane is active, but rapid resize bursts must be debounced to
+        // avoid flooding the RPC channel (~50 ms window, ARCHITECTURE.md §10.8).
+        return reduceResize(s, size: size)
 
     case .mouse:
         // Mouse events are no-op in P1 (vim-flavored keyboard-only navigation).
@@ -207,40 +214,26 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // Inc-9 will replace this arm: reduce → Effect.writeBack(fragment, editedText).
         return (s, [])
 
-    case .nvimUnavailable:
-        // nvim absent or too old; the $EDITOR fallback note and spawnEditorFallback
-        // Effect are wired in Inc-8 (ARCHITECTURE.md §10.8 Inc-8 "one-time fallback
-        // note" and "spawnEditorFallback"). Inc-7 records the event for exhaustiveness.
-        //
-        // Inc-8 will replace this arm: note-once transient + Effect.spawnEditorFallback.
-        return (s, [])
+    case .nvimUnavailable(let reason):
+        // nvim is absent or too old. Post the one-time status-bar note
+        // (ux-spec §7.4 step 6, exact string) and fall back to $EDITOR
+        // (Inc-10 wires Effect.spawnEditorFallback; Inc-8 posts the note).
+        return reduceNvimUnavailable(s, reason: reason)
 
-    case .nvimProcessExited:
-        // nvim exited. The cleanup Effect and "nvim exited unexpectedly" transient
-        // are wired in Inc-8 (ARCHITECTURE.md §10.8 Inc-8 "Effect.nvimCleanup on
-        // .nvimProcessExited AND .nvimDetached"). Inc-7 records the event for exhaustiveness.
-        //
-        // Inc-8 will replace this arm: emit Effect.nvimCleanup (always) and a
-        // transient on unexpected exit.
-        return (s, [])
+    case .nvimProcessExited(let exitCode):
+        // nvim exited — clean or crash. Always emit nvimCleanup; post a transient
+        // on unexpected (non-zero) exit (ARCHITECTURE.md §10.8, §10.6 error taxonomy).
+        return reduceNvimExited(s, exitCode: exitCode)
 
-    case .nvimReady:
-        // Session ready; focus transition to .nvimPane and session storage in
-        // AppDriver are wired in Inc-8 (ARCHITECTURE.md §10.8 Inc-8
-        // ".nvimPane + store session on nvimReady"). AppDriver's executeSingle
-        // for .nvimReady already stores the session on AppDriver.nvimSession.
-        // Inc-7 records the event so the exhaustive switch compiles.
-        //
-        // Inc-8 will replace this arm: s.focus = .nvimPane(NvimPaneState(…)).
-        return (s, [])
+    case .nvimReady(let session):
+        // Spawn + handshake succeeded. Transition to .nvimPane so the grid is shown.
+        // AppDriver already stored the session before calling reduce (see AppDriver
+        // drain loop); the reducer only changes focus and state.
+        return reduceNvimReady(s, session: session)
 
     case .nvimDetached:
-        // nvim acknowledged `:qa!`. The cleanup Effect is wired in Inc-8
-        // (ARCHITECTURE.md §10.8 Inc-8 "Effect.nvimCleanup on … .nvimDetached").
-        // Inc-7 records the event for exhaustiveness.
-        //
-        // Inc-8 will replace this arm: emit Effect.nvimCleanup.
-        return (s, [])
+        // nvim acknowledged `:qa!`. Tear down the session and return to the code pane.
+        return reduceNvimCleanupFocus(s, transientText: nil)
     }
 }
 
@@ -294,12 +287,13 @@ private func reduceNvimRedrawBatch(_ state: AppState, events: [NvimRedrawEvent])
         case .gridClear:
             s.nvimGrid!.clearAll()
 
-        case .modeChange:
-            // Mode lives on NvimPaneState, which is carried by the
-            // FocusState.nvimPane case added with the focus wiring in Inc-8
-            // (ARCHITECTURE.md §10.8) — until then a mode change has no
-            // consumer and the event is consumed without state change.
-            break
+        case .modeChange(let name, _):
+            // Mode is stored on NvimPaneState, carried by FocusState.nvimPane.
+            // Update it when the nvim pane is active (Inc-8); no-op otherwise.
+            if case .nvimPane(var paneState) = s.focus {
+                paneState.mode = name
+                s.focus = .nvimPane(paneState)
+            }
 
         case .flush:
             // Flush terminates the batch. No state change here — the batch is
@@ -308,6 +302,178 @@ private func reduceNvimRedrawBatch(_ state: AppState, events: [NvimRedrawEvent])
         }
     }
     return (s, [])
+}
+
+// MARK: - Nvim focus + session handlers (Inc-8)
+
+/// Handle `<C-e>` from the code pane: spawn nvim, transition to `.nvimSpawning`.
+///
+/// The code pane rect is derived from the current terminal size and pane layout
+/// stored in `AppState.terminalSize` and `AppState.paneLayout` via
+/// `computeLayout` (same function the renderer uses — keeps dimensions consistent).
+///
+/// Returns `(s, [])` without effect if no source is loaded in the code pane.
+private func reduceCodePaneSpawnNvim(_ s: AppState) -> (AppState, [Effect]) {
+    var s = s
+
+    // Require a loaded fragment to edit.
+    guard let sid = s.selection,
+        case .loaded(let fragment) = s.sources[sid]
+    else {
+        s.transient = TransientMessage(text: "No source selected to edit")
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+    }
+
+    let layout = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout)
+    s.focus = .nvimSpawning
+    return (s, [.spawnNvim(fragment, codePaneRect: layout.codePane)])
+}
+
+/// Handle `AppEvent.nvimReady`: transition focus to `.nvimPane`.
+///
+/// AppDriver already owns the session (stored before the reduce call). The
+/// reducer only updates `FocusState`; `NvimPaneState.attachedRect` is recomputed
+/// from the current layout so the pane state reflects the live dimensions.
+private func reduceNvimReady(_ s: AppState, session: NvimSession) -> (AppState, [Effect]) {
+    var s = s
+    _ = session  // The driver owns the session; reducer does not store it.
+    let layout = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout)
+    let paneState = NvimPaneState(attachedRect: layout.codePane)
+    s.focus = .nvimPane(paneState)
+    return (s, [])
+}
+
+/// Handle `AppEvent.nvimUnavailable`: post the one-time fallback note.
+///
+/// The exact normative string is from ux-spec §7.4 step 6:
+///   "nvim not found. Using $EDITOR for editing."
+/// Snapshot tests depend on this exact string — do not alter it.
+///
+/// `Effect.spawnEditorFallback` is wired in Inc-10 (ARCHITECTURE.md §10.8 Inc-10);
+/// Inc-8 only posts the transient note.
+private func reduceNvimUnavailable(_ s: AppState, reason: String) -> (AppState, [Effect]) {
+    var s = s
+    _ = reason  // Reason is logged by AppDriver; not surfaced in the transient.
+
+    guard !s.nvimFallbackNotedThisSession else {
+        // Already noted this session — suppress repeat (ARCHITECTURE.md §10.6).
+        return (s, [])
+    }
+
+    s.nvimFallbackNotedThisSession = true
+    // Normative string — ux-spec §7.4 step 6, exact spelling (snapshot-tested).
+    s.transient = TransientMessage(text: "nvim not found. Using $EDITOR for editing.")
+    // Reset to code pane so normal editing flow is available.
+    if case .nvimSpawning = s.focus {
+        s.focus = .pane(.codePane)
+    }
+    return (s, [armTickIfNeeded(s)].compactMap { $0 })
+}
+
+/// Handle `AppEvent.nvimProcessExited`: always emit cleanup; post a transient on
+/// unexpected (non-zero) exit.
+///
+/// Normative string (ARCHITECTURE.md §10.6 error taxonomy, §10.8):
+///   "nvim exited unexpectedly (code N). Edit lost."
+private func reduceNvimExited(_ s: AppState, exitCode: Int32) -> (AppState, [Effect]) {
+    var s = s
+
+    // Always clean up and restore focus.
+    var effects: [Effect] = [.nvimCleanup]
+
+    let isUnexpected = exitCode != 0
+    if isUnexpected {
+        s.transient = TransientMessage(
+            text: "nvim exited unexpectedly (code \(exitCode)). Edit lost."
+        )
+        if let tick = armTickIfNeeded(s) { effects.append(tick) }
+    }
+
+    // Restore focus and clear the nvim grid regardless.
+    return reduceNvimCleanupFocus(s, transientText: nil, extraEffects: effects)
+}
+
+/// Restore state to `.pane(.codePane)` and clear nvim-session fields.
+///
+/// Called by both `.nvimProcessExited` and `.nvimDetached` paths. `extraEffects`
+/// carries any effects already decided by the caller (e.g. `.nvimCleanup`).
+private func reduceNvimCleanupFocus(
+    _ s: AppState,
+    transientText: String?,
+    extraEffects: [Effect] = []
+) -> (AppState, [Effect]) {
+    var s = s
+    var effects: [Effect] = extraEffects
+
+    s.focus = .pane(.codePane)
+    s.nvimGrid = nil
+    s.nvimPendingResize = nil
+    s.nvimResizeDeadline = nil
+
+    if let text = transientText {
+        s.transient = TransientMessage(text: text)
+        if let tick = armTickIfNeeded(s) { effects.append(tick) }
+    }
+
+    // Ensure .nvimCleanup is in the effect list exactly once.
+    if !effects.contains(where: {
+        if case .nvimCleanup = $0 { return true }
+        return false
+    }) {
+        effects.append(.nvimCleanup)
+    }
+
+    return (s, effects)
+}
+
+/// Handle key events while `FocusState.nvimPane` is active.
+///
+/// - `<C-e>` detaches from nvim cleanly (emits `Effect.nvimDetach`).
+/// - All other keys are translated via `NvimKeyTranslator`; translatable keys
+///   produce `Effect.nvimInput(notation)`; untranslatable keys are dropped silently.
+private func reduceNvimPaneKey(
+    _ s: AppState,
+    code: KeyCode,
+    modifiers: KeyModifiers
+) -> (AppState, [Effect]) {
+
+    // <C-e> exits the nvim pane (ux-spec §7.4; symmetric with the enter binding).
+    if code == .char("e"), modifiers == .ctrl {
+        return (s, [.nvimDetach])
+    }
+
+    // Translate the key to nvim notation. Untranslatable keys (nil) are dropped.
+    guard let notation = NvimKeyTranslator.translate(code, modifiers: modifiers) else {
+        return (s, [])
+    }
+
+    return (s, [.nvimInput(notation)])
+}
+
+/// Handle terminal resize events.
+///
+/// - Always updates `AppState.terminalSize`.
+/// - When the nvim pane is active, starts the ~50 ms debounce window:
+///   stores the pending size, sets the deadline, and arms the tick.
+private func reduceResize(_ s: AppState, size: TerminalSize) -> (AppState, [Effect]) {
+    var s = s
+    s.terminalSize = size
+
+    // Only debounce for nvim pane; ignore 0×0 sentinel (AppDriver CR-019).
+    guard size.cols > 0 && size.rows > 0 else { return (s, []) }
+
+    switch s.focus {
+    case .nvimPane, .nvimSpawning:
+        // Store the latest size; the existing deadline extends automatically
+        // because each resize resets the deadline to "now + 50 ms".
+        s.nvimPendingResize = size
+        s.nvimResizeDeadline = Date(timeIntervalSinceNow: 0.050)
+        var effects: [Effect] = []
+        if let tick = armTickIfNeeded(s) { effects.append(tick) }
+        return (s, effects)
+    default:
+        return (s, [])
+    }
 }
 
 // MARK: - Lifecycle handler
@@ -345,6 +511,19 @@ private func reduceTick(_ s: AppState) -> (AppState, [Effect]) {
     // Advance spinner phase (wraps at 8 — braille set has 8 frames).
     s.navigator.spinnerPhase = (s.navigator.spinnerPhase + 1) % 8
 
+    // Fire the nvim-resize debounce once the ~50 ms window has passed.
+    // The deadline is set (or refreshed) by each .resize event while the nvim
+    // pane is active; we emit Effect.nvimResize exactly once per debounce window
+    // (ARCHITECTURE.md §10.8 Inc-8 "nvimResize debounce").
+    if let size = s.nvimPendingResize,
+        let deadline = s.nvimResizeDeadline,
+        Date() >= deadline
+    {
+        s.nvimPendingResize = nil
+        s.nvimResizeDeadline = nil
+        effects.append(.nvimResize(size))
+    }
+
     // Recompute whether the tick is still needed.
     if let tick = armTickIfNeeded(s) {
         effects.append(tick)
@@ -363,6 +542,8 @@ private func reduceKey(
 ) -> (AppState, [Effect]) {
 
     // Modal states capture all keys before global/pane dispatch.
+    // No `default:` arm — every FocusState case must be handled here.
+    // Adding a new FocusState case is a compile error until wired below.
     switch s.focus {
     case .helpOverlay:
         return reduceHelpOverlayKey(s, code: code, modifiers: modifiers)
@@ -370,6 +551,17 @@ private func reduceKey(
         return reducePickerKey(s, code: code, modifiers: modifiers)
     case .initForm:
         return reduceInitFormKey(s, code: code, modifiers: modifiers)
+    case .nvimPane:
+        return reduceNvimPaneKey(s, code: code, modifiers: modifiers)
+    case .nvimSpawning:
+        // Eat all input while the spawn handshake is in flight.
+        return (s, [])
+    case .conflictModal:
+        // Key map for [r]/[o]/[d]/[c] wired in Inc-9 (ARCHITECTURE.md §10.8 Inc-9).
+        return (s, [])
+    case .diffView:
+        // Key map (scroll, [c]ancel) wired in Inc-9 (ARCHITECTURE.md §10.8 Inc-9).
+        return (s, [])
     case .pane:
         break
     }
@@ -756,6 +948,10 @@ private func reduceCodePaneKey(
     // ]d — jump to last diagnostic (mapped as ] because [ and ] are separate keys)
     case (.char("]"), []):
         return jumpToDiagnostic(s, direction: .last)
+
+    // <C-e> — open current source in nvim (P4b, ux-spec §7.4).
+    case (.char("e"), .ctrl):
+        return reduceCodePaneSpawnNvim(s)
 
     default:
         return (s, [])
@@ -1417,6 +1613,16 @@ private func armTickIfNeeded(_ s: AppState) -> Effect? {
     // One tick fires after 500 ms; the tick handler clears `jumpPulseLine`.
     if s.codePane.jumpPulseLine != nil {
         let candidate = TickInterval.highlightPulse
+        if let m = minimum {
+            minimum = m < candidate ? m : candidate
+        } else {
+            minimum = candidate
+        }
+    }
+
+    // Nvim resize debounce (50 ms) while a pending resize is queued (Inc-8).
+    if s.nvimPendingResize != nil {
+        let candidate = TickInterval.nvimResize
         if let m = minimum {
             minimum = m < candidate ? m : candidate
         } else {

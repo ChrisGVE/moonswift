@@ -200,4 +200,11 @@ public enum TickInterval {
     /// Slowest interval: armed while a transient status-bar message is visible;
     /// the reducer cancels the transient after 1.5 s (ARCHITECTURE.md §3b).
     public static let transientExpiry: Duration = .milliseconds(1_500)
+
+    /// Debounce window for nvim resize events (Inc-8, ARCHITECTURE.md §10.8).
+    ///
+    /// When a terminal resize arrives while the nvim pane is active the reducer
+    /// stores the pending size and arms the tick at this interval; on the next
+    /// tick it emits `Effect.nvimResize` and clears the pending state.
+    public static let nvimResize: Duration = .milliseconds(50)
 }

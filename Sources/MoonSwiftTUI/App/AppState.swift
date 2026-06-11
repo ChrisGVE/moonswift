@@ -12,9 +12,14 @@
 // Picker state (PickerState): holds the tree-browse state while the picker
 // modal is open. Populated by reducePickerKey when .pickerTreeReady arrives;
 // cleared on save or cancel.
+//
+// Inc-8 additions (ARCHITECTURE.md §10.8):
+//   FocusState gains four nvim cases; AppState gains conflictModal, diffView,
+//   nvimFallbackNotedThisSession, and nvimPendingResize (debounce scratch).
 
 import Foundation
 import MoonSwiftCore
+import RatatuiKit
 
 // MARK: - PaneID
 
@@ -35,6 +40,10 @@ public enum PaneID: Sendable, Equatable {
 /// Modal states capture all keyboard input and overlay the pane system.
 /// Only one modal may be open at a time; modals are stacked conceptually
 /// but in P1 only one level of overlay exists.
+///
+/// The four P4 nvim cases are added in Inc-8 (ARCHITECTURE.md §10.8):
+/// `reduceKey`'s exhaustive switch — no `default:` arm — forces handling of
+/// every case in the same change-set as their reducer logic and tests.
 public enum FocusState: Sendable, Equatable {
     /// One of the three panes holds focus; no modal is open.
     case pane(PaneID)
@@ -45,10 +54,29 @@ public enum FocusState: Sendable, Equatable {
     /// The project-initialisation form is open.
     case initForm
 
-    // The four P4 nvim focus cases (nvimPane/nvimSpawning/conflictModal/
-    // diffView, ARCHITECTURE.md §10.4.3) are added with the focus wiring in
-    // Inc-8 (§10.8), where reduceKey's exhaustive switch forces their handling
-    // in the same change-set as their tests.
+    // MARK: P4 nvim focus cases (ARCHITECTURE.md §10.4.3)
+
+    /// The nvim embed grid is shown in the code pane and receives key input.
+    ///
+    /// `NvimPaneState` carries per-session state (attached rect, mode, modified
+    /// flag) that is only meaningful while the pane is active — hence it lives
+    /// here rather than as a top-level optional in `AppState`.
+    case nvimPane(NvimPaneState)
+
+    /// The nvim probe + attach sequence is in progress; a spinner is shown.
+    case nvimSpawning
+
+    /// The conflict-resolution modal is shown over the code pane.
+    ///
+    /// Key handling (`[r]/[o]/[d]/[c]`) is wired in Inc-9
+    /// (ARCHITECTURE.md §10.8 Inc-9).
+    case conflictModal(ConflictModalState)
+
+    /// The side-by-side diff view is open.
+    ///
+    /// Key handling (scroll, `[c]ancel`) is wired in Inc-9
+    /// (ARCHITECTURE.md §10.8 Inc-9).
+    case diffView(DiffViewPhase)
 }
 
 // MARK: - LaunchMode
@@ -673,11 +701,42 @@ public struct AppState: Sendable {
     /// Current rendered nvim cell grid. Non-nil while a nvim session is active
     /// and the first redraw batch has been applied. The renderer reads this
     /// independently of `FocusState`; it is top-level in `AppState` for that reason.
-    ///
-    /// The companion fields (`conflictModal`/`diffView`/
-    /// `nvimFallbackNotedThisSession`, §10.4.4) are added with the focus and
-    /// modal wiring in Inc-8/9 (§10.8) alongside their reducer logic and tests.
     public var nvimGrid: NvimGridState?
+
+    /// Non-nil while the conflict-resolution modal is open.
+    ///
+    /// The modal's key handling (`[r]/[o]/[d]/[c]`) is wired in Inc-9
+    /// (ARCHITECTURE.md §10.8 Inc-9). Set when `AppEvent.conflictDetected` arrives.
+    public var conflictModal: ConflictModalState?
+
+    /// Non-nil while the side-by-side diff view is open.
+    ///
+    /// The diff view's key handling is wired in Inc-9 (ARCHITECTURE.md §10.8 Inc-9).
+    public var diffView: DiffViewState?
+
+    /// True once the one-time "nvim not found" fallback note has been posted this
+    /// session. Prevents the transient from repeating on subsequent `nvimUnavailable`
+    /// events (ARCHITECTURE.md §10.6 "One-time fallback note"; ux-spec §7.4 step 6).
+    public var nvimFallbackNotedThisSession: Bool
+
+    /// Pending terminal resize for nvim, held until the ~50 ms debounce expires.
+    ///
+    /// Set when a `.resize` event arrives while focus is `.nvimPane` or
+    /// `.nvimSpawning`. The tick handler (armed at `TickInterval.nvimResize`)
+    /// checks the deadline and emits `Effect.nvimResize` once the window passes,
+    /// then clears this field (ARCHITECTURE.md §10.8 Inc-8 "nvimResize debounce").
+    public var nvimPendingResize: TerminalSize?
+
+    /// Deadline for the nvim-resize debounce; compared against `Date()` in the
+    /// tick handler.
+    public var nvimResizeDeadline: Date?
+
+    /// Most recent terminal size received from `.resize` events.
+    ///
+    /// Updated by the reducer on every `.resize` event so it is available for
+    /// computing `codePaneRect` when spawning nvim (Inc-8). Seeded to 80×24
+    /// so the reducer always has a valid fallback before the first resize event.
+    public var terminalSize: TerminalSize
 
     // MARK: Initialiser
 
@@ -704,7 +763,13 @@ public struct AppState: Sendable {
         paneLayout: PaneLayout = PaneLayout(),
         pickerState: PickerState? = nil,
         initFormState: InitFormState? = nil,
-        nvimGrid: NvimGridState? = nil
+        nvimGrid: NvimGridState? = nil,
+        conflictModal: ConflictModalState? = nil,
+        diffView: DiffViewState? = nil,
+        nvimFallbackNotedThisSession: Bool = false,
+        nvimPendingResize: TerminalSize? = nil,
+        nvimResizeDeadline: Date? = nil,
+        terminalSize: TerminalSize = TerminalSize(cols: 80, rows: 24)
     ) {
         self.launch = launch
         self.project = project
@@ -725,5 +790,11 @@ public struct AppState: Sendable {
         self.pickerState = pickerState
         self.initFormState = initFormState
         self.nvimGrid = nvimGrid
+        self.conflictModal = conflictModal
+        self.diffView = diffView
+        self.nvimFallbackNotedThisSession = nvimFallbackNotedThisSession
+        self.nvimPendingResize = nvimPendingResize
+        self.nvimResizeDeadline = nvimResizeDeadline
+        self.terminalSize = terminalSize
     }
 }
