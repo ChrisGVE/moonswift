@@ -96,6 +96,26 @@ public enum Effect: Sendable {
     /// if the edited file changed.
     case spawnEditor(URL)
 
+    /// Suspend the pump, leave the alternate screen, spawn `$EDITOR` on a temp
+    /// file containing the fragment text (structured files) or on the file
+    /// directly (whole `.lua` files), then run the syntax loop and write-back.
+    ///
+    /// This is the `$EDITOR` fallback path for the nvim-embed feature (F8b):
+    /// emitted by the reducer on `AppEvent.nvimUnavailable` when nvim is absent
+    /// or too old (ARCHITECTURE.md §10.8 Inc-10, ux-spec §7.3).
+    ///
+    /// AppDriver executes the full sequence synchronously on the UI thread:
+    ///   1. Write temp file (structured) or use existing file URL (whole `.lua`).
+    ///   2. Pump-park + terminal suspend + `$EDITOR` spawn + resume.
+    ///   3. Read edited bytes.
+    ///   4. Syntax pre-pass; if error inject comment block and repeat from 2.
+    ///   5. On clean: `await WriteBackCoordinator.write(…lintService:…)`.
+    ///   6. Post `.writeBackSucceeded` / `.writeBackFailed` / `.conflictDetected`.
+    ///
+    /// The existing `case spawnEditor(URL)` is retained unchanged for the
+    /// `<C-p>` project-file path. This case is the nvim-fallback edit path.
+    case spawnEditorFallback(LuaSourceFragment)
+
     // MARK: Nvim editing (P4 F8b, ARCHITECTURE.md §10.4.1)
 
     /// Spawn `nvim --embed --clean` for the given fragment, sized to codePaneRect.

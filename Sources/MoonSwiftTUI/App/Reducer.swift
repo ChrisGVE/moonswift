@@ -376,25 +376,38 @@ private func reduceNvimReady(_ s: AppState, session: NvimSession) -> (AppState, 
 ///   "nvim not found. Using $EDITOR for editing."
 /// Snapshot tests depend on this exact string — do not alter it.
 ///
-/// `Effect.spawnEditorFallback` is wired in Inc-10 (ARCHITECTURE.md §10.8 Inc-10);
-/// Inc-8 only posts the transient note.
+/// `Effect.spawnEditorFallback` is emitted here (Inc-10, ARCHITECTURE.md §10.8
+/// Inc-10) on every `nvimUnavailable` event so the user's edit session proceeds
+/// via `$EDITOR`. The one-time transient note is gated by
+/// `nvimFallbackNotedThisSession`; the fallback effect itself is unconditional.
 private func reduceNvimUnavailable(_ s: AppState, reason: String) -> (AppState, [Effect]) {
     var s = s
     _ = reason  // Reason is logged by AppDriver; not surfaced in the transient.
 
-    guard !s.nvimFallbackNotedThisSession else {
-        // Already noted this session — suppress repeat (ARCHITECTURE.md §10.6).
-        return (s, [])
-    }
-
-    s.nvimFallbackNotedThisSession = true
-    // Normative string — ux-spec §7.4 step 6, exact spelling (snapshot-tested).
-    s.transient = TransientMessage(text: "nvim not found. Using $EDITOR for editing.")
-    // Reset to code pane so normal editing flow is available.
+    // Reset focus so the renderer shows the code pane (not a stale .nvimSpawning).
     if case .nvimSpawning = s.focus {
         s.focus = .pane(.codePane)
     }
-    return (s, [armTickIfNeeded(s)].compactMap { $0 })
+
+    // Build the fallback effect when a fragment is available to edit.
+    // The fragment is re-derived from the current selection, which is still
+    // set (the nvimSpawning → nvimUnavailable path does not clear it).
+    var effects: [Effect] = []
+    if let sid = s.selection, case .loaded(let fragment) = s.sources[sid] {
+        effects.append(.spawnEditorFallback(fragment))
+    }
+
+    // One-time fallback note (ux-spec §7.4 step 6, exact string).
+    // Subsequent nvimUnavailable events still trigger the fallback effect above
+    // but do not re-post the transient (ARCHITECTURE.md §10.6).
+    if !s.nvimFallbackNotedThisSession {
+        s.nvimFallbackNotedThisSession = true
+        // Normative string — ux-spec §7.4 step 6, exact spelling (snapshot-tested).
+        s.transient = TransientMessage(text: "nvim not found. Using $EDITOR for editing.")
+        if let tick = armTickIfNeeded(s) { effects.append(tick) }
+    }
+
+    return (s, effects)
 }
 
 /// Handle `AppEvent.nvimProcessExited`: always emit cleanup; post a transient on

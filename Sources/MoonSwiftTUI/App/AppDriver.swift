@@ -637,6 +637,16 @@ public final class AppDriver: @unchecked Sendable {
                 }
             }
 
+        case .spawnEditorFallback(let fragment):
+            // $EDITOR fallback path for nvim-absent/too-old (ARCHITECTURE.md §10.8
+            // Inc-10, ux-spec §7.3). Reuses spawnEditorAndWait mechanics (pump-park,
+            // terminal suspend/resume). For structured-file fragments a temp file is
+            // created with O_EXCL / 0600; whole .lua files are opened directly.
+            // After the editor exits, the syntax loop injects a comment block on error
+            // and re-opens the editor until the text is clean or no-op (no $EDITOR).
+            // On success, write-back is dispatched exactly as Effect.writeBack does.
+            spawnEditorFallbackAndWait(fragment: fragment)
+
         case .buildDiffView(let fileURL, let expectedHash, let editedText, let fragment):
             // Build the DiffViewState off the UI thread (ARCHITECTURE.md §10.4.10).
             // Re-reads the on-disk file, re-locates the span via SpanLocator,
@@ -700,6 +710,195 @@ public final class AppDriver: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    // MARK: Editor fallback spawn (Inc-10)
+
+    /// Execute the full `$EDITOR` fallback sequence for the given source fragment.
+    ///
+    /// Implements ARCHITECTURE.md §10.8 Inc-10 and ux-spec §7.3:
+    ///
+    /// 1. For structured-file fragments: create a temp file in
+    ///    `FileManager.default.temporaryDirectory` with a UUID name, opened with
+    ///    `O_EXCL | O_WRONLY | O_CREAT` and mode 0600. A pre-existing file at
+    ///    the path is surfaced as `.writeBackFailed(.ioFailure(…))` and returns.
+    ///    For whole `.lua` files: use `fragment.provenance.file` directly.
+    /// 2. Cap `editedText` at `structuredFileSizeLimit` before the pre-pass.
+    /// 3. Syntax loop (ux-spec §7.3 §7):
+    ///    a. Spawn `$EDITOR <path>` via the existing `spawnEditorAndWait` mechanics
+    ///       (pump-park, terminal suspend/resume). Returns immediately on no `$EDITOR`.
+    ///    b. Read the edited bytes from the temp file (or the file directly).
+    ///    c. Run `LintService.syntaxPrePass`. On error: inject the normative
+    ///       comment block at the top of the file and loop back to (a). On success:
+    ///       break.
+    /// 4. Dispatch `WriteBackCoordinator.write(…lintService:…)` in a background
+    ///    `Task`, posting the appropriate `AppEvent` on completion — same events
+    ///    as `Effect.writeBack` (writeBackSucceeded / writeBackFailed /
+    ///    conflictDetected).
+    ///
+    /// Must be called from the UI thread (render/terminal-class, same constraint as
+    /// `spawnEditorAndWait`).
+    private func spawnEditorFallbackAndWait(fragment: LuaSourceFragment) {
+        // Resolve the project root early; no-op if unavailable.
+        guard let projectRoot = projectDirectoryURL() else {
+            channel.post(.writeBackFailed(.ioFailure("Project root unavailable")))
+            return
+        }
+
+        // Determine whether this is a structured-file fragment or a whole .lua file.
+        let isStructured = fragment.provenance.jsonpath != nil
+
+        // For structured fragments, create a temp file. For whole .lua files, edit
+        // the source file directly (same behaviour as the existing spawnEditor path).
+        let editURL: URL
+        if isStructured {
+            // Create temp file with a UUID name, O_EXCL, mode 0600.
+            // EEXIST on the UUID path is surfaced as an error (no retry loop).
+            let tmpDir = FileManager.default.temporaryDirectory
+            let name = "moonswift-\(UUID().uuidString).lua"
+            let url = tmpDir.appendingPathComponent(name)
+            let fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+            if fd == -1 {
+                let reason =
+                    errno == EEXIST
+                    ? "Temp file already exists: \(url.lastPathComponent)"
+                    : "Cannot create temp file: \(String(cString: strerror(errno)))"
+                channel.post(.writeBackFailed(.ioFailure(reason)))
+                return
+            }
+            // Write the fragment text to the temp file via the open fd, then close.
+            let fragmentData = Data(fragment.code.utf8)
+            let written = fragmentData.withUnsafeBytes { ptr in
+                write(fd, ptr.baseAddress, ptr.count)
+            }
+            close(fd)
+            if written < 0 {
+                channel.post(
+                    .writeBackFailed(.ioFailure("Cannot write temp file: \(url.lastPathComponent)"))
+                )
+                return
+            }
+            editURL = url
+        } else {
+            editURL = fragment.provenance.file
+        }
+
+        // Validate $EDITOR before entering the loop; spawnEditorAndWait posts its
+        // own transient and returns early when $EDITOR is absent or non-executable.
+        // We call it directly — any guard failure is handled inside that function.
+
+        // Skeleton path: if no lint service is injected, skip the pre-pass loop
+        // and post synthetic success immediately (same skeleton contract as writeBack).
+        guard let lint = lintService else {
+            spawnEditorAndWait(url: editURL)
+            let sid = state.selection
+            Task { [channel] in
+                if let sid { channel.post(.writeBackSucceeded(sid)) }
+            }
+            return
+        }
+
+        // Syntax loop — ux-spec §7.3 §7:
+        // Each iteration: park/suspend/spawn/resume (via spawnEditorAndWait),
+        // read file, syntax pre-pass. On error: inject comment block and loop.
+        // On success: break and dispatch write-back.
+        while true {
+            spawnEditorAndWait(url: editURL)
+
+            // Read the edited bytes from the temp file (or the source file).
+            let editedText: String
+            do {
+                let data = try Data(contentsOf: editURL)
+                // Cap at structuredFileSizeLimit before the pre-pass.
+                if data.count > structuredFileSizeLimit {
+                    channel.post(
+                        .writeBackFailed(.ioFailure("Edited text exceeds size limit"))
+                    )
+                    return
+                }
+                editedText = String(data: data, encoding: .utf8) ?? ""
+            } catch {
+                channel.post(
+                    .writeBackFailed(
+                        .ioFailure("Cannot read temp file: \(error.localizedDescription)"))
+                )
+                return
+            }
+
+            // Syntax pre-pass.
+            let prePassFrag = LuaSourceFragment(
+                code: editedText,
+                provenance: fragment.provenance
+            )
+            if let diag = lint.syntaxPrePass(prePassFrag) {
+                // Error: inject normative comment block (ux-spec §7.3) at the top
+                // of the temp file, then loop back to open the editor again.
+                let commentBlock = Self.syntaxErrorCommentBlock(diag)
+                let newText = commentBlock + editedText
+                do {
+                    try Data(newText.utf8).write(to: editURL, options: .atomic)
+                } catch {
+                    // If we cannot write back the comment, abort.
+                    channel.post(
+                        .writeBackFailed(
+                            .ioFailure(
+                                "Cannot annotate temp file: \(error.localizedDescription)"))
+                    )
+                    return
+                }
+                // Loop: re-open the editor with the annotated file.
+                continue
+            }
+
+            // Syntax clean — break out of the loop and proceed to write-back.
+            // Dispatch WriteBackCoordinator.write on a background Task (same shape
+            // as Effect.writeBack execution in executeSingle).
+            let capturedText = editedText
+            let capturedFragment = fragment
+            let sid = state.selection
+            Task { [channel] in
+                let result = await WriteBackCoordinator.write(
+                    fragment: capturedFragment,
+                    editedText: capturedText,
+                    projectRoot: projectRoot,
+                    lintService: lint,
+                    force: false
+                )
+                switch result.outcome {
+                case .success:
+                    if let sid { channel.post(.writeBackSucceeded(sid)) }
+                case .conflictDetected:
+                    channel.post(
+                        .conflictDetected(
+                            fileURL: capturedFragment.provenance.file,
+                            expectedHash: capturedFragment.provenance.contentHash,
+                            editedText: capturedText
+                        )
+                    )
+                case .spliceError(let err):
+                    channel.post(.writeBackFailed(.spliceError(err)))
+                case .validateReadableRejection(let rejection):
+                    channel.post(.writeBackFailed(.validateReadableRejection(rejection)))
+                case .ioFailure(let reason):
+                    channel.post(.writeBackFailed(.ioFailure(reason)))
+                }
+            }
+            return
+        }
+    }
+
+    /// Build the normative comment block injected at the top of a temp file when
+    /// the syntax pre-pass fails (ux-spec §7.3, snapshot-tested exact format).
+    ///
+    /// Format (two lines, terminated by newline):
+    /// ```lua
+    /// -- SYNTAX ERROR: <message> (line N)
+    /// -- Fix the error above, then save to continue. Delete this block to force-accept.
+    /// ```
+    static func syntaxErrorCommentBlock(_ diag: Diagnostic) -> String {
+        "-- SYNTAX ERROR: \(diag.message) (line \(diag.line))\n"
+            + "-- Fix the error above, then save to continue."
+            + " Delete this block to force-accept.\n"
     }
 
     // MARK: Editor spawn
