@@ -132,14 +132,13 @@ public struct NvimGridState: Sendable, Equatable {
         var col = colStart
         var lastHlId = 0
         for cell in eventCells {
-            // nvim omits hlId when it is the same as the previous cell's; the
-            // value in `cell.hlId` is 0 in that case but we carry the last
-            // non-zero hlId forward only if the text is non-empty (the protocol
-            // encodes "same as previous hl" by sending hlId=0 for continuation
-            // cells). However, the architecture spec models NvimCell.hlId as the
-            // literal value from the wire, where 0 always means "default". In
-            // practice nvim sends the real hlId in every cell where it changes,
-            // so we use cell.hlId directly and carry it for repeat runs.
+            // nvim ext_linegrid protocol (https://neovim.io/doc/user/ui.html#ui-linegrid):
+            // within a grid_line event, `hlId == 0` means "same highlight as the
+            // previous cell in this run" (carry semantics), NOT "default highlight".
+            // A real hlId of 0 (default palette entry) is only sent explicitly on
+            // the first cell or when the highlight changes back to the default; nvim
+            // never sends 0 to mean "same as previous" for the default id itself.
+            // We therefore carry `lastHlId` forward whenever `cell.hlId == 0`.
             let hlId = cell.hlId
             if hlId != 0 { lastHlId = hlId }
             let effectiveHlId = (hlId != 0) ? hlId : lastHlId
@@ -152,10 +151,16 @@ public struct NvimGridState: Sendable, Equatable {
         }
     }
 
-    // MARK: Apply grid_scroll (reference-shift, O(row-slice))
+    // MARK: Apply grid_scroll
 
-    /// Apply a `gridScroll` event using reference-shift semantics (O(1) in
-    /// terms of row-slice re-indexing rather than cell-by-cell copy).
+    /// Apply a `gridScroll` event by copying cells within the scroll region.
+    ///
+    /// Iterates over each row in the scroll range and copies columns
+    /// `left..<right` from the source row to the destination row, then blanks
+    /// the vacated rows. Time complexity is O((bot-top) × (right-left)) — a
+    /// cell-by-cell copy, not a reference shift. This matches the nvim
+    /// ext_linegrid scroll semantics documented at
+    /// https://neovim.io/doc/user/ui.html#ui-linegrid .
     ///
     /// Positive `rows` scrolls content up (rows move toward lower indices).
     /// Negative `rows` scrolls down (rows move toward higher indices).
@@ -257,7 +262,13 @@ public struct NvimPaneState: Sendable, Equatable {
 public struct ConflictModalState: Sendable, Equatable {
     /// The file to re-read at decision time.
     public let fileURL: URL
-    /// Hash captured at load time, for conflict re-check.
+    /// SHA-256 hash of the fragment's host file captured at load time.
+    ///
+    /// Stored as `SHA256Digest` (32 bytes) rather than the full file bytes
+    /// so AppState never carries up to 50 MiB of file content in memory. At
+    /// conflict-resolution time the file is re-read and its hash is compared
+    /// against this value to detect a second on-disk change since the modal
+    /// was shown (ARCHITECTURE.md §10.4.9).
     public let expectedHash: SHA256Digest
     /// The edited buffer content the user wants to preserve.
     public let editedText: String

@@ -102,7 +102,7 @@ struct EditorBridgeXDGTests {
         // Use /usr/bin/true — a real executable that exits immediately. The XDG
         // directory is created before Process.run(), so it exists after spawn().
         let supervisor = NvimProcessSupervisor()
-        try supervisor.spawn(path: "/usr/bin/true")
+        try supervisor.spawn(path: "/usr/bin/true") { _ in }
         defer { supervisor.teardown() }
 
         guard let xdgDir = supervisor.xdgSessionDir else {
@@ -119,7 +119,7 @@ struct EditorBridgeXDGTests {
     @Test("teardown removes the XDG session directory")
     func xdgDirRemovedOnTeardown() throws {
         let supervisor = NvimProcessSupervisor()
-        try supervisor.spawn(path: "/usr/bin/true")
+        try supervisor.spawn(path: "/usr/bin/true") { _ in }
 
         guard let xdgDir = supervisor.xdgSessionDir else {
             Issue.record("xdgSessionDir is nil after spawn()")

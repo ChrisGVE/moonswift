@@ -93,7 +93,11 @@ func unpackArray(_ data: Subdata, count: Int, compatibility: Bool) throws -> (
 func unpackMap(_ data: Subdata, count: Int, compatibility: Bool) throws -> (
     value: [MessagePackValue: MessagePackValue], remainder: Subdata
 ) {
-    var dict = [MessagePackValue: MessagePackValue](minimumCapacity: count)
+    // Vendor patch (MoonSwift): minimumCapacity hint removed. Reserving
+    // attacker-supplied `count` slots causes a large allocation before any
+    // element is validated; lazy growth is safe here because the framer already
+    // caps element counts (MsgpackRPCFramer.maxElements = 1_048_576).
+    var dict = [MessagePackValue: MessagePackValue]()
     var lastKey: MessagePackValue? = nil
 
     let (array, remainder) = try unpackArray(data, count: 2 * count, compatibility: compatibility)

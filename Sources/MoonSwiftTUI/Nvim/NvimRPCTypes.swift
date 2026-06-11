@@ -11,6 +11,10 @@
 //   ([2, method, params]); the client sends requests ([0, msgid, method, params])
 //   and notifications. RawRPCMessage models the inbound side.
 //
+// Specifications:
+//   msgpack format:   https://github.com/msgpack/msgpack/blob/master/spec.md
+//   msgpack-RPC wire: https://github.com/msgpack-rpc/msgpack-rpc/blob/master/spec.md
+//
 // Relationships:
 //   → NvimRPCClient.swift: consumes these types (deliver/parse seam)
 
@@ -43,7 +47,8 @@ public struct NvimWindow: Sendable, Equatable {
 
 /// A decoded msgpack-RPC message received from nvim's stdout stream.
 ///
-/// The wire format is:
+/// The wire format follows the msgpack-RPC specification
+/// (https://github.com/msgpack-rpc/msgpack-rpc/blob/master/spec.md):
 ///   Request (nvim→client, rare): `[0, msgid, method, params]`
 ///   Response (nvim→client):      `[1, msgid, error, result]`
 ///   Notification (nvim→client):  `[2, method, params]`
@@ -60,7 +65,7 @@ public enum RawRPCMessage: Sendable {
     /// Parse a top-level `MessagePackValue` (must be a 3- or 4-element array)
     /// into a `RawRPCMessage`. Returns nil for unrecognised shapes.
     public static func parse(from value: MessagePackValue) -> RawRPCMessage? {
-        guard case .array(let arr) = value else { return nil }
+        guard case .array(let arr) = value, !arr.isEmpty else { return nil }
 
         // Extract the integer type tag (element 0).
         let tag: Int64

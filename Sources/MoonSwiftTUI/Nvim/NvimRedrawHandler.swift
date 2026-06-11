@@ -18,6 +18,13 @@
 //   error: events are buffered until the next flush rather than posted
 //   partially (ARCHITECTURE.md §10.4.8).
 //
+//   Single-flush-per-post guarantee: although `handleRedraw` checks for flush
+//   inside both the single-element and multi-element branches, each branch posts
+//   at most once per flush seen — the buffer is cleared immediately after posting
+//   (`pending = []`). If two flush sub-events appear in one call (unusual but
+//   valid per spec), two separate batches are posted; the second batch's flush
+//   is the last event in its own (possibly empty) batch.
+//
 //   hl_attr_define carry: each batch may define new highlight IDs before using
 //   them in grid_line events. The handler carries hlId forward within a
 //   gridLine cell run — when a NvimCell.hlId is 0 (nvim's "same hl as
@@ -43,12 +50,35 @@ import MoonSwiftCore
 /// The handler accumulates events across multiple `redraw` notification calls
 /// (nvim may coalesce several logical batches into one call, or split them).
 /// A batch is posted to the `EventChannel` exactly once, when `.flush` is seen.
+///
+/// **Isolation contract:** `handleRedraw` and all private decode methods mutate
+/// `pending`. They must only ever be called from the `NvimRPCClient` actor's
+/// executor (i.e. as a registered `onNotification` handler). Calling them from
+/// any other context is a programming error detected at runtime in DEBUG builds
+/// by `assertCalledOnExpectedQueue` in `handleRedraw`.
 public final class NvimRedrawHandler: @unchecked Sendable {
 
     // MARK: - Dependencies
 
     /// The channel to post AppEvent.nvimRedrawBatch on flush.
     private let post: @Sendable ([NvimRedrawEvent]) -> Void
+
+    // MARK: - Isolation enforcement (DEBUG only)
+
+    /// Re-entrancy / wrong-thread detection for `pending` mutation.
+    ///
+    /// `handleRedraw` is the only mutable entry point; it must never be called
+    /// concurrently (which would indicate a call from outside the actor's
+    /// executor). In DEBUG builds we track the `pthread` identity of the first
+    /// call and assert it matches on every subsequent call. A mismatch means the
+    /// handler was called from a thread other than the `NvimRPCClient` actor's
+    /// cooperative-thread-pool thread, violating the isolation contract.
+    ///
+    /// This is intentionally lightweight (one atomic-ish flag check) so it does
+    /// not regress the handler's hot-path performance budget.
+    #if DEBUG
+        private var isolationThreadID: pthread_t?
+    #endif
 
     // MARK: - Mutable buffer (accessed only on the actor's executor)
 
@@ -81,6 +111,19 @@ public final class NvimRedrawHandler: @unchecked Sendable {
     /// When `.flush` is found, the buffered events (including the flush) are
     /// posted and the buffer is cleared.
     public func handleRedraw(params: [MessagePackValue]) {
+        #if DEBUG
+            let currentThread = pthread_self()
+            if let expected = isolationThreadID {
+                assert(
+                    pthread_equal(currentThread, expected) != 0,
+                    "NvimRedrawHandler.handleRedraw called from unexpected thread — "
+                        + "must only be called from the NvimRPCClient actor's executor"
+                )
+            } else {
+                isolationThreadID = currentThread
+            }
+        #endif
+
         for outerValue in params {
             guard case .array(let subArray) = outerValue,
                 !subArray.isEmpty,

@@ -292,8 +292,8 @@ struct NvimProcessSupervisorSpawnTests {
     func spawnThrowsForMissingPath() {
         let supervisor = NvimProcessSupervisor()
         // A path that definitely does not exist on any CI machine.
-        #expect(throws: (any Error).self) {
-            try supervisor.spawn(path: "/nonexistent/nvim-missing-12345")
+        #expect(throws: CocoaError.self) {
+            try supervisor.spawn(path: "/nonexistent/nvim-missing-12345") { _ in }
         }
     }
 }

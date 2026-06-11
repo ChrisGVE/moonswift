@@ -15,6 +15,10 @@
 //   complete values. Cap violations throw FramerError; the client closes the
 //   stdout pipe and posts AppEvent.nvimProcessExited(-1).
 //
+// Specifications:
+//   msgpack format:   https://github.com/msgpack/msgpack/blob/master/spec.md
+//   msgpack-RPC wire: https://github.com/msgpack-rpc/msgpack-rpc/blob/master/spec.md
+//
 // Design note — why a bespoke scanner rather than the vendored unpack() alone:
 //   unpack() cannot distinguish "truncated, wait for more bytes" from "header
 //   declares a multi-megabyte payload we must reject before reading it" — both
@@ -154,10 +158,12 @@ struct MsgpackRPCFramer {
 
         // fixarray.
         case 0x90...0x9f:
-            return try scanChildren(at: afterHeader, count: Int(header - 0x90), depth: depth, isMap: false)
+            return try scanChildren(
+                at: afterHeader, count: Int(header - 0x90), depth: depth, isMap: false)
         // fixmap.
         case 0x80...0x8f:
-            return try scanChildren(at: afterHeader, count: Int(header - 0x80), depth: depth, isMap: true)
+            return try scanChildren(
+                at: afterHeader, count: Int(header - 0x80), depth: depth, isMap: true)
         // array16 / array32.
         case 0xdc:
             guard let count = readUInt(2, at: afterHeader) else { return nil }

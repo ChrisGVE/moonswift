@@ -33,6 +33,7 @@
 //
 // Relationships:
 //   ← NvimProcessSupervisor.swift (Inc-2): calls attachPipes(stdin:stdout:)
+//   → NvimRPCClient+Reader.swift  (this file's extension): reader-thread methods
 //   → EditorBridge.swift          (Inc-6): calls request/notify/onNotification
 //   → AppDriver.swift             (Inc-6): calls shutdownReader() in teardown
 
@@ -85,26 +86,31 @@ public actor NvimRPCClient {
     // serial queue guards the stop flag; the semaphore is post-once.
 
     /// Serial queue that protects _stopReader.
-    nonisolated private let readerFlagQueue = DispatchQueue(
+    // internal (not private): accessed from NvimRPCClient+Reader.swift extension.
+    nonisolated let readerFlagQueue = DispatchQueue(
         label: "moonswift.nvim-rpc-reader-flag",
         qos: .utility
     )
     /// Backing storage for the stop flag; access only via readerFlagQueue.
-    nonisolated(unsafe) private var _stopReader: Bool = false
+    // internal: accessed from NvimRPCClient+Reader.swift extension.
+    nonisolated(unsafe) var _stopReader: Bool = false
 
-    nonisolated private var stopReaderFlag: Bool {
+    // internal: accessed from NvimRPCClient+Reader.swift extension.
+    nonisolated var stopReaderFlag: Bool {
         get { readerFlagQueue.sync { _stopReader } }
         set { readerFlagQueue.sync { _stopReader = newValue } }
     }
 
     /// Signalled by the reader thread when it has fully exited its loop.
-    nonisolated private let readerExitSemaphore = DispatchSemaphore(value: 0)
+    // internal: accessed from NvimRPCClient+Reader.swift extension.
+    nonisolated let readerExitSemaphore = DispatchSemaphore(value: 0)
 
     // MARK: - Logger
 
     // nonisolated so the reader thread (nvim-rpc-class) can log without
     // hopping to the actor executor. Logger.shared is thread-safe (os_log).
-    nonisolated private let log = Logger.shared
+    // internal: accessed from NvimRPCClient+Reader.swift extension.
+    nonisolated let log = Logger.shared
 
     // MARK: - Init
 
@@ -165,7 +171,9 @@ public actor NvimRPCClient {
                 .array(params),
             ]))
 
-        writeToStdin(frame)
+        // Fail immediately if the write fails rather than registering a
+        // continuation that would strand until the reader observes EOF.
+        guard writeToStdin(frame) else { throw NvimRPCError.connectionClosed }
 
         // Suspend and register the continuation. The continuation is resumed
         // by deliver(_:) on the actor executor — no lock needed.
@@ -182,8 +190,13 @@ public actor NvimRPCClient {
         } onCancel: {
             // onCancel runs in the cancelling context (arbitrary thread), so we
             // hop to the actor to safely remove and resume the continuation.
-            Task { [weak self] in
-                await self?.cancelPendingRequest(msgid: msgid)
+            //
+            // Strong self capture is safe here: the actor's lifetime is bounded
+            // by the session that owns it; the Task hop completes promptly
+            // (one actor dispatch) and holds no other resources, so there is
+            // no retain cycle — the Task itself is not retained by self.
+            Task { [self] in
+                await cancelPendingRequest(msgid: msgid)
             }
         }
 
@@ -194,14 +207,15 @@ public actor NvimRPCClient {
 
     /// Send a one-way msgpack-RPC notification (no response expected).
     ///
-    /// Encodes `[2, method, params]` and writes to stdin on the actor's
-    /// executor. Silently drops the write if stdin is already closed
-    /// (closed-stdin contract, ARCHITECTURE.md §10.4.6).
+    /// Declared `async` per the §10.4.6 interface specification. The body is
+    /// synchronous on the actor's executor; callers `await` for the actor-isolation
+    /// hop, not for I/O suspension. Silently drops the write if stdin is already
+    /// closed (closed-stdin contract, ARCHITECTURE.md §10.4.6).
     ///
     /// - Parameters:
     ///   - method: The notification method name.
     ///   - params: Notification parameters.
-    public func notify(method: String, params: [MessagePackValue]) {
+    public func notify(method: String, params: [MessagePackValue]) async {
         guard stdinOpen else { return }
 
         let frame = pack(
@@ -290,12 +304,18 @@ public actor NvimRPCClient {
     /// Called by the reader thread (via a Task hop) when it observes EOF or a
     /// framer cap violation. Sets stdinOpen=false so subsequent send attempts
     /// are dropped safely.
+    ///
+    /// Any request that was in-flight (continuation registered, waiting for a
+    /// response) at the time of EOF is resolved here with `connectionClosed`.
+    /// This means a write-back buffer fetch requested just before clean shutdown
+    /// surfaces as `NvimRPCError.connectionClosed` at the call site rather than
+    /// silently hanging. AppDriver maps that to `.writeBackFailed(.ioFailure)`.
     func readerDidObserveEOF() {
         guard stdinOpen else { return }
         stdinOpen = false
         log.debug("NvimRPCClient: reader observed EOF — stdin marked closed")
 
-        // Cancel all pending continuations so callers don't hang.
+        // Fail all pending continuations so callers don't hang indefinitely.
         let snapshot = pending
         pending.removeAll()
         for (_, cont) in snapshot {
@@ -324,117 +344,44 @@ public actor NvimRPCClient {
 
     // MARK: - Private: stdin write
 
-    /// Write `data` to the stdin FileHandle. On any write failure, marks stdin
-    /// as closed. All callers must check `stdinOpen` before calling this.
-    private func writeToStdin(_ data: Data) {
-        guard let handle = stdinWriteHandle else { return }
-        // FileHandle.write(_:) raises NSFileHandleOperationException (uncatchable)
-        // on a closed fd. The stdinOpen guard above is the only safe protection.
-        // If somehow we reach here on a bad fd (OS race), the process crashes —
-        // but that is prevented by the session-nil guard in AppDriver (§10.6).
-        handle.write(data)
-    }
-
-    // MARK: - Private: reader thread
-
-    /// Start the background reader thread that drains nvim's stdout pipe.
-    private func startReaderThread(stdoutPipe: Pipe) {
-        let fd = stdoutPipe.fileHandleForReading.fileDescriptor
-        // Capture only Sendable values: `self` (actor = Sendable), `fd` (Int32).
-        // runReaderLoop is nonisolated so calling it from the Thread body is safe
-        // without an async hop — it never touches actor-isolated state directly.
-        let thread = Thread { [weak self] in
-            self?.runReaderLoop(fd: fd)
+    /// Write `data` to stdin via POSIX `write(2)` with an EINTR retry loop.
+    ///
+    /// Returns `true` on full success, `false` on any error (EPIPE, EBADF,
+    /// short write). On failure also sets `stdinOpen = false`.
+    ///
+    /// `FileHandle.write(_:)` raises an uncatchable ObjC exception on a closed
+    /// fd; POSIX `write(2)` returns -1/EPIPE instead. F_SETNOSIGPIPE converts
+    /// SIGPIPE to a returnable error (same pattern as FakeNvimServer in tests).
+    ///
+    /// All callers must check `stdinOpen` before calling this.
+    @discardableResult
+    private func writeToStdin(_ data: Data) -> Bool {
+        guard let handle = stdinWriteHandle else {
+            stdinOpen = false
+            return false
         }
-        thread.name = "moonswift.nvim-rpc-reader"
-        thread.qualityOfService = .userInitiated
-        thread.start()
-    }
-
-    /// The reader loop. Runs entirely on the nvim-rpc-class thread.
-    ///
-    /// The loop uses a fixed 64 KiB buffer and blocking `read(2)` (POSIX).
-    /// This avoids the drawbacks of `availableData` (busy-polls) and
-    /// `readabilityHandler` (fires on an uncontrolled GCD queue).
-    ///
-    /// On ANY loop exit — EOF (read returns 0), read error, `FramerError`, or
-    /// the stop flag — the `defer` block first posts a Task hop that sets
-    /// `stdinOpen = false` and fails pending continuations
-    /// (`readerDidObserveEOF`, idempotent), then signals the semaphore so
-    /// `shutdownReader()` can return. The EOF notification MUST be
-    /// unconditional: if the stop flag is set before this thread first checks
-    /// it (a thread that starts late), the loop exits without ever reading —
-    /// skipping the notification would leave `stdinOpen == true` forever and
-    /// any later `request()` would suspend with no one to resume it.
-    ///
-    /// `nonisolated` because it runs on the nvim-rpc-class Thread, not on the
-    /// actor's executor. It accesses only `nonisolated` state (`stopReaderFlag`,
-    /// `readerExitSemaphore`, `log`) and communicates with actor-isolated state
-    /// exclusively through `Task { await self.deliver/readerDidObserveEOF }`.
-    nonisolated private func runReaderLoop(fd: Int32) {
-        let bufferSize = 64 * 1024
-        var buf = [UInt8](repeating: 0, count: bufferSize)
-        var framer = MsgpackRPCFramer()
-
-        defer {
-            signalEOF()
-            readerExitSemaphore.signal()
-        }
-
-        while !stopReaderFlag {
-            let n = buf.withUnsafeMutableBytes { ptr in
-                read(fd, ptr.baseAddress, bufferSize)
-            }
-
-            if n == 0 {
-                // EOF: nvim closed its stdout (clean exit or teardown).
-                log.debug("NvimRPCClient reader: EOF on nvim stdout")
-                return
-            }
-
-            if n < 0 {
-                // Error (EINTR is handled by retrying; other errors are fatal).
-                if errno == EINTR { continue }
-                log.debug("NvimRPCClient reader: read(2) error \(errno) — exiting loop")
-                return
-            }
-
-            let chunk = Data(buf[0..<n])
-            let decoded: [MessagePackValue]
-
-            do {
-                decoded = try framer.pushChecked(chunk)
-            } catch let e as FramerError {
-                log.debug("NvimRPCClient reader: framer cap violation \(e) — closing")
-                return
-            } catch {
-                log.debug("NvimRPCClient reader: unexpected framer error \(error) — closing")
-                return
-            }
-
-            for value in decoded {
-                guard let msg = RawRPCMessage.parse(from: value) else {
-                    log.debug(
-                        "NvimRPCClient reader: unrecognised msgpack-RPC shape — dropped"
-                    )
-                    continue
+        let fd = handle.fileDescriptor
+        _ = fcntl(fd, F_SETNOSIGPIPE, 1)
+        let ok: Bool = data.withUnsafeBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress, ptr.count > 0 else { return true }
+            var sent = 0
+            while sent < ptr.count {
+                let n = write(fd, base.advanced(by: sent), ptr.count - sent)
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    return false
                 }
-                // Enqueue delivery to the actor; the reader thread does not hold
-                // the actor lock — the Task wrapper is the only channel.
-                Task { [weak self] in
-                    await self?.deliver(msg)
-                }
+                sent += n
             }
+            return true
         }
+        if !ok {
+            stdinOpen = false
+            log.debug("NvimRPCClient: stdin write failed (errno \(errno)) — marking closed")
+        }
+        return ok
     }
 
-    /// Post an EOF notification to the actor from the reader thread.
-    /// `nonisolated` because it is called from `runReaderLoop` (nvim-rpc-class
-    /// thread). The actual state mutation happens inside `readerDidObserveEOF`
-    /// on the actor's executor via the Task hop.
-    nonisolated private func signalEOF() {
-        Task { [weak self] in
-            await self?.readerDidObserveEOF()
-        }
-    }
 }
+// Reader-thread methods (startReaderThread, runReaderLoop, postEOFToActor) live
+// in NvimRPCClient+Reader.swift to keep both files within the 400-line budget.

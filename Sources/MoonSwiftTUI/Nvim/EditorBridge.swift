@@ -10,24 +10,24 @@
 //   `nvimSession?` and delivered to the reducer via AppEvent.nvimReady.
 //
 //   Spawn ordering (binding — tested by EditorBridgeTests):
-//     1. probe()     — locate nvim; post .nvimUnavailable and return on failure
-//     2. spawn()     — fork nvim --embed --clean with XDG isolation
-//     3. onExit()    — wire the process-exit handler BEFORE attachPipes
-//     4. attachPipes — hand stdin/stdout to the RPC actor; starts reader thread
-//     5. nvim_ui_attach(width, height, {ext_linegrid:true})
-//     6. nvim_command("set noswapfile nomodeline shadafile=NONE laststatus=0")
+//     1. probe()            — locate nvim; post .nvimUnavailable and return on failure
+//     2. spawn(path:onExit:) — fork nvim --embed --clean; exit handler wired INSIDE
+//                             spawn() before process.run() — no race window
+//     3. attachPipes        — hand stdin/stdout to the RPC actor; starts reader thread
+//     4. nvim_ui_attach(width, height, {ext_linegrid:true})
+//     5. nvim_command("set noswapfile nomodeline shadafile=NONE laststatus=0")
 //        hardening BEFORE any buffer ops
-//     7. onNotification("moonswift_write", …)
+//     6. onNotification("moonswift_write", …)
 //        BEFORE nvim_create_autocmd (handler registered before the autocmd fires)
-//     8. buffer seed:
+//     7. buffer seed:
 //        - whole .lua file → nvim_buf_set_name(0, absolutePath)
 //        - structured fragment → nvim_buf_set_lines(0, 0, -1, false, lines)
 //          then nvim_buf_set_option(0, "filetype", "lua")
 //          then nvim_buf_set_option(0, "modified", false)
-//     9. nvim_create_autocmd("BufWriteCmd", {pattern="*",
+//     8. nvim_create_autocmd("BufWriteCmd", {pattern="*",
 //                            command="call rpcnotify(1,'moonswift_write')"})
-//    10. construct NvimSession(supervisor:, rpc:)
-//    11. post AppEvent.nvimReady(session) — never a direct write into AppDriver state
+//     9. construct NvimSession(supervisor:, rpc:)
+//    10. post AppEvent.nvimReady(session) — never a direct write into AppDriver state
 //
 //   XDG temp dir: created by NvimProcessSupervisor.spawn (mode 0700).
 //   Removed by NvimProcessSupervisor.teardown() (called on Effect.nvimCleanup).
@@ -135,8 +135,12 @@ public enum EditorBridge {
             let newRPC = NvimRPCClient()
 
             // Step 2: Spawn nvim with XDG isolation (creates the 0700 temp dir).
+            // The exit handler is passed directly into spawn() so it is installed
+            // on Process.terminationHandler before process.run() — no race window.
             do {
-                try newSupervisor.spawn(path: probeResult.path)
+                try newSupervisor.spawn(path: probeResult.path) { code in
+                    channel.post(.nvimProcessExited(exitCode: code))
+                }
             } catch {
                 channel.post(.nvimUnavailable("nvim spawn failed: \(error.localizedDescription)"))
                 return
@@ -154,16 +158,14 @@ public enum EditorBridge {
             stdoutPipe = so
         }
 
-        // Step 3: Register the exit handler BEFORE attachPipes so no exit event
-        // is missed between process start and pipe attachment.
-        supervisor.onExit { code in
-            channel.post(.nvimProcessExited(exitCode: code))
-        }
+        // (Production step 2 already wired the exit handler inside spawn().)
+        // For the test/override path the supervisor is a stub with no real process,
+        // so no exit handler registration is needed there.
 
-        // Step 4: Hand stdin/stdout to the actor; starts the nvim-rpc-reader thread.
+        // Step 3: Hand stdin/stdout to the actor; starts the nvim-rpc-reader thread.
         await rpc.attachPipes(stdin: stdinPipe, stdout: stdoutPipe)
 
-        // Step 5: nvim_ui_attach — declare dimensions and request ext_linegrid.
+        // Step 4: nvim_ui_attach — declare dimensions and request ext_linegrid.
         let width = Int(rect.width)
         let height = Int(rect.height)
         do {
@@ -182,20 +184,20 @@ public enum EditorBridge {
             return
         }
 
-        // Step 6: Hardening — must complete BEFORE any buffer operations so nvim
+        // Step 5: Hardening — must complete BEFORE any buffer operations so nvim
         // resolves the swapfile path before nvim_buf_set_name sets the buffer name.
         await rpc.notify(
             method: "nvim_command",
             params: [.string("set noswapfile nomodeline shadafile=NONE laststatus=0")]
         )
 
-        // Step 7: Register the write-back notification handler BEFORE installing
+        // Step 6: Register the write-back notification handler BEFORE installing
         // the autocmd that triggers it. This ordering guarantee is tested.
         await rpc.onNotification("moonswift_write") { _ in
             channel.post(.nvimWriteRequested)
         }
 
-        // Step 8: Seed the buffer based on fragment type.
+        // Step 7: Seed the buffer based on fragment type.
         if fragment.provenance.jsonpath == nil {
             // Whole .lua file: set the buffer name to the absolute path. nvim
             // reads the file itself; no nvim_buf_set_lines call is needed.
@@ -237,7 +239,7 @@ public enum EditorBridge {
             )
         }
 
-        // Step 9: Install the BufWriteCmd autocmd that intercepts `:w` and fires
+        // Step 8: Install the BufWriteCmd autocmd that intercepts `:w` and fires
         // the moonswift_write RPC notification. The body is a literal string with
         // no user input — no injection risk.
         do {
@@ -258,7 +260,7 @@ public enum EditorBridge {
             Logger.shared.debug("nvim_create_autocmd failed: \(error)")
         }
 
-        // Step 10–11: Construct NvimSession and post nvimReady.
+        // Steps 9–10: Construct NvimSession and post nvimReady.
         let session = NvimSession(supervisor: supervisor, rpc: rpc)
         channel.post(.nvimReady(session))
     }

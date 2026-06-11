@@ -509,4 +509,71 @@ struct NvimRPCClientTests {
         stdoutPipe.fileHandleForWriting.closeFile()
         client.shutdownReader()
     }
+
+    // MARK: Cancellation — CR-009
+
+    /// A suspended request whose calling Task is cancelled must:
+    ///   1. Throw `CancellationError` at the call site.
+    ///   2. Remove the continuation from `pending` (no leak).
+    ///
+    /// This exercises the `withTaskCancellationHandler` onCancel hop using a
+    /// strong `self` capture. The test confirms both outcomes: the error type
+    /// and that a subsequent conflicting msgid response is silently dropped
+    /// (pending is empty, so no second resume is possible).
+    @Test("cancelled request throws CancellationError and removes pending entry")
+    func cancelledRequestThrowsCancellationError() async throws {
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+
+        let client = NvimRPCClient()
+        await client.attachPipes(stdin: stdinPipe, stdout: stdoutPipe)
+
+        // Launch a request that will never get a response.
+        let requestTask = Task<MessagePackValue, Error> {
+            try await client.request(
+                method: "will_be_cancelled",
+                params: [],
+                responseDecoder: { v in v }
+            )
+        }
+
+        // Wait for the request frame to arrive on stdin so we know the
+        // continuation is registered before we cancel.
+        let (_, frames) = await pollStdinUntil(count: 1, stdinPipe: stdinPipe)
+        guard frames.count >= 1,
+            case .array(let arr) = frames[0],
+            let msgid = extractMsgid(arr[1])
+        else {
+            requestTask.cancel()
+            stdoutPipe.fileHandleForWriting.closeFile()
+            client.shutdownReader()
+            Issue.record("No request frame arrived before cancellation")
+            return
+        }
+
+        // Cancel the task — this fires the onCancel hop on the actor.
+        requestTask.cancel()
+
+        // The request must resolve as CancellationError within the deadline.
+        do {
+            _ = try await awaitWithTimeout(requestTask)
+            Issue.record("Expected CancellationError; got a successful result")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("Expected CancellationError; got \(error)")
+        }
+
+        // Deliver a late response for the same msgid to confirm `pending` is
+        // empty: the response must be dropped silently (logged as unknown msgid),
+        // and a second deliver must not double-resume or crash.
+        let lateResponse = responseBytes(msgid: msgid, error: .nil, result: .string("late"))
+        stdoutPipe.fileHandleForWriting.write(lateResponse)
+
+        // Small wait so the actor processes the late deliver before we shut down.
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        stdoutPipe.fileHandleForWriting.closeFile()
+        client.shutdownReader()
+    }
 }

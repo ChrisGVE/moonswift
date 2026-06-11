@@ -21,10 +21,11 @@ All 7 files from `Sources/MessagePack/` are included verbatim:
   ConvenienceInitializers.swift — init overloads for all types
   ConvenienceProperties.swift — typed accessor computed properties
 
-## MoonSwift vendor modifications (Swift 6 strict-concurrency compliance)
+## MoonSwift vendor modifications
 
 The upstream code predates Swift 6. The following minimal surgical edits were
-applied; each is marked with `// MoonSwift vendor note:` in the source:
+applied; each is marked with `// MoonSwift vendor note:` (Swift 6 edits) or
+`// Vendor patch (MoonSwift):` (security/correctness edits) in the source:
 
 1. `MessagePack.swift`: added `: Sendable` to the `MessagePackValue` enum
    declaration. All associated values (Bool, Int64, UInt64, Float, Double,
@@ -36,14 +37,21 @@ applied; each is marked with `// MoonSwift vendor note:` in the source:
    All stored properties (base: Data, baseStartIndex: Int, baseEndIndex: Int)
    are Sendable value types, so this is a semantically correct conformance.
 
-No other edits were made. The msgpack wire format encoded and decoded by
-these files is identical to upstream.
+3. `Unpack.swift` `unpackMap`: removed the `minimumCapacity: count` hint from
+   the dictionary initialiser. Reserving an attacker-supplied element count
+   forces a large allocation before any element is validated, enabling memory
+   exhaustion via a crafted msgpack map header. Lazy growth (empty init) is safe
+   because `MsgpackRPCFramer` already caps declared element counts at 1 048 576
+   before `unpackMap` is ever called.
+
+The msgpack wire format encoded and decoded by these files is identical to
+upstream.
 
 ## Upgrade policy
 
 To upgrade: fetch the new upstream commit, overwrite these 7 files, re-apply
-the two `: Sendable` additions, update this NOTICE. Verify round-trip tests
-remain green.
+all three patches above, update this NOTICE. Verify round-trip tests remain
+green.
 
 ## License
 

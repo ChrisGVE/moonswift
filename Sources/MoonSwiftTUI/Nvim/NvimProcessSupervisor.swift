@@ -26,6 +26,8 @@
 //     lives in NvimRPCClient, Inc-3).
 //
 // Relationships:
+//   → NvimProcessSupervisor+Probe.swift: probe logic (NvimProbeResult, probe(),
+//       runVersionProbe, parseVersion, meetsMinimumVersion)
 //   → NvimRPCClient.swift  (Inc-3): calls attachPipes(stdin:stdout:) after spawn
 //   → EditorBridge.swift   (Inc-6): constructs supervisor, calls spawn + onExit
 //   ← AppDriver            (Inc-6): calls teardown() on quit / nvimCleanup effect
@@ -34,18 +36,8 @@ import Darwin
 import Foundation
 import MoonSwiftCore
 
-// MARK: - Probe result
-
-/// The successful result of a nvim probe: a confirmed executable path and its
-/// parsed version tuple.
-///
-/// The tuple is not `Equatable` by default; tests compare `.0`/`.1` directly.
-public struct NvimProbeResult: Sendable {
-    /// Absolute path confirmed as executable with version ≥ (0, 9).
-    public let path: String
-    /// Parsed version `(major, minor)` from the first line of `nvim --version`.
-    public let version: (Int, Int)
-}
+// NvimProbeResult struct and probe() methods live in
+// NvimProcessSupervisor+Probe.swift.
 
 // MARK: - NvimProcessSupervisor
 
@@ -53,16 +45,21 @@ public struct NvimProbeResult: Sendable {
 ///
 /// Lifecycle:
 ///   1. `probe()` — find a suitable nvim binary (call once before spawn).
-///   2. `spawn(path:)` — fork nvim with XDG isolation and start the stderr drain.
-///   3. `onExit(_:)` — register the exit callback before spawn or immediately after.
-///   4. Hand `stdinPipe`/`stdoutPipe` to `NvimRPCClient.attachPipes`.
-///   5. `teardown()` — 9-step clean shutdown (called by the nvimCleanup Effect).
+///   2. `spawn(path:onExit:)` — fork nvim with XDG isolation, wire the exit handler
+///      before `Process.run()`, and start the stderr drain.
+///   3. Hand `stdinPipe`/`stdoutPipe` to `NvimRPCClient.attachPipes`.
+///   4. `teardown()` — 9-step clean shutdown (called by the nvimCleanup Effect).
+///
+/// Note: `onExit` is passed directly to `spawn(path:onExit:)` so it is installed
+/// on `Process.terminationHandler` **before** `process.run()` is called.
+/// This closes the race where a fast-exiting child fires its termination handler
+/// before the caller can set the exit handler post-spawn.
 public final class NvimProcessSupervisor: @unchecked Sendable {
 
     // MARK: - Constants
 
     /// Maximum stderr bytes captured per session before the drain pipe is closed.
-    private static let stderrCapBytes = 1 * 1024 * 1024  // 1 MiB
+    private static let stderrCapBytes = 1024 * 1024  // 1 MiB
 
     /// Chunk size for the stderr drain loop.
     private static let stderrChunkSize = 4 * 1024  // 4 KiB
@@ -76,24 +73,29 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
     // @unchecked Sendable justification is in the file header.
 
     nonisolated(unsafe) private var process: Process?
-    nonisolated(unsafe) private var exitHandler: (@Sendable (Int32) -> Void)?
 
     /// The stdin Pipe. Transferred to NvimRPCClient.attachPipes; supervisor
     /// never writes to stdin itself.
-    nonisolated(unsafe) var stdinPipe: Pipe?
+    ///
+    /// `private(set)`: set once in `spawn(path:onExit:)`; the module can read
+    /// it (EditorBridge, tests) but external code cannot accidentally overwrite
+    /// it and break the set-once invariant that justifies `@unchecked Sendable`.
+    nonisolated(unsafe) private(set) var stdinPipe: Pipe?
 
     /// The stdout Pipe. NvimRPCClient's reader thread consumes the read end;
     /// supervisor retains the handle so teardown can close it after the join.
-    nonisolated(unsafe) var stdoutPipe: Pipe?
+    ///
+    /// Same `private(set)` rationale as `stdinPipe`.
+    nonisolated(unsafe) private(set) var stdoutPipe: Pipe?
 
     nonisolated(unsafe) private var stderrPipe: Pipe?
 
     /// The per-session XDG temp directory, removed in teardown step 9.
     ///
-    /// Exposed as `internal` (not `private`) so `@testable` tests can verify
-    /// that the directory is created at spawn time and removed by teardown,
-    /// without requiring a real nvim binary (ARCHITECTURE.md §10.8 Inc-7 tests).
-    nonisolated(unsafe) var xdgSessionDir: URL?
+    /// `private(set)`: set once in spawn; readable by `@testable` tests to
+    /// verify the directory lifecycle without requiring a real nvim binary
+    /// (ARCHITECTURE.md §10.8 Inc-7 tests).
+    nonisolated(unsafe) private(set) var xdgSessionDir: URL?
 
     // MARK: - Stop flags (written once in teardown; read on drain/reader threads)
 
@@ -121,76 +123,6 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
 
     public init() {}
 
-    // MARK: - Probe
-
-    /// Probe for nvim, searching in priority order (ARCHITECTURE.md §10.4.5).
-    ///
-    /// Public parameterless entry point — delegates to the injectable seam.
-    /// Call this before `spawn(path:)`; if it returns nil, fall back to $EDITOR.
-    public static func probe() -> NvimProbeResult? {
-        probe(
-            environment: ProcessInfo.processInfo.environment,
-            isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) },
-            fileExists: { FileManager.default.fileExists(atPath: $0) },
-            versionProbe: { runVersionProbe(path: $0) }
-        )
-    }
-
-    /// Testability seam: injectable probe logic.
-    ///
-    /// - Parameters:
-    ///   - environment: The process environment dict (inject to override NVIM_PATH/PATH).
-    ///   - isExecutableFile: Predicate for executable check (inject a fake for tests).
-    ///   - fileExists: Predicate for existence check (inject a fake for tests).
-    ///   - versionProbe: Runs `<path> --version` and returns the first output line.
-    ///                   Return nil to simulate a run failure.
-    static func probe(
-        environment: [String: String],
-        isExecutableFile: (String) -> Bool,
-        fileExists: (String) -> Bool,
-        versionProbe: (String) -> String?
-    ) -> NvimProbeResult? {
-        // Build the candidate list in priority order.
-        var candidates: [String] = []
-
-        // Step 1: NVIM_PATH override — absolute path + executable guard only.
-        // A relative or non-executable value is silently skipped (spec: log debug).
-        if let envPath = environment["NVIM_PATH"] {
-            if envPath.hasPrefix("/") && fileExists(envPath) && isExecutableFile(envPath) {
-                candidates.append(envPath)
-            } else {
-                Logger.shared.debug(
-                    "NvimProcessSupervisor: NVIM_PATH '\(envPath)' rejected "
-                        + "(not absolute, not found, or not executable); continuing search"
-                )
-            }
-        }
-
-        // Steps 2–4: Well-known package-manager install locations.
-        candidates.append(contentsOf: [
-            "/opt/homebrew/bin/nvim",  // Apple Silicon Homebrew
-            "/usr/local/bin/nvim",  // Intel Homebrew
-            "/opt/local/bin/nvim",  // MacPorts
-        ])
-
-        // Step 5: Each absolute component of $PATH.
-        if let pathVar = environment["PATH"] {
-            for dir in pathVar.split(separator: ":").map(String.init) where dir.hasPrefix("/") {
-                candidates.append("\(dir)/nvim")
-            }
-        }
-
-        // Evaluate candidates in order; return the first that passes all checks.
-        for path in candidates {
-            guard fileExists(path), isExecutableFile(path) else { continue }
-            guard let version = parseVersion(from: versionProbe(path)) else { continue }
-            guard meetsMinimumVersion(version) else { continue }
-            return NvimProbeResult(path: path, version: version)
-        }
-
-        return nil
-    }
-
     // MARK: - Spawn
 
     /// Spawn `nvim --embed --clean` with per-session XDG isolation.
@@ -199,8 +131,16 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
     /// mode 0700 and sets XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_STATE_HOME to it
     /// before calling `process.run()`.
     ///
+    /// The `onExit` handler is wired to `Process.terminationHandler` **before**
+    /// `process.run()` is called so a fast-exiting child cannot fire the handler
+    /// while `onExit` is still nil. The handler is invoked on Foundation's private
+    /// terminationHandler queue and must only post to EventChannel.
+    ///
+    /// - Parameters:
+    ///   - path: Absolute path to the nvim executable.
+    ///   - onExit: Called with the process exit code when nvim terminates.
     /// - Throws: if `Process.run()` fails (binary missing, permission denied).
-    public func spawn(path: String) throws {
+    public func spawn(path: String, onExit: @Sendable @escaping (Int32) -> Void) throws {
         let sessionDir = try createXDGSessionDir()
         xdgSessionDir = sessionDir
 
@@ -227,9 +167,11 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
         env["XDG_STATE_HOME"] = xdgPath
         proc.environment = env
 
-        // Wire terminationHandler before run() so no exit event is missed.
-        proc.terminationHandler = { [weak self] p in
-            self?.exitHandler?(p.terminationStatus)
+        // Wire terminationHandler BEFORE run() — the handler captures `onExit`
+        // by value (not by reference to self), so no synchronization is needed
+        // and there is no window between run() and handler assignment.
+        proc.terminationHandler = { p in
+            onExit(p.terminationStatus)
         }
 
         try proc.run()
@@ -238,33 +180,41 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
         startStderrDrain(pipe: stderr)
     }
 
-    // MARK: - Exit callback
-
-    /// Register the handler called when nvim exits.
-    ///
-    /// The handler is invoked on Foundation's private terminationHandler queue
-    /// (not the nvim-rpc-class thread). It must only post to EventChannel.
-    public func onExit(_ handler: @Sendable @escaping (Int32) -> Void) {
-        exitHandler = handler
-    }
-
     // MARK: - Teardown (9-step sequence per ARCHITECTURE.md §10.4.5)
 
     /// Clean shutdown of the nvim process and all associated resources.
     ///
+    /// **Precondition:** the caller must call `NvimRPCClient.shutdownReader()` first
+    /// (which requires the stdout write-end to already be closed so the reader's
+    /// blocking `read(2)` returns EOF). Violating this ordering means the reader
+    /// thread is still live when step 8 closes the stdout read-end, causing EBADF.
+    ///
     /// Step 1 (nil AppDriver.nvimSession) happens in AppDriver/Effect.nvimCleanup
     /// before this function is called — it is not repeated here.
+    ///
+    /// This method is idempotent: a second call after the first completes is a
+    /// safe no-op (the `process` field is cleared to nil under `stderrFlagQueue`
+    /// at the start of the first call).
     public func teardown() {
-        guard let proc = process else { return }
+        // Double-teardown guard: atomically take ownership of `process`. A second
+        // concurrent or sequential call sees nil and returns immediately, preventing
+        // double-SIGTERM, double-close, and double-directory removal.
+        let procOrNil: Process? = stderrFlagQueue.sync {
+            guard let p = process else { return nil }
+            process = nil  // clear under the queue so a racing teardown call returns nil
+            return p
+        }
+        guard let proc = procOrNil else { return }
 
-        // Step 2: Signal the stderr-drain thread to stop.
+        // Step 2: Signal the stderr-drain thread to stop AND close the read-end
+        // so that the drain thread's blocking read(2) returns immediately (EOF)
+        // rather than waiting for nvim to close stderr. Without this, the drain
+        // thread can block past the 200 ms join deadline and the subsequent fd
+        // close (step 8) races the still-live drain thread on the same fd.
         stopStderrFlag = true
-        // (The reader-thread stop flag is owned by NvimRPCClient; it calls its own
-        //  join before teardown proceeds past attachPipes, so no action needed here.)
+        stderrPipe?.fileHandleForReading.closeFile()
 
-        // Step 3: Wait for the stderr-drain thread (max 200 ms) before closing pipes.
-        // This prevents an EBADF / uncatchable NSFileHandleOperationException that
-        // would occur if we closed the pipe while the thread is blocked in read(2).
+        // Step 3: Wait for the stderr-drain thread (max 200 ms).
         let deadline = DispatchTime.now() + NvimProcessSupervisor.threadJoinTimeoutSeconds
         _ = stderrExitSemaphore.wait(timeout: deadline)
 
@@ -283,9 +233,10 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
         // Step 7: Cancel the SIGKILL workitem — process already exited.
         killItem.cancel()
 
-        // Step 8: Close stdout and stderr pipes (both drain threads already joined).
+        // Step 8: Close stdout pipe read-end (stderr read-end closed in step 2).
+        // The reader thread has already been joined by the caller's shutdownReader()
+        // call before teardown() — see API precondition above.
         stdoutPipe?.fileHandleForReading.closeFile()
-        stderrPipe?.fileHandleForReading.closeFile()
 
         // Step 9: Remove the per-session XDG temp directory.
         if let dir = xdgSessionDir {
@@ -309,19 +260,27 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
     // MARK: - Private: stderr drain thread
 
     private func startStderrDrain(pipe: Pipe) {
-        let handle = pipe.fileHandleForReading
+        // Capture the fd *before* starting the thread so the drain thread never
+        // calls handle.fileDescriptor on a potentially-already-closed handle.
+        // teardown() owns the closeFile() call; the thread only uses the raw fd.
+        let fd = pipe.fileHandleForReading.fileDescriptor
         let thread = Thread { [weak self] in
-            self?.runStderrDrain(handle: handle)
+            self?.runStderrDrain(fd: fd)
         }
         thread.name = "moonswift.nvim-stderr-drain"
         thread.qualityOfService = .utility
         thread.start()
     }
 
-    private func runStderrDrain(handle: FileHandle) {
+    private func runStderrDrain(fd: Int32) {
         // Fixed-size 4 KiB read(2) loop (ARCHITECTURE.md §10.6 Logging): bounds
         // per-read memory and returns 0 at EOF when nvim closes its stderr.
-        let fd = handle.fileDescriptor
+        //
+        // The stderr read-end is owned by teardown() (step 2), which closes it
+        // to produce EOF and unblock read(2). The drain thread must NOT close it
+        // — teardown already did, and a second close raises an uncatchable ObjC
+        // exception. We work with the raw fd (captured before thread start) to
+        // avoid calling handle.fileDescriptor on an already-closed FileHandle.
         var buffer = [UInt8](repeating: 0, count: NvimProcessSupervisor.stderrChunkSize)
         var totalBytes = 0
 
@@ -329,75 +288,22 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
             let n = buffer.withUnsafeMutableBytes {
                 read(fd, $0.baseAddress, NvimProcessSupervisor.stderrChunkSize)
             }
-            if n <= 0 { break }  // 0 = EOF (nvim closed stderr); <0 = error
+            if n <= 0 { break }  // 0 = EOF (read-end closed by teardown); <0 = error
 
             totalBytes += n
             if totalBytes > NvimProcessSupervisor.stderrCapBytes {
                 log.debug(
                     "NvimProcessSupervisor: stderr cap (~1 MiB) reached; "
-                        + "closing stderr drain to bound memory"
+                        + "stopping stderr drain to bound memory"
                 )
                 break
             }
         }
 
-        handle.closeFile()
+        // teardown() owns closeFile(); do not close the fd here.
         stderrExitSemaphore.signal()
     }
 
-    // MARK: - Private: version helpers
-
-    /// Run `<path> --version` and return the first line of stdout.
-    ///
-    /// Returns nil if the process cannot be launched or produces no output.
-    private static func runVersionProbe(path: String) -> String? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: path)
-        proc.arguments = ["--version"]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()  // discard stderr during probe
-
-        do {
-            try proc.run()
-        } catch {
-            return nil
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-
-        guard let output = String(data: data, encoding: .utf8) else { return nil }
-        return output.components(separatedBy: "\n").first
-    }
-
-    /// Parse a version tuple from the first line of `nvim --version`.
-    ///
-    /// Expected format: `NVIM v<major>.<minor>.<patch>` (e.g. `NVIM v0.9.5`).
-    /// Returns nil for any format that does not match.
-    static func parseVersion(from line: String?) -> (Int, Int)? {
-        guard let line else { return nil }
-
-        // The first token of the first line is always "NVIM"; second is "v<x.y.z>".
-        let tokens = line.split(separator: " ")
-        guard tokens.count >= 2 else { return nil }
-
-        let versionToken = tokens[1]
-        guard versionToken.hasPrefix("v") else { return nil }
-
-        let parts = versionToken.dropFirst().split(separator: ".")
-        guard parts.count >= 2,
-            let major = Int(parts[0]),
-            let minor = Int(parts[1])
-        else { return nil }
-
-        return (major, minor)
-    }
-
-    /// Returns true if `version` is at least (0, 9).
-    private static func meetsMinimumVersion(_ version: (Int, Int)) -> Bool {
-        if version.0 > 0 { return true }
-        if version.0 == 0 { return version.1 >= 9 }
-        return false
-    }
 }
+// Probe logic (NvimProbeResult, probe(), runVersionProbe, parseVersion,
+// meetsMinimumVersion) lives in NvimProcessSupervisor+Probe.swift.
