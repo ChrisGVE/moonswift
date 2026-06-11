@@ -79,6 +79,14 @@ public final class AppDriver: @unchecked Sendable {
     /// events while non-nil to flush any buffered output lines.
     private var activeCoalescer: Coalescer?
 
+    // MARK: Nvim session (P4 F8b, ARCHITECTURE.md §10.6)
+
+    /// The live nvim session, set on `.nvimReady` and cleared at the start of
+    /// `Effect.nvimCleanup` execution (before any async teardown). Clearing it
+    /// first prevents in-flight `Effect.nvimInput` tasks from writing to a
+    /// closing FileHandle (`NSFileHandleOperationException` is uncatchable).
+    var nvimSession: NvimSession?
+
     // MARK: State
 
     private var state: AppState
@@ -195,6 +203,14 @@ public final class AppDriver: @unchecked Sendable {
                 // .runFinished was posted, so no output is lost here.
                 if case .runFinished = event {
                     activeCoalescer = nil
+                }
+
+                // Capture the nvim session from nvimReady before the reduce call
+                // so it is available immediately for subsequent effects in the same
+                // drain batch. AppDriver is the authoritative owner of nvimSession
+                // (ARCHITECTURE.md §10.4.6 NvimSession ownership note).
+                if case .nvimReady(let session) = event {
+                    nvimSession = session
                 }
 
                 let (newState, effects) = reduce(state, event)
@@ -461,6 +477,66 @@ public final class AppDriver: @unchecked Sendable {
             // Copy text to the system clipboard via pbcopy (ux-spec §2.3 bottom-pane `y`).
             // Purely additive: spawn pbcopy, write text to stdin, let it exit.
             yankToPasteboard(text)
+
+        // MARK: Nvim effects (P4 F8b, ARCHITECTURE.md §10.4.1, §10.6)
+
+        case .spawnNvim(let fragment, let rect):
+            // Launch the EditorBridge spawn sequence on a background Task.
+            // Explicit [channel] capture — never capture self (CR-013).
+            Task { [channel] in
+                await EditorBridge.spawn(fragment: fragment, rect: rect, channel: channel)
+            }
+
+        case .nvimInput(let keyNotation):
+            // Forward a key-notation string to the running nvim instance.
+            // Guard with the session reference captured synchronously on the UI
+            // thread; if teardown already nil-ed the session this is a no-op.
+            guard let session = nvimSession else { return }
+            Task { [channel] in
+                await session.rpc.notify(
+                    method: "nvim_input",
+                    params: [.string(keyNotation)]
+                )
+                // nvim_input is fire-and-forget; no response expected.
+                _ = channel  // Satisfy capture for potential future use.
+            }
+
+        case .nvimDetach:
+            // Send `:qa!` to detach; post .nvimDetached after the notify returns.
+            guard let session = nvimSession else { return }
+            Task { [channel] in
+                await session.rpc.notify(
+                    method: "nvim_command",
+                    params: [.string(":qa!")]
+                )
+                channel.post(.nvimDetached)
+            }
+
+        case .nvimResize(let size):
+            // Fire-and-forget resize notification. Debouncing is applied by Inc-8's
+            // reducer dispatch; at this layer we just forward the call.
+            guard let session = nvimSession else { return }
+            Task {
+                await session.rpc.notify(
+                    method: "nvim_ui_try_resize",
+                    params: [
+                        .int(Int64(size.cols)),
+                        .int(Int64(size.rows)),
+                    ]
+                )
+            }
+
+        case .nvimCleanup:
+            // Step 1 (ARCHITECTURE.md §10.4.5): nil the session reference
+            // synchronously before any async work to prevent in-flight nvimInput
+            // tasks from writing to closing pipes.
+            guard let session = nvimSession else { return }
+            nvimSession = nil
+            // Shut down the RPC reader thread, then tear down the process.
+            Task {
+                session.rpc.shutdownReader()
+                session.supervisor.teardown()
+            }
         }
     }
 

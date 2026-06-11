@@ -193,10 +193,54 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     case .projectFileWritten(let projectURL, let error):
         return reduceProjectFileWritten(s, projectURL: projectURL, error: error)
 
-    // MARK: Nvim editing (P4 F8b, ARCHITECTURE.md §10.4.8)
+    // MARK: Nvim editing (P4 F8b, ARCHITECTURE.md §10.4.2, §10.4.8, §10.8)
 
     case .nvimRedrawBatch(let events):
         return reduceNvimRedrawBatch(s, events: events)
+
+    case .nvimWriteRequested:
+        // BufWriteCmd fired. The write-back Effect (Effect.writeBack) is wired in
+        // Inc-9 (ARCHITECTURE.md §10.8 Inc-9) alongside the WriteBackCoordinator
+        // integration and conflict-modal state. Inc-7 records the event so the
+        // exhaustive switch compiles with the new AppEvent case present.
+        //
+        // Inc-9 will replace this arm: reduce → Effect.writeBack(fragment, editedText).
+        return (s, [])
+
+    case .nvimUnavailable:
+        // nvim absent or too old; the $EDITOR fallback note and spawnEditorFallback
+        // Effect are wired in Inc-8 (ARCHITECTURE.md §10.8 Inc-8 "one-time fallback
+        // note" and "spawnEditorFallback"). Inc-7 records the event for exhaustiveness.
+        //
+        // Inc-8 will replace this arm: note-once transient + Effect.spawnEditorFallback.
+        return (s, [])
+
+    case .nvimProcessExited:
+        // nvim exited. The cleanup Effect and "nvim exited unexpectedly" transient
+        // are wired in Inc-8 (ARCHITECTURE.md §10.8 Inc-8 "Effect.nvimCleanup on
+        // .nvimProcessExited AND .nvimDetached"). Inc-7 records the event for exhaustiveness.
+        //
+        // Inc-8 will replace this arm: emit Effect.nvimCleanup (always) and a
+        // transient on unexpected exit.
+        return (s, [])
+
+    case .nvimReady:
+        // Session ready; focus transition to .nvimPane and session storage in
+        // AppDriver are wired in Inc-8 (ARCHITECTURE.md §10.8 Inc-8
+        // ".nvimPane + store session on nvimReady"). AppDriver's executeSingle
+        // for .nvimReady already stores the session on AppDriver.nvimSession.
+        // Inc-7 records the event so the exhaustive switch compiles.
+        //
+        // Inc-8 will replace this arm: s.focus = .nvimPane(NvimPaneState(…)).
+        return (s, [])
+
+    case .nvimDetached:
+        // nvim acknowledged `:qa!`. The cleanup Effect is wired in Inc-8
+        // (ARCHITECTURE.md §10.8 Inc-8 "Effect.nvimCleanup on … .nvimDetached").
+        // Inc-7 records the event for exhaustiveness.
+        //
+        // Inc-8 will replace this arm: emit Effect.nvimCleanup.
+        return (s, [])
     }
 }
 

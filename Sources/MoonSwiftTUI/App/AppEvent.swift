@@ -197,17 +197,46 @@ public enum AppEvent: Sendable {
     /// file URL; on failure `error` carries the reason (used for a transient).
     case projectFileWritten(projectURL: URL?, error: String?)
 
-    // MARK: Nvim editing (P4 F8b)
+    // MARK: Nvim editing (P4 F8b, ARCHITECTURE.md §10.4.2)
 
     /// A complete redraw batch from the nvim-rpc reader thread. Posted by
     /// NvimRedrawHandler exactly once per terminating `.flush` sub-event
     /// (ARCHITECTURE.md §10.4.8 flush invariant).
-    ///
-    /// The remaining nvim lifecycle events (nvimReady, nvimWriteRequested,
-    /// write-back and conflict results, …) arrive with EditorBridge in Inc-7
-    /// and the modal wiring in Inc-8/9 (ARCHITECTURE.md §10.8), where their
-    /// reducer handling and tests land in the same change-set.
     case nvimRedrawBatch([NvimRedrawEvent])
+
+    /// The BufWriteCmd autocmd fired — the user pressed `:w` inside nvim.
+    ///
+    /// Posted by the `moonswift_write` notification handler registered in
+    /// EditorBridge.spawn (ARCHITECTURE.md §10.3c). The reducer responds by
+    /// emitting `Effect.writeBack` (wired in Inc-9).
+    case nvimWriteRequested
+
+    /// nvim is absent or too old to use; the fallback path should activate.
+    ///
+    /// Payload is a human-readable reason string (e.g. "nvim not found" or
+    /// "nvim 0.7 < 0.9 minimum"). The reducer emits `Effect.spawnEditorFallback`
+    /// in Inc-8; Inc-7 records the event for compile-forced exhaustiveness.
+    case nvimUnavailable(String)
+
+    /// nvim exited — either a clean `:qa!` exit or an unexpected crash.
+    ///
+    /// Posted by `NvimProcessSupervisor.onExit` (registered in EditorBridge.spawn).
+    /// The reducer emits `Effect.nvimCleanup` and, on unexpected exit, a transient
+    /// error message (Inc-8 wiring).
+    case nvimProcessExited(exitCode: Int32)
+
+    /// The nvim spawn + handshake sequence completed successfully.
+    ///
+    /// Carries the live session (supervisor + RPC actor). AppDriver stores it
+    /// as `nvimSession`; the reducer transitions focus to `.nvimPane` (Inc-8).
+    case nvimReady(NvimSession)
+
+    /// nvim acknowledged the `:qa!` detach command.
+    ///
+    /// Posted by AppDriver after the `nvim_command ":qa!"` notify completes
+    /// (see `Effect.nvimDetach` execution body). The reducer emits
+    /// `Effect.nvimCleanup` (Inc-8).
+    case nvimDetached
 }
 
 // MARK: - HighlightSpan

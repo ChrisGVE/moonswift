@@ -89,7 +89,11 @@ public final class NvimProcessSupervisor: @unchecked Sendable {
     nonisolated(unsafe) private var stderrPipe: Pipe?
 
     /// The per-session XDG temp directory, removed in teardown step 9.
-    nonisolated(unsafe) private var xdgSessionDir: URL?
+    ///
+    /// Exposed as `internal` (not `private`) so `@testable` tests can verify
+    /// that the directory is created at spawn time and removed by teardown,
+    /// without requiring a real nvim binary (ARCHITECTURE.md §10.8 Inc-7 tests).
+    nonisolated(unsafe) var xdgSessionDir: URL?
 
     // MARK: - Stop flags (written once in teardown; read on drain/reader threads)
 

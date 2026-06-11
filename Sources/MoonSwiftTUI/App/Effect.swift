@@ -4,12 +4,14 @@
 //       the sole exit from purity: the reducer returns them; the AppDriver
 //       executes them. Nothing impure happens inside reduce() or render().
 //       Signatures match ARCHITECTURE.md §5.1 exactly.
-// Upstream: MoonSwiftCore (LuaSourceFragment, SourceID, RunConfig), AppEvent
+// Upstream: MoonSwiftCore (LuaSourceFragment, SourceID, RunConfig), AppEvent,
+//           RatatuiKit (Rect, TerminalSize — nvim effects)
 // Downstream: AppDriver (executes), Reducer (returns), TickSource (driven by
 //             startTick/stopTick)
 
 import Foundation
 import MoonSwiftCore
+import RatatuiKit
 
 // MARK: - Effect
 
@@ -92,6 +94,41 @@ public enum Effect: Sendable {
     /// park handshake). Posts `.sourceLoaded` / `.sourceFailed` after return
     /// if the edited file changed.
     case spawnEditor(URL)
+
+    // MARK: Nvim editing (P4 F8b, ARCHITECTURE.md §10.4.1)
+
+    /// Spawn `nvim --embed --clean` for the given fragment, sized to codePaneRect.
+    ///
+    /// AppDriver executes this by launching EditorBridge.spawn in a background Task.
+    /// The Task posts either `.nvimUnavailable` (probe failure) or `.nvimReady`
+    /// (successful handshake) via the EventChannel.
+    case spawnNvim(LuaSourceFragment, codePaneRect: Rect)
+
+    /// Forward a key-notation string to the running nvim instance via
+    /// `nvim_input`. No-op if no session is active (session already nil-guarded
+    /// by AppDriver before the Task fires).
+    case nvimInput(String)
+
+    /// Detach from the running nvim instance cleanly via `nvim_command ":qa!"`.
+    ///
+    /// AppDriver posts `.nvimDetached` after the notify completes. The reducer
+    /// emits `.nvimCleanup` on `.nvimDetached` (Inc-8).
+    case nvimDetach
+
+    /// Resize the running nvim UI (fire-and-forget `nvim_ui_try_resize`).
+    ///
+    /// Debouncing (~50 ms) is applied by AppDriver to avoid flooding nvim during
+    /// rapid terminal-resize events. Wired in Inc-8.
+    case nvimResize(TerminalSize)
+
+    /// Tear down the active nvim session: stop the reader thread, wait for nvim
+    /// to exit, close the pipes, and nil `AppDriver.nvimSession`.
+    ///
+    /// Emitted by the reducer on both `.nvimProcessExited` AND `.nvimDetached`
+    /// (Inc-8 wiring). AppDriver executes it synchronously at the start of the
+    /// effect (nil session before async teardown) to prevent in-flight nvimInput
+    /// tasks from writing to a closing FileHandle.
+    case nvimCleanup
 
     // MARK: Tick source
 
