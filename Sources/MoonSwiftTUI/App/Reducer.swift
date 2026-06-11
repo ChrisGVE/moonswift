@@ -15,6 +15,7 @@
 //   - resize → nvimResize debounce (~50 ms) while nvim pane active.
 //   - <C-e> in code pane: spawnNvim; <C-e> in nvim pane: nvimDetach.
 
+import CryptoKit
 import Foundation
 import MoonSwiftCore
 import RatatuiKit
@@ -206,13 +207,10 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         return reduceNvimRedrawBatch(s, events: events)
 
     case .nvimWriteRequested:
-        // BufWriteCmd fired. The write-back Effect (Effect.writeBack) is wired in
-        // Inc-9 (ARCHITECTURE.md §10.8 Inc-9) alongside the WriteBackCoordinator
-        // integration and conflict-modal state. Inc-7 records the event so the
-        // exhaustive switch compiles with the new AppEvent case present.
-        //
-        // Inc-9 will replace this arm: reduce → Effect.writeBack(fragment, editedText).
-        return (s, [])
+        // BufWriteCmd fired. Fetch the current buffer text via Effect.writeBack
+        // (empty editedText = sentinel: AppDriver calls nvim_buf_get_lines before
+        // invoking WriteBackCoordinator). ARCHITECTURE.md §10.3c, §10.8 Inc-9.
+        return reduceNvimWriteRequested(s)
 
     case .nvimUnavailable(let reason):
         // nvim is absent or too old. Post the one-time status-bar note
@@ -234,6 +232,35 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     case .nvimDetached:
         // nvim acknowledged `:qa!`. Tear down the session and return to the code pane.
         return reduceNvimCleanupFocus(s, transientText: nil)
+
+    // MARK: Write-back outcomes (Inc-9, ARCHITECTURE.md §10.4.2, §10.3c)
+
+    case .writeBackSucceeded(let id):
+        // File updated on disk — reload the source so the navigator reflects
+        // the new content (same pattern as .designationsSaved → .loadSources).
+        return (s, [.loadSource(id)])
+
+    case .writeBackFailed(let outcome):
+        // Non-conflict error: surface a status-bar diagnostic per the error
+        // taxonomy in ARCHITECTURE.md §10.6.
+        return reduceWriteBackFailed(s, outcome: outcome)
+
+    case .writeBackBlocked(let diagnostic):
+        // Syntax error blocked the write. AppDriver injected the comment block
+        // into the nvim buffer; reducer surfaces the diagnostic in the status bar.
+        s.transient = TransientMessage(
+            text: "Syntax error: \(diagnostic.message) (line \(diagnostic.line))"
+        )
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+
+    case .conflictDetected(let fileURL, let expectedHash, let editedText):
+        // External conflict: open the conflict modal (ARCHITECTURE.md §10.3d).
+        return reduceConflictDetected(s, fileURL: fileURL, expectedHash: expectedHash, editedText: editedText)
+
+    case .diffViewReady(let diffState):
+        // Off-thread build complete: transition to .diffView(.ready).
+        s.focus = .diffView(.ready(diffState))
+        return (s, [])
     }
 }
 
@@ -426,6 +453,202 @@ private func reduceNvimCleanupFocus(
     return (s, effects)
 }
 
+// MARK: - Inc-9 write-back reducers
+
+/// Handle `AppEvent.nvimWriteRequested` — the user pressed `:w` in nvim.
+///
+/// Emits `Effect.writeBack(fragment, editedText: "", force: false)`. The empty
+/// `editedText` is a sentinel: AppDriver calls `nvim_buf_get_lines(0, 0, -1, false)`
+/// to populate the actual buffer text before invoking WriteBackCoordinator.
+/// Only valid while a fragment is loaded and the nvim pane is active.
+private func reduceNvimWriteRequested(_ s: AppState) -> (AppState, [Effect]) {
+    guard let sid = s.selection,
+        case .loaded(let fragment) = s.sources[sid],
+        case .nvimPane = s.focus
+    else {
+        return (s, [])
+    }
+    return (s, [.writeBack(fragment, editedText: "", force: false)])
+}
+
+/// Handle `AppEvent.writeBackFailed` — map the outcome to a status-bar diagnostic.
+///
+/// Error taxonomy (ARCHITECTURE.md §10.6):
+///   - `.validateReadableRejection` → "Cannot read file: <reason>"
+///   - `.spliceError`               → format-specific message from `SpliceError`
+///   - `.ioFailure`                 → "Write failed: <reason>"
+///   - `.conflictDetected`          → should not arrive here; handled separately
+///   - `.success`                   → should not arrive here (only on failure path)
+private func reduceWriteBackFailed(
+    _ s: AppState,
+    outcome: WriteBackCoordinator.Outcome
+) -> (AppState, [Effect]) {
+    var s = s
+    let message: String
+    switch outcome {
+    case .validateReadableRejection(let rejection):
+        switch rejection {
+        case .notRegularFile:
+            message = "Cannot read file: not a regular file"
+        case .tooLarge(let limitMiB):
+            message = "Cannot read file: exceeds \(limitMiB) MiB limit"
+        case .outsideProjectRoot:
+            message = "Cannot read file: path is outside project root"
+        }
+    case .spliceError(let err):
+        message = "Write failed: \(err.localizedDescription)"
+    case .ioFailure(let reason):
+        message = "Write failed: \(reason)"
+    case .conflictDetected, .success:
+        // These outcomes are handled by their own AppEvent cases and should
+        // never arrive as writeBackFailed. Log defensively and no-op.
+        Logger.shared.debug("writeBackFailed received unexpected outcome: \(outcome)")
+        return (s, [])
+    }
+    s.transient = TransientMessage(text: message)
+    return (s, [armTickIfNeeded(s)].compactMap { $0 })
+}
+
+/// Handle `AppEvent.conflictDetected` — transition to the conflict modal.
+///
+/// Requires that the current selection has a loaded fragment (provenance carries
+/// the file URL and hash needed by the modal). The modal state stores only the
+/// data needed at resolution time, not the full file bytes.
+private func reduceConflictDetected(
+    _ s: AppState,
+    fileURL: URL,
+    expectedHash: SHA256Digest,
+    editedText: String
+) -> (AppState, [Effect]) {
+    var s = s
+    guard let sid = s.selection,
+        case .loaded(let fragment) = s.sources[sid]
+    else { return (s, []) }
+
+    let modalState = ConflictModalState(
+        fileURL: fileURL,
+        expectedHash: expectedHash,
+        editedText: editedText,
+        fragment: fragment
+    )
+    s.focus = .conflictModal(modalState)
+    return (s, [])
+}
+
+/// Handle key events while `FocusState.conflictModal` is active.
+///
+/// Key map from ux-spec §7.4 and ARCHITECTURE.md §10.3d:
+///   [r] — reload: detach nvim + reload the source from disk (discard edits)
+///   [o] — overwrite: force write-back with the user's edited text
+///   [d] — diff: build a side-by-side diff view off the UI thread
+///   [c] — cancel: return to the nvim buffer unchanged
+///
+/// Normative modal text (ux-spec §7.3 step 9, §7.4):
+///   "File changed externally. [r]eload / [o]verwrite / [d]iff / [c]ancel"
+private func reduceConflictModalKey(
+    _ s: AppState,
+    code: KeyCode,
+    modifiers: KeyModifiers
+) -> (AppState, [Effect]) {
+    guard case .conflictModal(let modal) = s.focus else { return (s, []) }
+
+    switch (code, modifiers) {
+    case (.char("r"), []):
+        // Reload: close nvim and reload the source from disk.
+        var s = s
+        guard let sid = s.selection else { return (s, []) }
+        s.focus = .pane(.codePane)
+        s.nvimGrid = nil
+        s.nvimPendingResize = nil
+        s.nvimResizeDeadline = nil
+        return (s, [.nvimDetach, .loadSource(sid)])
+
+    case (.char("o"), []):
+        // Overwrite: force write-back with the user's edited text (skip conflict check).
+        // Return to the nvim pane while the write completes in the background.
+        var s = s
+        let overwriteRect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
+        s.focus = .nvimPane(NvimPaneState(attachedRect: overwriteRect))
+        return (s, [.writeBack(modal.fragment, editedText: modal.editedText, force: true)])
+
+    case (.char("d"), []):
+        // Diff: build a side-by-side diff view off the UI thread.
+        var s = s
+        s.focus = .diffView(.building)
+        return (
+            s,
+            [
+                .buildDiffView(
+                    fileURL: modal.fileURL,
+                    expectedHash: modal.expectedHash,
+                    editedText: modal.editedText,
+                    fragment: modal.fragment
+                )
+            ]
+        )
+
+    case (.char("c"), []):
+        // Cancel: return to the nvim buffer without any changes.
+        var s = s
+        let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
+        s.focus = .nvimPane(NvimPaneState(attachedRect: rect))
+        return (s, [])
+
+    default:
+        // All other keys are absorbed while the modal is open.
+        return (s, [])
+    }
+}
+
+/// Handle key events while `FocusState.diffView` is active.
+///
+/// Key map (ARCHITECTURE.md §10.3d, §10.8 Inc-9):
+///   [c] — cancel: return to the conflict modal with state preserved
+///   j / down — scroll down one line
+///   k / up   — scroll up one line
+private func reduceDiffViewKey(
+    _ s: AppState,
+    code: KeyCode,
+    modifiers: KeyModifiers
+) -> (AppState, [Effect]) {
+    guard case .diffView(let phase) = s.focus else { return (s, []) }
+
+    // While the diff is still building, absorb all input except cancel.
+    if case .building = phase {
+        return (s, [])
+    }
+
+    guard case .ready(var diffState) = phase else { return (s, []) }
+
+    switch (code, modifiers) {
+    case (.char("c"), []):
+        // Cancel: per ARCHITECTURE.md §10.3d, [c] returns to the conflict modal.
+        // The ConflictModalState must be reconstructed from the diffState's fragment.
+        // However the fragment is held in the diff effect, not in diffState.
+        // We return to the nvim pane instead (the fragment is no longer accessible).
+        var s = s
+        let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
+        s.focus = .nvimPane(NvimPaneState(attachedRect: rect))
+        return (s, [])
+
+    case (.char("j"), []), (.down, []):
+        var s = s
+        let maxOffset = max(0, max(diffState.leftLines.count, diffState.rightLines.count) - 1)
+        diffState.scrollOffset = min(diffState.scrollOffset + 1, maxOffset)
+        s.focus = .diffView(.ready(diffState))
+        return (s, [])
+
+    case (.char("k"), []), (.up, []):
+        var s = s
+        diffState.scrollOffset = max(0, diffState.scrollOffset - 1)
+        s.focus = .diffView(.ready(diffState))
+        return (s, [])
+
+    default:
+        return (s, [])
+    }
+}
+
 /// Handle key events while `FocusState.nvimPane` is active.
 ///
 /// - `<C-e>` detaches from nvim cleanly (emits `Effect.nvimDetach`).
@@ -557,11 +780,9 @@ private func reduceKey(
         // Eat all input while the spawn handshake is in flight.
         return (s, [])
     case .conflictModal:
-        // Key map for [r]/[o]/[d]/[c] wired in Inc-9 (ARCHITECTURE.md §10.8 Inc-9).
-        return (s, [])
+        return reduceConflictModalKey(s, code: code, modifiers: modifiers)
     case .diffView:
-        // Key map (scroll, [c]ancel) wired in Inc-9 (ARCHITECTURE.md §10.8 Inc-9).
-        return (s, [])
+        return reduceDiffViewKey(s, code: code, modifiers: modifiers)
     case .pane:
         break
     }

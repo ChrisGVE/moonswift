@@ -10,6 +10,7 @@
 //             EventPump (produces key/resize/mouse/paste events),
 //             TickSource (produces .tick), AppDriver (posts service results)
 
+import CryptoKit
 import Foundation
 import MoonSwiftCore
 import RatatuiKit
@@ -237,6 +238,52 @@ public enum AppEvent: Sendable {
     /// (see `Effect.nvimDetach` execution body). The reducer emits
     /// `Effect.nvimCleanup` (Inc-8).
     case nvimDetached
+
+    // MARK: Write-back outcomes (Inc-9, ARCHITECTURE.md §10.4.2, §10.3c)
+
+    /// Write-back completed: the file was updated on disk.
+    ///
+    /// `id` identifies the source that was written so the reducer can post a
+    /// `.loadSource(id)` reload effect. Posted by AppDriver after
+    /// `WriteBackCoordinator.write` returns `.success` (ARCHITECTURE.md §10.3c).
+    case writeBackSucceeded(SourceID)
+
+    /// Write-back failed with a non-conflict error.
+    ///
+    /// The reducer maps each outcome to a status-bar diagnostic string:
+    ///   - `.validateReadableRejection` → "Cannot read file: <reason>"
+    ///   - `.spliceError`               → format-specific diagnostic
+    ///   - `.ioFailure`                 → "Write failed: <reason>"
+    /// (ARCHITECTURE.md §10.6 error taxonomy, §10.8 Inc-9).
+    case writeBackFailed(WriteBackCoordinator.Outcome)
+
+    /// Write-back blocked by a syntax error in the edited buffer.
+    ///
+    /// Posted by AppDriver after `WriteBackCoordinator.write` returns
+    /// `.spliceError` whose cause is a syntax pre-pass failure. The reducer
+    /// sets a status-bar diagnostic. The error-comment block injected into the
+    /// editing buffer (ux-spec §7.3 step 7) belongs to the $EDITOR syntax loop
+    /// and lands with Inc-10 (ARCHITECTURE.md §10.8); the nvim-embed e2e
+    /// acceptance for it is exercised in Inc-12.
+    case writeBackBlocked(Diagnostic)
+
+    /// The on-disk file was externally modified since the fragment was loaded.
+    ///
+    /// Posted by AppDriver after `WriteBackCoordinator.write` returns
+    /// `.conflictDetected`. The reducer opens the conflict modal by transitioning
+    /// focus to `.conflictModal(ConflictModalState)` (ARCHITECTURE.md §10.3d).
+    case conflictDetected(
+        fileURL: URL,
+        expectedHash: SHA256Digest,
+        editedText: String
+    )
+
+    /// The off-thread diff build completed; the diff view can now be shown.
+    ///
+    /// Posted by AppDriver after the `Effect.buildDiffView` background Task
+    /// finishes constructing `DiffViewState` (ARCHITECTURE.md §10.4.10,
+    /// §10.3d). The reducer transitions focus to `.diffView(.ready(state))`.
+    case diffViewReady(DiffViewState)
 }
 
 // MARK: - HighlightSpan

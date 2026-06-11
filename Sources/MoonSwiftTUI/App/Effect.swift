@@ -9,6 +9,7 @@
 // Downstream: AppDriver (executes), Reducer (returns), TickSource (driven by
 //             startTick/stopTick)
 
+import CryptoKit
 import Foundation
 import MoonSwiftCore
 import RatatuiKit
@@ -129,6 +130,35 @@ public enum Effect: Sendable {
     /// effect (nil session before async teardown) to prevent in-flight nvimInput
     /// tasks from writing to a closing FileHandle.
     case nvimCleanup
+
+    // MARK: Write-back (Inc-9, ARCHITECTURE.md §10.4.1, §10.3c)
+
+    /// Execute the full write-back pipeline for `fragment`.
+    ///
+    /// When `editedText` is empty and a live nvim session exists, AppDriver
+    /// fetches the buffer content via `nvim_buf_get_lines(0, 0, -1, false)`
+    /// before calling `WriteBackCoordinator.write`. When `editedText` is
+    /// non-empty (conflict-overwrite path from `ConflictModalState`), it is
+    /// passed directly. `force: true` skips the conflict check.
+    ///
+    /// On completion AppDriver posts one of:
+    ///   `.writeBackSucceeded`, `.writeBackFailed`, `.writeBackBlocked`,
+    ///   or `.conflictDetected` (ARCHITECTURE.md §10.3c).
+    case writeBack(LuaSourceFragment, editedText: String, force: Bool)
+
+    /// Build a `DiffViewState` off the UI thread and post `.diffViewReady`.
+    ///
+    /// AppDriver launches a background Task that re-reads `fileURL`, re-locates
+    /// the span via `SpanLocator`, constructs `DiffViewState`, and posts
+    /// `AppEvent.diffViewReady(state)` on completion. The reducer transitions
+    /// focus to `.diffView(.building)` before emitting this effect so the renderer
+    /// can show a spinner during the build (ARCHITECTURE.md §10.4.10, §10.3d).
+    case buildDiffView(
+        fileURL: URL,
+        expectedHash: SHA256Digest,
+        editedText: String,
+        fragment: LuaSourceFragment
+    )
 
     // MARK: Tick source
 

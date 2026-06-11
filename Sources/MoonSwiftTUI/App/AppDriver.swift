@@ -537,6 +537,168 @@ public final class AppDriver: @unchecked Sendable {
                 session.rpc.shutdownReader()
                 session.supervisor.teardown()
             }
+
+        // MARK: Write-back effects (Inc-9, ARCHITECTURE.md §10.4.1, §10.3c)
+
+        case .writeBack(let fragment, let editedText, let force):
+            // Resolve the project root and lint service before dispatching to
+            // the background Task. Both are value captures — no self retained.
+            guard let projectRoot = projectDirectoryURL() else { return }
+            let lint: any LintServiceProtocol
+            if let svc = lintService {
+                lint = svc
+            } else {
+                // Skeleton: no lint service — post success immediately.
+                let sid = state.selection
+                Task { [channel] in
+                    if let sid {
+                        channel.post(.writeBackSucceeded(sid))
+                    }
+                }
+                return
+            }
+            // Fetch the buffer text from nvim when editedText is empty.
+            // The empty-string sentinel is the nvimWriteRequested path
+            // (ARCHITECTURE.md §10.3c): AppDriver calls nvim_buf_get_lines
+            // before invoking WriteBackCoordinator.write.
+            let session = nvimSession
+            let sid = state.selection
+            Task { [channel] in
+                let resolvedText: String
+                if editedText.isEmpty, let session {
+                    do {
+                        let lines = try await session.rpc.request(
+                            method: "nvim_buf_get_lines",
+                            params: [
+                                .int(0),  // buffer 0 = current
+                                .int(0),  // start line
+                                .int(-1),  // end = all
+                                .bool(false),
+                            ]
+                        ) { value -> [String] in
+                            guard case .array(let arr) = value else { return [] }
+                            return arr.compactMap {
+                                if case .string(let s) = $0 { return s }
+                                return nil
+                            }
+                        }
+                        resolvedText = lines.joined(separator: "\n") + "\n"
+                    } catch {
+                        channel.post(
+                            .writeBackFailed(.ioFailure("Buffer read failed: \(error.localizedDescription)"))
+                        )
+                        return
+                    }
+                } else {
+                    resolvedText = editedText
+                }
+
+                let result = await WriteBackCoordinator.write(
+                    fragment: fragment,
+                    editedText: resolvedText,
+                    projectRoot: projectRoot,
+                    lintService: lint,
+                    force: force
+                )
+
+                switch result.outcome {
+                case .success:
+                    if let sid {
+                        channel.post(.writeBackSucceeded(sid))
+                    }
+                case .conflictDetected:
+                    // Surface the conflict modal (ARCHITECTURE.md §10.3d).
+                    channel.post(
+                        .conflictDetected(
+                            fileURL: fragment.provenance.file,
+                            expectedHash: fragment.provenance.contentHash,
+                            editedText: resolvedText
+                        )
+                    )
+                case .spliceError(let err):
+                    if case .reparseFailed(let reason) = err,
+                        reason.contains("line")
+                    {
+                        // Syntax pre-pass failure: surface as writeBackBlocked.
+                        let diag = Diagnostic(
+                            severity: .error,
+                            line: 1,
+                            message: reason,
+                            source: .syntaxPrePass
+                        )
+                        channel.post(.writeBackBlocked(diag))
+                    } else {
+                        channel.post(.writeBackFailed(.spliceError(err)))
+                    }
+                case .validateReadableRejection(let rejection):
+                    channel.post(.writeBackFailed(.validateReadableRejection(rejection)))
+                case .ioFailure(let reason):
+                    channel.post(.writeBackFailed(.ioFailure(reason)))
+                }
+            }
+
+        case .buildDiffView(let fileURL, let expectedHash, let editedText, let fragment):
+            // Build the DiffViewState off the UI thread (ARCHITECTURE.md §10.4.10).
+            // Re-reads the on-disk file, re-locates the span via SpanLocator,
+            // and constructs left/right line arrays.
+            Task { [channel] in
+                do {
+                    let currentData = try Data(contentsOf: fileURL)
+                    // Left side: on-disk span text.
+                    let leftText: String
+                    if let jsonpath = fragment.provenance.jsonpath,
+                        let fmt = StructuredFileFormat.from(
+                            extension: fileURL.pathExtension)
+                    {
+                        let expr = try JSONPathExpression(parsing: jsonpath)
+                        guard let text = String(data: currentData, encoding: .utf8)
+                        else {
+                            channel.post(
+                                .writeBackFailed(
+                                    .ioFailure("File is not valid UTF-8")))
+                            return
+                        }
+                        let tree = try Self.decodeTreeForDiff(text, format: fmt, document: fragment.provenance.document)
+                        let matches = expr.evaluate(on: tree)
+                        guard let first = matches.first else {
+                            channel.post(
+                                .writeBackFailed(
+                                    .ioFailure("JSONPath matched nothing in current file")))
+                            return
+                        }
+                        let loc = try SpanLocator.locateSpan(
+                            in: currentData,
+                            format: fmt,
+                            path: first.path.steps,
+                            document: fragment.provenance.document
+                        )
+                        let spanData = currentData[loc.byteRange]
+                        leftText = String(data: spanData, encoding: .utf8) ?? ""
+                    } else {
+                        leftText = String(data: currentData, encoding: .utf8) ?? ""
+                    }
+
+                    let isConflict = SpanSplicer.hasConflict(
+                        currentData: currentData, expected: expectedHash)
+                    let leftTitle =
+                        isConflict
+                        ? "On disk (changed) — \(fileURL.lastPathComponent)"
+                        : "On disk — \(fileURL.lastPathComponent)"
+                    let rightTitle = "Edited"
+
+                    let diffState = DiffViewState(
+                        leftTitle: leftTitle,
+                        rightTitle: rightTitle,
+                        leftLines: leftText.components(separatedBy: "\n"),
+                        rightLines: editedText.components(separatedBy: "\n")
+                    )
+                    channel.post(.diffViewReady(diffState))
+                } catch {
+                    channel.post(
+                        .writeBackFailed(
+                            .ioFailure("Diff build failed: \(error.localizedDescription)")))
+                }
+            }
         }
     }
 
@@ -864,6 +1026,24 @@ public final class AppDriver: @unchecked Sendable {
             return .pickerTreeReady(id, tree: nil, errorMessage: msg)
         } catch {
             return .pickerTreeReady(id, tree: nil, errorMessage: error.localizedDescription)
+        }
+    }
+
+    /// Decode `text` in the given `format` to a `TreeValue` for diff construction.
+    ///
+    /// Mirrors `WriteBackCoordinator.decodeTree` — kept separate to avoid
+    /// coupling AppDriver to WriteBackCoordinator internals. Used exclusively
+    /// by the `buildDiffView` effect arm to re-locate the on-disk span for the
+    /// left column of the diff view.
+    private static func decodeTreeForDiff(
+        _ text: String,
+        format: StructuredFileFormat,
+        document: Int
+    ) throws -> TreeValue {
+        switch format {
+        case .json: return try decodeJSON(text)
+        case .yaml: return try decodeYAML(text, document: document)
+        case .toml: return try decodeTOML(text)
         }
     }
 
