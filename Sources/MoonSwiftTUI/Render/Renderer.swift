@@ -65,6 +65,21 @@ public func render(_ state: AppState, size: TerminalSize) -> [RenderCommand] {
         commands += renderHelpOverlay(size: size, theme: theme)
     }
 
+    // P4 nvim overlay: conflict modal and diff view cover the code-pane area.
+    // Guard: only when we have a valid inner rect (same guard as renderCodePane).
+    // Exhaustive on purpose (no default:) — a future FocusState case must
+    // decide here whether it draws an overlay (§10.4.2 forcing function).
+    if let codeInner = insetRect(layout.codePane) {
+        switch state.focus {
+        case .conflictModal:
+            commands += renderConflictModal(rect: codeInner, theme: theme)
+        case .diffView(let phase):
+            commands += renderDiffView(phase: phase, rect: codeInner, theme: theme)
+        case .pane, .helpOverlay, .pickerModal, .initForm, .nvimPane, .nvimSpawning:
+            break
+        }
+    }
+
     return commands
 }
 
@@ -389,6 +404,16 @@ private func renderCodePane(
     theme: ThemeState
 ) -> [RenderCommand] {
     guard let inner = insetRect(rect) else { return [] }
+
+    // P4 nvim pane: replace code pane with the nvim grid (ux-spec §7.4).
+    if case .nvimPane = state.focus {
+        return renderNvimGrid(grid: state.nvimGrid, rect: inner, theme: theme)
+    }
+
+    // P4 nvim spawning: show spinner while nvim is attaching.
+    if case .nvimSpawning = state.focus {
+        return renderNvimSpawning(rect: inner, theme: theme)
+    }
 
     // Picker modal: replace code pane with the tree browser (ux-spec §3.6).
     if state.focus == .pickerModal, let picker = state.pickerState {
