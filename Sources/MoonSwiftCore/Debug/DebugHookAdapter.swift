@@ -305,7 +305,8 @@ private func isSecurityBlocklisted(_ name: String) -> Bool {
 ///
 /// The mapping preserves the depth-cap and cycle sentinels from LuaSwift:
 ///   - Depth-capped table → `displayValue: "(…)"` (§6.5 contract).
-///   - Cycle → `displayValue: "<cycle>"`.
+///   - Cycle → `displayValue: "(cycle)"` (§6.5 binding marker — parens, not
+///     angle brackets; PRD §6.5 / ux-spec value-marker contract).
 ///   - Table with children → recursively mapped; breadth-limit sentinels are
 ///     filtered out of the children list (they are LuaSwift internals, not
 ///     user-visible keys).
@@ -326,7 +327,7 @@ private func inspectedValueToDebugVariable(
             return DebugVariable(name: name, displayValue: "(…)", children: nil)
         }
         if value.isCycle {
-            return DebugVariable(name: name, displayValue: "<cycle>", children: nil)
+            return DebugVariable(name: name, displayValue: "(cycle)", children: nil)
         }
         // Map table children recursively, dropping breadth-limit sentinels.
         let children: [DebugVariable]? = rawChildren.map { childList in
