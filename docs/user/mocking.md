@@ -149,9 +149,143 @@ project file.
 ## Mock functions
 
 A mock function is a callable Lua global — not a namespace value — that
-returns a fixed response or echoes its arguments. See the
-[project file reference](project-file.md#mock-function-definitions) for
-the `[[mock.function]]` schema.
+responds to calls with a fixed behaviour: echo its arguments back, return a
+configured value, or raise an error. Declare it with `[[mock.function]]` in
+`moonswift.toml`; MoonSwift registers it in the Lua engine before the run
+begins.
+
+### Declaring a mock function
+
+```toml
+[[mock.function]]
+name     = "host_log"
+behavior = "echo-args"
+```
+
+The fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | The Lua global name the script calls. Must not collide with catalog symbols or the reserved `__moonswift_` prefix. |
+| `behavior` | yes | What the function does: `"echo-args"`, `"fixed-return"`, or `"raise-error"`. |
+| `return_value` | conditional | A Lua value expression. Required when `behavior = "fixed-return"`. Omit for all other behaviors. |
+| `error_message` | conditional | The error string raised into Lua. Required when `behavior = "raise-error"`. Omit for all other behaviors. |
+
+### Behaviors
+
+#### `"echo-args"` — return all arguments as one table
+
+The function returns its arguments packaged as a single Lua table. The first
+argument becomes index 1, the second index 2, and so on.
+
+```lua
+local t = host_log("tick", 42)
+-- t[1] == "tick", t[2] == 42
+```
+
+Because `registerFunction` returns exactly one Lua value, multiple returns are
+not possible. A multi-variable assignment gets the table as the first variable
+and `nil` for every subsequent one:
+
+```lua
+local a, b = host_log("x", "y")
+-- a == {"x", "y"}, b == nil
+```
+
+This is the intended contract (DOM-04). Document it in any Lua code that
+destructures the return.
+
+#### `"fixed-return"` — return a configured value (RQ1)
+
+The function always returns the same value, which you specify as a Lua value
+expression in `return_value`. Any expression that `return <value>` can evaluate
+is valid: scalars, table constructors, computed expressions, and function
+literals.
+
+```toml
+[[mock.function]]
+name         = "get_level"
+behavior     = "fixed-return"
+return_value = "42"
+```
+
+```lua
+local n = get_level()   -- n == 42
+```
+
+Computed expressions work too:
+
+```toml
+return_value = "10 * 2"   -- returns 20
+```
+
+A function literal makes the mock return a callable:
+
+```toml
+[[mock.function]]
+name         = "get_handler"
+behavior     = "fixed-return"
+return_value = "function(x) return x + 1 end"
+```
+
+```lua
+local fn = get_handler()
+local n  = fn(5)          -- n == 6
+```
+
+The expression is evaluated **once at session start**, before any script code
+runs, under the project's configured engine mode (sandboxed or unrestricted).
+The materialized value is returned unchanged on every subsequent call. A
+sandbox-stripped API inside a function literal (such as `os.execute`) will
+raise at runtime when invoked under sandboxed mode — the same rule that applies
+to mock values.
+
+A syntax error in `return_value` is caught at load time and reported as a
+project diagnostic. No run starts with an invalid expression.
+
+#### `"raise-error"` — raise a Lua error
+
+The function raises a Lua runtime error with the configured message. The
+running script stops at the call site, and MoonSwift surfaces a structured
+diagnostic in the output pane — including a traceback that identifies the
+fragment line where the call occurred.
+
+```toml
+[[mock.function]]
+name          = "host_connect"
+behavior      = "raise-error"
+error_message = "simulated network failure"
+```
+
+```lua
+-- Calling host_connect() produces a runtime error:
+-- error: simulated network failure (line N)
+local ok = host_connect()   -- not reached
+```
+
+Use this to test how your script handles error conditions from the host.
+
+### How mock functions are installed
+
+At session start, MoonSwift installs each `[[mock.function]]` as a Lua global
+before the stdlib baseline is captured. The function is therefore correctly
+excluded from the "user globals" column in the navigator — the same policy as
+mock values.
+
+Registration happens through `registerFunction(name:callback:)` (LuaSwift's
+callback surface). The callback for `fixed-return` materializes the
+`return_value` expression at this point; the callbacks for `echo-args` and
+`raise-error` are lightweight closures with no up-front evaluation cost.
+
+### Uniqueness constraint
+
+Two `[[mock.function]]` entries with the same `name` are a load-time error.
+Each function name must be unique across the project file.
+
+---
+
+See the [project file reference](project-file.md#mock-function-definitions)
+for the complete `[[mock.function]]` schema.
 
 ---
 

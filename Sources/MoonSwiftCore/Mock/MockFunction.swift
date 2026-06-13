@@ -1,17 +1,29 @@
 // File: Sources/MoonSwiftCore/Mock/MockFunction.swift
 // Location: MoonSwiftCore/Mock/
-// Role: The mock-FUNCTION definition model (PRD §4.2 `[[mock.function]]`).
+// Role: The mock-FUNCTION definition model (PRD §4.2 `[[mock.function]]`)
+//       and F5.2 callback synthesis.
 //
-//       F5.0 defines the definition DTO because `SessionEngine.startSession`
-//       takes a `MockStore` of these. Callback synthesis (the Swift function
-//       registered into the engine) and `fixed-return` value materialization
-//       are added by F5.2 (#6); the codec/validation that PRODUCES these from
-//       TOML is F5.5 (#2). (DTO migrated here from #2 because F5.0 depends on it.)
+//       F5.0 defines the DTO. F5.2 (#6) adds `makeMaterializedCallback(engine:)`
+//       on `MockFunctionDef`, which returns the `([LuaValue]) throws -> LuaValue`
+//       closure that `SessionEngine.startSession` passes to
+//       `engine.registerFunction(name:callback:)` at the F5.2 seam.
 //
-// Upstream: (none — pure data model)
-// Downstream: MockStore (collection), F5.2 callback synthesis, F5.5 codec/validation
+//       Callback shapes:
+//       - echo-args:    Returns args as ONE `LuaValue.array` (DOM-04).
+//       - fixed-return: Materializes `returnValue` EAGERLY via evaluate at
+//                       session start; the closure returns the captured
+//                       `LuaValue` on every call (DOM-R7-N01).
+//       - raise-error:  Throws `LuaError.callbackError(errorMessage)`, which
+//                       the trampoline propagates to Lua as `error(message)`.
+//
+//       The codec/validation that PRODUCES these from TOML is F5.5 (#2).
+//
+// Upstream: LuaSwift (LuaEngine, LuaValue, LuaError)
+// Downstream: MockStore (collection), SessionEngine.startSession (F5.2 seam),
+//             F5.5 codec/validation
 
 import Foundation
+import LuaSwift
 
 // MARK: - MockBehavior
 
@@ -54,5 +66,69 @@ public struct MockFunctionDef: Sendable, Equatable {
         self.behavior = behavior
         self.returnValue = returnValue
         self.errorMessage = errorMessage
+    }
+}
+
+// MARK: - F5.2 Callback synthesis
+
+extension MockFunctionDef {
+
+    /// Synthesizes the `([LuaValue]) throws -> LuaValue` callback for this
+    /// definition, suitable for passing to `engine.registerFunction(name:callback:)`.
+    ///
+    /// **Must be called on the serial executor** (inside `startSession`'s
+    /// `queue.async` block), because `engine.evaluate` is not thread-safe.
+    ///
+    /// For `fixedReturn`, the `returnValue` expression is **materialized eagerly**
+    /// here via `engine.evaluate("return \(returnValue)")` — before the host
+    /// `run()` begins. The resulting `LuaValue` is captured by the closure and
+    /// returned unchanged on every call (DOM-R7-N01). This avoids re-entering
+    /// `evaluate` from inside a running script, which would corrupt the engine's
+    /// instruction budget and error state.
+    ///
+    /// For `echoArgs`, the closure wraps `args` in a single `LuaValue.array`
+    /// and returns it, giving Lua one table value (DOM-04). Multiple Lua returns
+    /// are not expressible through the `registerFunction` callback surface.
+    ///
+    /// For `raiseError`, the closure throws `LuaError.callbackError(errorMessage)`,
+    /// which the trampoline (`callbackTrampoline` in `LuaEngine+Callbacks.swift`)
+    /// converts to a Lua `error(message)` call — surfacing as a runtime error
+    /// whose traceback shows the call site line in the fragment.
+    ///
+    /// - Parameter engine: The just-created `LuaEngine` for the session.
+    /// - Returns: The synthesized callback closure.
+    public func makeMaterializedCallback(
+        engine: LuaEngine
+    ) -> ([LuaValue]) throws -> LuaValue {
+        switch behavior {
+
+        case .echoArgs:
+            // DOM-04 binding: one table return regardless of argument count.
+            // `local t = mocked(1, 2)` → t == {1, 2}; `local a, b = mocked(1, 2)`
+            // → a == {1, 2}, b == nil (exactly one return value).
+            return { args in .array(args) }
+
+        case .fixedReturn:
+            // Materialize the return_value expression once, at session start,
+            // before any host Lua runs. Failures fall back to .nil — the value
+            // has already been syntax-validated by F5.5 syntaxPrePass, so a
+            // runtime failure here indicates a sandbox restriction (e.g.
+            // os.execute under sandboxed mode), not a syntax error.
+            let expression = returnValue ?? "nil"
+            let materialized: LuaValue
+            do {
+                materialized = try engine.evaluate("return \(expression)")
+            } catch {
+                materialized = .nil
+            }
+            return { _ in materialized }
+
+        case .raiseError:
+            // Throw a callback error; the trampoline converts it to a Lua
+            // error() call, producing a structured runtime diagnostic whose
+            // traceback identifies the call site in the fragment.
+            let message = errorMessage ?? ""
+            return { _ in throw LuaError.callbackError(message) }
+        }
     }
 }

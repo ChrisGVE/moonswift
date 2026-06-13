@@ -178,6 +178,13 @@ public final class SessionEngine: SessionEngineProtocol {
                     newEngine.register(server: server)
                 }
                 // F5.2 seam: synthesized callbacks per function registered here.
+                // Each MockFunctionDef materializes eagerly (fixed-return) or
+                // captures a trivial closure (echo-args / raise-error) and registers
+                // the result as a global Lua callable under def.name.
+                for def in mocks.functions {
+                    let callback = def.makeMaterializedCallback(engine: newEngine)
+                    newEngine.registerFunction(name: def.name, callback: callback)
+                }
 
                 self.engine = newEngine
                 self.config = config
