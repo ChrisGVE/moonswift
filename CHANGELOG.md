@@ -22,6 +22,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bounded, filtered globals slice; a capped slice shows `(… N more globals)`.
   Cyclic / depth-limited values render `(cycle)` / `(…)`.
 
+#### Layout
+
+- Pane split ratios persist to `[settings]` (`navigator_split` / `bottom_split`):
+  resizing the navigator (`<`/`>`) or bottom pane (`{`/`}`) auto-saves the ratio,
+  and it is restored on project load. Out-of-range values are flagged and clamped.
+
 #### Editing subsystem (embedded Neovim + `$EDITOR` fallback)
 
 - In-place editing via embedded Neovim (`<C-e>`): spawns `nvim --embed --clean`

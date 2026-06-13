@@ -171,6 +171,29 @@ values are rejected at load time.
 theme = "default"
 ```
 
+### `navigator_split` (float, default `0.25`) and `bottom_split` (float, default `0.30`)
+
+The navigator/main and bottom-pane/main split ratios, as fractions of the
+terminal. They persist the pane layout across sessions: resizing a split in the
+TUI (`<`/`>` for the navigator, `{`/`}` for the bottom pane) auto-saves the new
+ratio here, and the saved ratio is reapplied to the layout when the project is
+loaded.
+
+- `navigator_split` must be in `[0.10, 0.50]`.
+- `bottom_split` must be in `[0.10, 0.60]`.
+
+A value outside its range produces a validation diagnostic
+(`settings.navigator_split <v> out of range [0.10, 0.50]`) and is clamped to the
+nearest bound when applied to the layout. Both keys are optional — a `[settings]`
+table with only `theme` loads with the defaults.
+
+```toml
+[settings]
+theme = "default"
+navigator_split = 0.25
+bottom_split = 0.30
+```
+
 ---
 
 ## `[[mock.value]]` — mock value definitions

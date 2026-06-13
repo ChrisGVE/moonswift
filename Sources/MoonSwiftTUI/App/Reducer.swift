@@ -93,6 +93,8 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         s.sources = [:]
         s.navigatorOrder = []
         s.selection = nil
+        // F5.6: restore the saved navigator/bottom split ratios into the layout.
+        applySplitRatios(&s, settings: file.settings)
         // Re-load sources from the freshly loaded project.
         return (s, [.loadSources])
 
@@ -1004,30 +1006,31 @@ private func reduceGlobalKey(
         return (s, [])
 
     // < / > — narrow / widen navigator (ux-spec.md §1.3)
+    // F5.6: each resize auto-saves the new ratio to [settings] (splitPersistEffects).
     case (.char("<"), []):
         s.paneLayout.navigatorWidth = max(
             PaneLayout.navigatorMin,
             s.paneLayout.navigatorWidth - 2
         )
-        return (s, [])
+        return (s, splitPersistEffects(s))
 
     case (.char(">"), []):
         s.paneLayout.navigatorWidth = min(
             PaneLayout.navigatorMax,
             s.paneLayout.navigatorWidth + 2
         )
-        return (s, [])
+        return (s, splitPersistEffects(s))
 
     // { / } — shrink / grow bottom pane (ux-spec.md §1.3)
     case (.char("{"), []):
         let current = s.paneLayout.bottomPaneHeight ?? PaneLayout.defaultBottomRows
         s.paneLayout.bottomPaneHeight = max(PaneLayout.bottomPaneMin, current - 1)
-        return (s, [])
+        return (s, splitPersistEffects(s))
 
     case (.char("}"), []):
         let current = s.paneLayout.bottomPaneHeight ?? PaneLayout.defaultBottomRows
         s.paneLayout.bottomPaneHeight = min(PaneLayout.bottomPaneMaxRatio, current + 1)
-        return (s, [])
+        return (s, splitPersistEffects(s))
 
     // i — open init form in empty state; transient no-op in quick-file mode.
     //

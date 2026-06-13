@@ -331,6 +331,9 @@ public final class AppDriver: @unchecked Sendable {
         case .saveDesignations(let designations, let sourcePath):
             executeSaveDesignations(designations, sourcePath: sourcePath)
 
+        case .persistSplitRatios(let navigatorSplit, let bottomSplit):
+            executePersistSplitRatios(navigatorSplit: navigatorSplit, bottomSplit: bottomSplit)
+
         case .loadPickerTree(let id, let projectRoot):
             // Short: one-liner Task dispatch (CR-013 [channel] capture).
             Task { [channel] in
@@ -592,6 +595,43 @@ public final class AppDriver: @unchecked Sendable {
                     source: .projectConfig
                 )
                 channel.post(.projectMalformed(diag))
+            }
+        }
+    }
+
+    /// Execute `Effect.persistSplitRatios` (F5.6) — write the navigator/bottom
+    /// split ratios into `[settings]`, preserving every other key.
+    ///
+    /// Mirrors `executeSaveDesignations`: rebuild the loaded `ProjectFile` with an
+    /// updated `SettingsConfig` and `ProjectStore.save` it (decode-modify-encode,
+    /// so unknown keys survive). Fire-and-forget on success; a save failure is
+    /// logged but never disrupts the live layout (the in-memory split already
+    /// applied). No-op without a loaded project + project directory.
+    private func executePersistSplitRatios(navigatorSplit: Double, bottomSplit: Double) {
+        guard let projectDir = projectDirectoryURL(),
+            case .loaded(let projectFile, _) = state.project
+        else { return }
+
+        let updatedSettings = SettingsConfig(
+            theme: projectFile.settings.theme,
+            navigatorSplit: navigatorSplit,
+            bottomSplit: bottomSplit
+        )
+        let updatedFile = ProjectFile(
+            luaVersion: projectFile.luaVersion,
+            sources: projectFile.sources,
+            run: projectFile.run,
+            lint: projectFile.lint,
+            settings: updatedSettings,
+            mocks: projectFile.mocks
+        )
+
+        let fileURL = projectDir.appendingPathComponent(ProjectStore.fileName)
+        Task {
+            do {
+                try ProjectStore.save(updatedFile, to: fileURL)
+            } catch {
+                Logger.shared.error("Could not persist split ratios: \(error.localizedDescription)")
             }
         }
     }
