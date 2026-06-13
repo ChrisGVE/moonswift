@@ -85,6 +85,9 @@ public enum ProjectValidation {
         // Rules 10+ — mock definitions (F5.5).
         validateMocks(projectFile.mocks, lintService: mockLintService, into: &diagnostics)
 
+        // F5.6 — settings split ratios (PRD §4.2 "Rule 9").
+        validateSettingsSplits(projectFile.settings, into: &diagnostics)
+
         return diagnostics
     }
 
@@ -286,6 +289,29 @@ public enum ProjectValidation {
                 )
             )
             return
+        }
+    }
+
+    // MARK: - F5.6: settings split ratios (PRD §4.2 "Rule 9")
+
+    /// Validates `settings.navigator_split` / `settings.bottom_split` are within
+    /// their documented ranges. An out-of-range value is a distinct diagnostic
+    /// with the exact bound text bound by ux-spec §6.9 / PRD §6.5; the value is
+    /// still usable because `SettingsConfig.clamped*Split` clamps on application.
+    ///
+    /// The bound strings are written literally (`[0.10, 0.50]`) so the diagnostic
+    /// matches the binding text exactly — formatting a `Double` would render
+    /// `0.1`/`0.5`, not the two-decimal form the spec fixes.
+    static func validateSettingsSplits(_ settings: SettingsConfig, into diagnostics: inout [Diagnostic]) {
+        if !SettingsConfig.navigatorSplitRange.contains(settings.navigatorSplit) {
+            diagnostics.append(
+                .projectError("settings.navigator_split \(settings.navigatorSplit) out of range [0.10, 0.50]")
+            )
+        }
+        if !SettingsConfig.bottomSplitRange.contains(settings.bottomSplit) {
+            diagnostics.append(
+                .projectError("settings.bottom_split \(settings.bottomSplit) out of range [0.10, 0.60]")
+            )
         }
     }
 

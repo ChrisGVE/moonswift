@@ -253,6 +253,12 @@ public enum Effect: Sendable {
     /// stepping UI (distinct from `.stopDebug` which was F6.1's teardown-only path).
     case sendDebugCommand(DebugSessionID, LuaDebugCommand)
 
+    /// Persist the navigator/bottom split ratios to `[settings]` in moonswift.toml
+    /// after a TUI resize (F5.6). AppDriver decode-modifies-encodes the project
+    /// file (preserving all other keys) and writes it back; fire-and-forget on
+    /// success, logged on failure. No-op when no project file is loaded.
+    case persistSplitRatios(navigatorSplit: Double, bottomSplit: Double)
+
     /// Request the bounded/filtered user-globals slice for a paused session (F6.3 `g`).
     ///
     /// AppDriver calls `SessionEngineProtocol.requestGlobals(id)` nonisolated

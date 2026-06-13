@@ -226,7 +226,12 @@ public enum ProjectFileCodec {
             return SettingsConfig()
         }
         let theme = settingsTable["theme"]?.string ?? "default"
-        return SettingsConfig(theme: theme)
+        // F5.6: split ratios are stored verbatim (no clamp here) so validation can
+        // flag out-of-range values and the file round-trips byte-stably. Absent
+        // keys fall back to the defaults (back-compat with theme-only [settings]).
+        let navigatorSplit = settingsTable["navigator_split"]?.double ?? SettingsConfig.navigatorSplitDefault
+        let bottomSplit = settingsTable["bottom_split"]?.double ?? SettingsConfig.bottomSplitDefault
+        return SettingsConfig(theme: theme, navigatorSplit: navigatorSplit, bottomSplit: bottomSplit)
     }
 
     // MARK: - Private save helpers
@@ -278,6 +283,9 @@ public enum ProjectFileCodec {
     private static func buildSettingsTable(_ settings: SettingsConfig) -> TOMLTable {
         let t = TOMLTable()
         t["theme"] = TOMLValue(stringLiteral: settings.theme)
+        // F5.6: persist both split ratios (verbatim — see decodeSettingsConfig).
+        t["navigator_split"] = TOMLValue(floatLiteral: settings.navigatorSplit)
+        t["bottom_split"] = TOMLValue(floatLiteral: settings.bottomSplit)
         return t
     }
 }
