@@ -331,13 +331,26 @@ struct GutterMarkPriorityTests {
 @Suite("DebugReducer — Tab 3 key")
 struct Tab3KeyTests {
 
-    @Test("key 3 in bottom pane switches to debug tab")
+    @Test("key 3 switches to the debug tab while a debug session is active")
     func key3SwitchesDebugTab() {
         var state = AppState()
         state.focus = .pane(.bottomPane)
         state.bottomPane.activeTab = .output
+        // The Debug tab exists only during a session (UX-R2-N03); seed one so
+        // `3` quick-jumps to it.
+        state.activeDebugSessionID = DebugSessionID()
         let (next, _) = reduce(state, .key(.char("3"), modifiers: []))
         #expect(next.bottomPane.activeTab == .debug)
         #expect(next.bottomPane.scrollOffset == 0)
+    }
+
+    @Test("key 3 with no debug session shows the bound transient and does not switch")
+    func key3NoSessionDeclines() {
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.bottomPane.activeTab = .output
+        let (next, _) = reduce(state, .key(.char("3"), modifiers: []))
+        #expect(next.bottomPane.activeTab == .output)
+        #expect(next.transient?.text == "Debug tab not active.")
     }
 }

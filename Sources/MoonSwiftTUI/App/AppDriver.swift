@@ -410,6 +410,9 @@ public final class AppDriver: @unchecked Sendable {
 
         case .sendDebugCommand(let sessionID, let command):
             executeSendDebugCommand(sessionID, command)
+
+        case .requestGlobals(let sessionID):
+            executeRequestGlobals(sessionID)
         }
     }
 

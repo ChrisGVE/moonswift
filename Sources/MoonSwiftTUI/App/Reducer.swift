@@ -296,6 +296,9 @@ private func reduceDebugResumed(_ s: AppState, sessionID: DebugSessionID) -> (Ap
     var s = s
     guard s.activeDebugSessionID == sessionID else { return (s, []) }
     s.currentDebugSnapshot = nil
+    // A latched-but-unresolved `g` is discarded on resume (§6.9): Case-2 shows the
+    // last RESOLVED globals from `lastPauseSnapshot`, never `(globals pending…)`.
+    s.debugGlobalsRequested = false
     return (s, [])
 }
 
@@ -1357,14 +1360,26 @@ private func reduceBottomPaneKey(
     switch (code, modifiers) {
 
     case (.char("j"), []):
+        // In the Debug tab while paused, j/k drive the row-selection cursor
+        // (frames + expandable values, F6.3); elsewhere they scroll.
+        if s.bottomPane.activeTab == .debug, s.currentDebugSnapshot != nil {
+            return reduceDebugRowMove(s, delta: 1)
+        }
         s.bottomPane.scrollOffset += 1
         return (s, [])
 
     case (.char("k"), []):
+        if s.bottomPane.activeTab == .debug, s.currentDebugSnapshot != nil {
+            return reduceDebugRowMove(s, delta: -1)
+        }
         s.bottomPane.scrollOffset = max(0, s.bottomPane.scrollOffset - 1)
         return (s, [])
 
     case (.enter, []):
+        // Debug tab while paused: select a frame / toggle inline expansion (F6.3).
+        if s.bottomPane.activeTab == .debug, s.currentDebugSnapshot != nil {
+            return reduceDebugTabEnter(s)
+        }
         // Jump code pane to the error line of the focused diagnostic.
         return jumpCodePaneFromBottomPane(s)
 
@@ -1386,6 +1401,12 @@ private func reduceBottomPaneKey(
         return (s, [])
 
     case (.char("3"), []):
+        // Quick-jump to the Debug tab — but it exists only during a debug session
+        // (UX-R2-N03). With no session, decline with the bound transient.
+        guard s.activeDebugSessionID != nil else {
+            s.transient = TransientMessage(text: "Debug tab not active.")
+            return (s, [.startTick(interval: TickInterval.transientExpiry)])
+        }
         s.bottomPane.activeTab = .debug
         s.bottomPane.scrollOffset = 0
         return (s, [])
@@ -1433,6 +1454,12 @@ private func reduceBottomPaneKey(
     case (.char("c"), []):
         guard s.bottomPane.activeTab == .debug else { return (s, []) }
         return reduceDebugStepKey(s, command: .continueRun)
+
+    // g — request the bounded/filtered globals slice while paused in the Debug
+    // tab (F6.3). Scoped to the Debug tab; a no-op outside a paused session.
+    case (.char("g"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugGlobalsRequest(s)
 
     default:
         return (s, [])
