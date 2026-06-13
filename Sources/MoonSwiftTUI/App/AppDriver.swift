@@ -407,6 +407,9 @@ public final class AppDriver: @unchecked Sendable {
 
         case .stopDebug(let sessionID):
             executeStopDebug(sessionID)
+
+        case .sendDebugCommand(let sessionID, let command):
+            executeSendDebugCommand(sessionID, command)
         }
     }
 

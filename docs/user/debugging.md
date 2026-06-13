@@ -67,6 +67,53 @@ more frame(s)` suffix.
 Priority when marks overlap: `●` paused > `▶` paused > `●` breakpoint >
 `E` error > `W` warning.
 
+## Stepping through code
+
+When the VM is paused (the Debug tab shows the call stack), use these keys
+from the **code pane** or the **Debug tab**:
+
+| Key | Action |
+|-----|--------|
+| `s` | Step over — advance to the next line in the current function |
+| `i` | Step into — descend into the called function |
+| `o` | Step out — run until the current function returns |
+| `c` | Continue — run until the next breakpoint (or end of script) |
+| `x` | Stop — terminate the debug session immediately |
+
+The status bar shows a reminder while paused:
+
+```
+[paused at test.lua:7]  s/i/o step  c continue  x stop
+```
+
+### While the VM is running between pauses
+
+After a step or continue command the VM runs until it hits the next breakpoint
+or stop point. During this interval, `s`/`i`/`o`/`c` show a brief `VM running…`
+notice and have no effect. Wait for the next pause before issuing another
+stepping command.
+
+### Stepping from the navigator
+
+The navigator does not handle stepping keys. If you press `s`, `i`, `o`, or
+`c` while the navigator is focused and a session is paused, MoonSwift shows:
+
+```
+Stepping is in the Debug tab — press 3.
+```
+
+Switch to the Debug tab (key `3`) or the code pane to step.
+
+### Stopping a session
+
+Pressing `x` while a debug session is active terminates the session
+immediately, regardless of whether the VM is paused or running. The status bar
+shows `Session stopped.` briefly. After stopping, you can start a new debug
+run with `<C-g>`.
+
+Note: `x` normally cancels a plain run. While a debug session is active `x`
+targets the debug session instead.
+
 ## Restarting a session
 
 If a debug session is active and you press `<C-g>` again, MoonSwift asks:

@@ -11,6 +11,7 @@
 
 import CryptoKit
 import Foundation
+import LuaSwift
 import MoonSwiftCore
 import RatatuiKit
 
@@ -241,6 +242,16 @@ public enum Effect: Sendable {
     /// AppDriver calls `SessionEngineProtocol.sendDebugCommand(.stop)` on the
     /// session addressed by `id`. A stale id is a silent no-op (ARCH-06).
     case stopDebug(DebugSessionID)
+
+    /// Deliver a stepping or continue command to a live debug session.
+    ///
+    /// AppDriver calls `SessionEngineProtocol.sendDebugCommand(id, command)`
+    /// nonisolated (PERF-11 — the serial executor is occupied by the parked
+    /// `runForDebug` block during a pause, so async dispatch would deadlock).
+    /// Stale id → silent no-op (ARCH-06). Used by F6.2 for `.stepOver`,
+    /// `.stepInto`, `.stepOut`, `.continueRun`, and `.stop` from the paused
+    /// stepping UI (distinct from `.stopDebug` which was F6.1's teardown-only path).
+    case sendDebugCommand(DebugSessionID, LuaDebugCommand)
 
     // MARK: Process lifecycle
 
