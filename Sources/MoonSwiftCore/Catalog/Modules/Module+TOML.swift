@@ -8,6 +8,7 @@
 //       on LUASWIFT_TOMLKIT in ModuleRegistry; MoonSwift ships TOMLKit as a
 //       direct dependency but availability depends on a startup engine probe
 //       (later task) that verifies TOMLKit is functional in the running binary.
+//       Signatures sourced from TOMLModule.swift callback implementations.
 //
 //       Availability: .conditional — present only when the startup probe posts
 //       `.catalogProbed(tomlAvailable: true)`. Until that probe result is
@@ -26,8 +27,25 @@ extension CatalogModule {
     static let toml = CatalogModule(
         tableName: "toml",
         functions: [
-            CatalogFunction(name: "encode"),
-            CatalogFunction(name: "decode"),
+            // Source: TOMLModule.swift encodeCallback — args[0]=value
+            CatalogFunction(
+                name: "encode",
+                params: [
+                    CatalogParam(name: "value", type: "table")
+                ],
+                returns: "string",
+                doc:
+                    "Encode a Lua table to a TOML string using TOMLKit. The value must be a table (TOML requires a root document table)."
+            ),
+            // Source: TOMLModule.swift decodeCallback — args[0]=string
+            CatalogFunction(
+                name: "decode",
+                params: [
+                    CatalogParam(name: "str", type: "string")
+                ],
+                returns: "table",
+                doc: "Decode a TOML string to a Lua table using TOMLKit."
+            ),
         ],
         availability: .conditional
     )
