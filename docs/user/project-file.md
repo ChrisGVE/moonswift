@@ -223,6 +223,17 @@ literals (`function() return os.time() end`), or computed expressions.
 When `true`, Lua scripts may write to the mock path during a run and the
 post-run navigator reflects the written value.
 
+### Runtime behaviour
+
+At session start, MoonSwift evaluates each `value` expression with
+`evaluate("return <value>")` under the project's configured engine mode.
+The result is served to Lua through a value server registered as the
+`namespace` global — before the stdlib baseline is captured, so mock
+namespaces are excluded from the navigator's user-globals view. A write to
+a non-writable path raises a Lua runtime error surfaced as a structured
+diagnostic. See [docs/user/mocking.md](mocking.md) for the full runtime
+contract.
+
 ### Duplicate detection
 
 Two `[[mock.value]]` entries with the same `namespace` and `path` are a

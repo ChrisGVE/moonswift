@@ -169,10 +169,15 @@ public final class SessionEngine: SessionEngineProtocol {
                 // both sessionRun and invokeLuaCall route print() to onOutput.
                 self.installPrintCapture(engine: newEngine)
 
-                // F5.1/F5.2 seam: register a MockValueServer per namespace and a
-                // synthesized callback per function HERE, before the baseline is
-                // captured, so installed mock globals are part of the baseline
-                // and never misreported as user globals by liveState().
+                // F5.1: register a MockValueServer per namespace so mock globals
+                // are part of the stdlib baseline (DATA-N04) and are never
+                // misreported as user globals by liveState().
+                for ns in mocks.namespaces {
+                    let defs = mocks.values(in: ns)
+                    let server = MockValueServer(namespace: ns, defs: defs, engine: newEngine)
+                    newEngine.register(server: server)
+                }
+                // F5.2 seam: synthesized callbacks per function registered here.
 
                 self.engine = newEngine
                 self.config = config
