@@ -225,6 +225,23 @@ public enum Effect: Sendable {
     /// Transitions the app from empty state to the loaded project state.
     case writeProjectFile(directory: URL, luaVersion: String, sources: [String])
 
+    // MARK: Debug (P2 F6.1, ARCHITECTURE.md §10.9)
+
+    /// Start a debug run for `fragment` with the given breakpoint lines.
+    ///
+    /// `breakpoints` are fragment-relative 1-based line numbers (already
+    /// translated from the fragment-relative cursor line held in `AppState`).
+    /// AppDriver launches `SessionEngineProtocol.runForDebug` inside a background
+    /// Task; the `onPause` callback posts `AppEvent.debugPaused`; after the run
+    /// completes AppDriver posts `AppEvent.debugFinished`.
+    case debugRun(LuaSourceFragment, breakpoints: Set<Int>)
+
+    /// Tear down any active debug session and stop the debug run.
+    ///
+    /// AppDriver calls `SessionEngineProtocol.sendDebugCommand(.stop)` on the
+    /// session addressed by `id`. A stale id is a silent no-op (ARCH-06).
+    case stopDebug(DebugSessionID)
+
     // MARK: Process lifecycle
 
     /// Break the AppDriver loop, run teardown, and `exit(exitCode)`.

@@ -284,6 +284,29 @@ public enum AppEvent: Sendable {
     /// finishes constructing `DiffViewState` (ARCHITECTURE.md §10.4.10,
     /// §10.3d). The reducer transitions focus to `.diffView(.ready(state))`.
     case diffViewReady(DiffViewState)
+
+    // MARK: Debug (P2 F6.1, ARCHITECTURE.md §10.9)
+
+    /// The debug run paused at a breakpoint or step. Carries the snapshot
+    /// published by the `DebugHookAdapter`'s `onPause` callback.
+    ///
+    /// Posted by `AppDriver+DebugEffects` inside the `onPause` closure passed to
+    /// `SessionEngineProtocol.runForDebug`. The reducer updates `AppState` with
+    /// the snapshot and auto-shows the Debug tab.
+    case debugPaused(DebugSnapshot)
+
+    /// The debug run finished (breakpoints exhausted, error, or cancellation).
+    ///
+    /// Posted by `AppDriver+DebugEffects` after `runForDebug` returns.
+    /// The reducer clears the active debug session ID from `AppState`.
+    case debugFinished(DebugSessionID, CoreRunOutcome)
+
+    /// A debug-restart was confirmed by the user (`y` in the confirmation prompt).
+    ///
+    /// Posted internally by the reducer when the restart-confirmation gate
+    /// transitions to `confirmed`. The AppDriver tears down the existing session
+    /// before the next `debugRun` effect executes.
+    case debugRestartConfirmed
 }
 
 // MARK: - HighlightSpan

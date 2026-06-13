@@ -198,10 +198,20 @@ public struct CodePaneState: Sendable, Equatable {
     }
 }
 
-/// A gutter mark indicating a lint/run diagnostic at a specific line.
+/// A gutter mark in the code pane gutter column.
+///
+/// Diagnostic marks (`error`, `warning`) come from lint/run. Breakpoint and
+/// pause marks come from the F6.1 debugger. Precedence when two marks land on
+/// the same line: debugger marks win; within diagnostics, error wins (ux-spec §6.6).
 public enum GutterMark: Sendable, Equatable {
     case error
     case warning
+    /// A user-set breakpoint (`●`, `error` token — ux-spec §6.6).
+    case breakpoint
+    /// Breakpoint AND current debug-pause location (`●`, `highlight_pulse` — ux-spec §6.6).
+    case pausedBreakpoint
+    /// Current debug-pause location without a breakpoint (`▶`, `highlight_pulse` — ux-spec §6.6).
+    case debugPaused
 }
 
 // MARK: - BottomPaneState
@@ -210,9 +220,13 @@ public enum GutterMark: Sendable, Equatable {
 public struct BottomPaneState: Sendable, Equatable {
 
     /// The active tab in the bottom pane.
+    ///
+    /// The `debug` tab is present only while a debug session is active
+    /// (ux-spec §6.1); it auto-appears when `<C-g>` starts a debug run.
     public enum Tab: Sendable, Equatable {
         case output
         case diagnostics
+        case debug
     }
 
     public var activeTab: Tab
@@ -746,6 +760,27 @@ public struct AppState: Sendable {
     /// so the reducer always has a valid fallback before the first resize event.
     public var terminalSize: TerminalSize
 
+    // MARK: Debug session state (P2 F6.1, ARCHITECTURE.md §10.9)
+
+    /// Fragment-relative breakpoint lines (1-based) keyed by `SourceID`.
+    ///
+    /// Stored per-source so switching between sources preserves each set.
+    /// The reducer stores breakpoints fragment-relative; the AppDriver translates
+    /// them to engine lines via `lineOffset` when building the `debugRun` effect.
+    public var breakpoints: [SourceID: Set<Int>]
+
+    /// The opaque handle for the active debug session, or `nil` when no debug
+    /// run is in progress (IMPL-02 / ARCH-04: only the ID, never the mailbox).
+    public var activeDebugSessionID: DebugSessionID?
+
+    /// The most recent snapshot from the active debug session. Updated on each
+    /// `AppEvent.debugPaused`; cleared when the session ends (`debugFinished`).
+    public var currentDebugSnapshot: DebugSnapshot?
+
+    /// When `true`, the reducer is waiting for the user to confirm a debug
+    /// restart (`Restart debug session? [y/N]` — ux-spec §7.2 precondition (c)).
+    public var debugRestartPending: Bool
+
     // MARK: Initialiser
 
     /// Seed state: constructed by the AppDriver before the first `reduce` call.
@@ -778,7 +813,11 @@ public struct AppState: Sendable {
         nvimFallbackNotedThisSession: Bool = false,
         nvimPendingResize: TerminalSize? = nil,
         nvimResizeDeadline: Date? = nil,
-        terminalSize: TerminalSize = TerminalSize(cols: 80, rows: 24)
+        terminalSize: TerminalSize = TerminalSize(cols: 80, rows: 24),
+        breakpoints: [SourceID: Set<Int>] = [:],
+        activeDebugSessionID: DebugSessionID? = nil,
+        currentDebugSnapshot: DebugSnapshot? = nil,
+        debugRestartPending: Bool = false
     ) {
         self.launch = launch
         self.project = project
@@ -806,5 +845,9 @@ public struct AppState: Sendable {
         self.nvimPendingResize = nvimPendingResize
         self.nvimResizeDeadline = nvimResizeDeadline
         self.terminalSize = terminalSize
+        self.breakpoints = breakpoints
+        self.activeDebugSessionID = activeDebugSessionID
+        self.currentDebugSnapshot = currentDebugSnapshot
+        self.debugRestartPending = debugRestartPending
     }
 }
