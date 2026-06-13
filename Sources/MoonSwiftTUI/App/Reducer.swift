@@ -93,6 +93,12 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         s.sources = [:]
         s.navigatorOrder = []
         s.selection = nil
+        // F5.4: load declared mocks; reset the mock-section cursor + live cache
+        // (stale on reload — repopulated on the next run).
+        s.mockStore = file.mocks
+        s.mockLiveState = nil
+        s.navigator.inMockSection = false
+        s.navigator.mockSelectedIndex = 0
         // F5.6: restore the saved navigator/bottom split ratios into the layout.
         applySplitRatios(&s, settings: file.settings)
         // Re-load sources from the freshly loaded project.
@@ -1075,30 +1081,14 @@ private func reduceNavigatorKey(
     switch (code, modifiers) {
 
     case (.char("j"), []):
-        // Navigate within the filtered list, then map back to the full order index.
-        let filtered = filteredIDs(from: s)
-        if !filtered.isEmpty {
-            let currentPos = filteredPosition(
-                selectedIndex: s.navigator.selectedIndex, filtered: filtered, order: s.navigatorOrder)
-            let nextPos = min((currentPos ?? 0) + 1, filtered.count - 1)
-            s.navigator.selectedIndex = fullOrderIndex(
-                filteredPos: nextPos, filtered: filtered, order: s.navigatorOrder)
-        }
-        return (s, [])
+        return (reduceNavigatorMoveDown(s), [])
 
     case (.char("k"), []):
-        let filtered = filteredIDs(from: s)
-        if !filtered.isEmpty {
-            let currentPos = filteredPosition(
-                selectedIndex: s.navigator.selectedIndex, filtered: filtered, order: s.navigatorOrder)
-            let prevPos = max((currentPos ?? 0) - 1, 0)
-            s.navigator.selectedIndex = fullOrderIndex(
-                filteredPos: prevPos, filtered: filtered, order: s.navigatorOrder)
-        }
-        return (s, [])
+        return (reduceNavigatorMoveUp(s), [])
 
     case (.char("g"), []):
-        // Jump to the first entry in the filtered list.
+        // Jump to the first entry in the filtered list (returns to the source section).
+        s.navigator.inMockSection = false
         let filtered = filteredIDs(from: s)
         if !filtered.isEmpty {
             s.navigator.selectedIndex = fullOrderIndex(
@@ -1107,7 +1097,8 @@ private func reduceNavigatorKey(
         return (s, [])
 
     case (.char("G"), []):
-        // Jump to the last entry in the filtered list.
+        // Jump to the last entry in the filtered list (returns to the source section).
+        s.navigator.inMockSection = false
         let filtered = filteredIDs(from: s)
         if !filtered.isEmpty {
             s.navigator.selectedIndex = fullOrderIndex(
@@ -2077,6 +2068,9 @@ private func extractExtraModules(from project: ProjectState) -> [String] {
 /// diagnostic index all start fresh for the newly selected source.
 private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
+    // F5.4: in the Mock Environment section, Enter does not load a source. Mock
+    // add/edit/delete are the `a`/`e`/`d` keys (F5.4 forms); a no-op here.
+    if s.navigator.inMockSection { return (s, []) }
     guard s.navigator.selectedIndex < s.navigatorOrder.count else {
         return (s, [])
     }
@@ -2103,13 +2097,13 @@ private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
 ///
 /// Delegates to `filteredNavigatorIDs` in Renderer.swift (the same logic drives
 /// both the display list and navigation so the two stay in sync).
-private func filteredIDs(from s: AppState) -> [SourceID] {
+func filteredIDs(from s: AppState) -> [SourceID] {
     filteredNavigatorIDs(order: s.navigatorOrder, filterText: s.navigator.filterText)
 }
 
 /// Returns the position of the selected entry within the filtered list, or nil
 /// if the currently selected source ID is not present in `filtered`.
-private func filteredPosition(
+func filteredPosition(
     selectedIndex: Int,
     filtered: [SourceID],
     order: [SourceID]
@@ -2122,7 +2116,7 @@ private func filteredPosition(
 /// Maps a position in the filtered list back to an index in the full `order` array.
 ///
 /// Returns the last valid index as a fallback so `selectedIndex` never goes out of range.
-private func fullOrderIndex(filteredPos: Int, filtered: [SourceID], order: [SourceID]) -> Int {
+func fullOrderIndex(filteredPos: Int, filtered: [SourceID], order: [SourceID]) -> Int {
     guard filtered.indices.contains(filteredPos) else { return max(0, order.count - 1) }
     let id = filtered[filteredPos]
     return order.firstIndex(of: id) ?? max(0, order.count - 1)

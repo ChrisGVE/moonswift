@@ -1,8 +1,8 @@
 moonswift                                                                       
 +----------------++------------------------------------------------------------+
 |hello.lua       ||>  1-- A sample Lua module                                  |
-|                ||   2local M = {}                                            |
-|                ||E  3                                                        |
+|─── Mock Environ||   2local M = {}                                            |
+|(run to populate||E  3                                                        |
 |                ||   4function M.greet(name)                                  |
 |                ||   5    print("Hello, " .. name)                            |
 |                ||   6end                                                     |

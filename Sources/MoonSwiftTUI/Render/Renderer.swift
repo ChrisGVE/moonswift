@@ -304,11 +304,28 @@ private func renderNavigator(
     // Highlight style for the selected row depends on navigator focus.
     let highlightStyle = navFocused ? tokenStyle(.focusBg, theme: theme) : dimStyle(theme)
 
+    // F5.4: append the Mock Environment section below the source list (only for a
+    // loaded project — quick-file / malformed states have no mocks). The combined
+    // selectedIndex points into the mock section when the cursor is there.
+    var finalSelectedIndex = selectedInFiltered
+    if case .loaded = state.project {
+        let sourceItemCount = items.count
+        let mockRows = buildMockNavRows(state)
+        items.append(contentsOf: mockNavRowSpans(mockRows, theme: theme))
+        if state.navigator.inMockSection {
+            let selectable = mockSelectableRowIndices(mockRows)
+            if !selectable.isEmpty {
+                let idx = min(max(state.navigator.mockSelectedIndex, 0), selectable.count - 1)
+                finalSelectedIndex = sourceItemCount + selectable[idx]
+            }
+        }
+    }
+
     var commands: [RenderCommand] = [
         .navigatorList(
             rect: listRect,
             items: items,
-            selectedIndex: selectedInFiltered,
+            selectedIndex: finalSelectedIndex,
             title: []
         )
     ]
