@@ -253,6 +253,17 @@ public enum Effect: Sendable {
     /// stepping UI (distinct from `.stopDebug` which was F6.1's teardown-only path).
     case sendDebugCommand(DebugSessionID, LuaDebugCommand)
 
+    /// Request the bounded/filtered user-globals slice for a paused session (F6.3 `g`).
+    ///
+    /// AppDriver calls `SessionEngineProtocol.requestGlobals(id)` nonisolated
+    /// (PERF-11 — the serial executor is parked in `runForDebug` during a pause,
+    /// so an async hop would deadlock). The session's mailbox latches the request
+    /// and the two-predicate wake services it IN-PLACE at the current pause line
+    /// (no VM advance, DOM-08); the adapter republishes a snapshot with `globals`
+    /// populated, arriving back as a fresh `AppEvent.debugPaused`. A stale id is a
+    /// silent no-op (ARCH-06).
+    case requestGlobals(DebugSessionID)
+
     // MARK: Process lifecycle
 
     /// Break the AppDriver loop, run teardown, and `exit(exitCode)`.

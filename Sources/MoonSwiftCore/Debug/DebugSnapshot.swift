@@ -143,6 +143,18 @@ public struct DebugSnapshot: Sendable {
     /// (bounded + filtered) on the globals path, which republishes a new
     /// snapshot rather than mutating this one.
     public let globals: [DebugVariable]?
+    /// How many user-globals were dropped by the breadth cap (F6.0 §2). `0`
+    /// when `globals` is `nil` (not yet fetched) or when the filtered slice fit
+    /// within `globalsBreadthCap`. When positive, the Debug tab renders the
+    /// `(… N more globals)` elision marker (ux-spec §6.5) after the slice.
+    ///
+    /// This is the encoding chosen for the breadth-cap marker (D2): an explicit
+    /// count on the snapshot, rather than a synthetic sentinel `DebugVariable`,
+    /// keeps the `globals` array a clean list of real globals and lets the view
+    /// render the marker without parsing names. `0` is the safe default so every
+    /// pre-existing construction site (and the no-globals path) compiles and
+    /// behaves unchanged.
+    public let globalsElided: Int
 
     public init(
         sessionID: DebugSessionID,
@@ -150,7 +162,8 @@ public struct DebugSnapshot: Sendable {
         fragmentLine: Int,
         callStack: [DebugFrame],
         frameVars: [Int: ([DebugVariable], [DebugVariable])],
-        globals: [DebugVariable]?
+        globals: [DebugVariable]?,
+        globalsElided: Int = 0
     ) {
         self.sessionID = sessionID
         self.event = event
@@ -158,5 +171,6 @@ public struct DebugSnapshot: Sendable {
         self.callStack = callStack
         self.frameVars = frameVars
         self.globals = globals
+        self.globalsElided = globalsElided
     }
 }

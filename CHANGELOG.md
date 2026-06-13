@@ -11,6 +11,17 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+#### Debugging (P2 F6)
+
+- Debug run (`<C-g>`), line breakpoints (`b`), and stepping (`s`/`i`/`o`/`c`,
+  stop `x`) with a paused status-bar hint.
+- Debug tab (`3`) with variable inspection and the call stack: Locals, Upvalues,
+  Globals, and Call Stack sections. `j`/`k` move a row cursor; `<Enter>` selects
+  a frame (re-rendering its locals/upvalues from the eagerly-captured snapshot,
+  no engine re-entry) or expands a table value inline. Press `g` to capture a
+  bounded, filtered globals slice; a capped slice shows `(… N more globals)`.
+  Cyclic / depth-limited values render `(cycle)` / `(…)`.
+
 #### Editing subsystem (embedded Neovim + `$EDITOR` fallback)
 
 - In-place editing via embedded Neovim (`<C-e>`): spawns `nvim --embed --clean`

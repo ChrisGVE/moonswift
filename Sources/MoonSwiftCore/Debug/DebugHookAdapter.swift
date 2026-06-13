@@ -173,7 +173,7 @@ public func makeDebugHookHandler(
                 // `inspector` is still valid: the synchronous handler has not
                 // returned. Call inspector.globals() right here, at the current
                 // pause line. The VM does NOT advance.
-                let globalsSlice = captureFilteredGlobals(
+                let captured = captureFilteredGlobals(
                     inspector: inspector,
                     baselineStdlibNames: baselineStdlibNames
                 )
@@ -183,7 +183,8 @@ public func makeDebugHookHandler(
                     fragmentLine: snapshot.fragmentLine,
                     callStack: snapshot.callStack,
                     frameVars: snapshot.frameVars,
-                    globals: globalsSlice
+                    globals: captured.slice,
+                    globalsElided: captured.elided
                 )
                 session.setSnapshot(withGlobals)
                 onPause(withGlobals)
@@ -269,25 +270,36 @@ private func buildPauseSnapshot(
 ///   2. Apply the security blocklist: os / io / package / debug + __moonswift_.
 ///   3. Breadth-cap at `DebugSnapshot.globalsBreadthCap` (256).
 ///
-/// Returns an empty array `[]` (not `nil`) when no user globals survive
-/// filtering. The empty non-nil slice renders as `(no globals defined)` in the
-/// Debug tab (DOM-10 / UX-R3-02); `nil` means "not yet fetched".
+/// Returns `slice` — the bounded list — plus `elided`, the count of user-globals
+/// that passed the filter but were dropped by the breadth cap. `elided` drives
+/// the `(… N more globals)` marker in the Debug tab (D2 / ux-spec §6.5); it is
+/// the count of FILTERED globals beyond the cap, not the raw `_G` overflow, so
+/// stdlib/blocklisted names never inflate it. `slice` is the empty array `[]`
+/// (not `nil`) when no user globals survive filtering — that renders as
+/// `(no globals defined)` (DOM-10 / UX-R3-02); `nil` means "not yet fetched".
 private func captureFilteredGlobals(
     inspector: LuaDebugInspector,
     baselineStdlibNames: Set<String>
-) -> [DebugVariable] {
+) -> (slice: [DebugVariable], elided: Int) {
     let allGlobals = inspector.globals()
     var result: [DebugVariable] = []
+    var elided = 0
     result.reserveCapacity(min(allGlobals.count, DebugSnapshot.globalsBreadthCap))
 
     for pair in allGlobals {
-        guard result.count < DebugSnapshot.globalsBreadthCap else { break }
         let name = pair.name
         guard !baselineStdlibNames.contains(name) else { continue }
         guard !isSecurityBlocklisted(name) else { continue }
-        result.append(inspectedValueToDebugVariable(name: name, value: pair.value))
+        // Count every filtered global; keep only the first `cap` in the slice.
+        // The remainder feeds the `(… N more globals)` elision marker rather
+        // than being silently dropped (D2 resolution).
+        if result.count < DebugSnapshot.globalsBreadthCap {
+            result.append(inspectedValueToDebugVariable(name: name, value: pair.value))
+        } else {
+            elided += 1
+        }
     }
-    return result
+    return (result, elided)
 }
 
 /// Returns `true` for names the security blocklist excludes from the globals

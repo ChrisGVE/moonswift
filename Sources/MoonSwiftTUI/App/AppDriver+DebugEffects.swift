@@ -108,6 +108,20 @@ extension AppDriver {
     func executeSendDebugCommand(_ sessionID: DebugSessionID, _ command: LuaDebugCommand) {
         sessionEngine?.sendDebugCommand(sessionID, command)
     }
+
+    // MARK: Effect.requestGlobals
+
+    /// Execute `Effect.requestGlobals(sessionID)` — F6.3 `g` globals capture.
+    ///
+    /// Latches a globals-capture request on the live session via the engine's
+    /// nonisolated `requestGlobals` path (PERF-11 — same no-async-hop reasoning
+    /// as `sendDebugCommand`: the executor is parked in the paused `runForDebug`
+    /// block). The mailbox's two-predicate wake services the latch in-place; the
+    /// adapter republishes a snapshot carrying `globals`, which returns as a fresh
+    /// `AppEvent.debugPaused`. Stale id → silent no-op (ARCH-06).
+    func executeRequestGlobals(_ sessionID: DebugSessionID) {
+        sessionEngine?.requestGlobals(sessionID)
+    }
 }
 
 // MARK: - SessionIDBox (internal to this file)

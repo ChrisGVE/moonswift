@@ -1569,45 +1569,6 @@ private func renderDiagnosticsTab(
 ///       `── Paused at line N ──`
 ///       One row per stack frame: `  #N  <source>:<line>  <what>`
 ///       (Up to 8 frames; rest elided.)
-private func renderDebugTab(
-    state: AppState,
-    rect: Rect,
-    theme: ThemeState
-) -> [RenderCommand] {
-    guard let snapshot = state.currentDebugSnapshot else {
-        // Idle state — no active debug session.
-        let msg = state.activeDebugSessionID != nil ? "Running…" : "No debug session."
-        let lineW = msg.count
-        let padLeft = max(0, (Int(rect.width) - lineW) / 2)
-        let padRight = max(0, Int(rect.width) - padLeft - lineW)
-        let centeredText = String(repeating: " ", count: padLeft) + msg + String(repeating: " ", count: padRight)
-        return [.paragraph(rect: rect, lines: [[Span(centeredText, style: dimStyle(theme))]], block: nil)]
-    }
-
-    var lines: [[Span]] = []
-
-    // Header: paused line.
-    let headerText = "── Paused at line \(snapshot.fragmentLine) ──"
-    lines.append([Span(headerText, style: dimStyle(theme))])
-
-    // Stack frames (up to 8).
-    let frameCap = 8
-    let frames = snapshot.callStack.prefix(frameCap)
-    for frame in frames {
-        let srcPart = frame.source ?? "<chunk>"
-        let linePart = frame.line > 0 ? ":\(frame.line)" : ""
-        let namePart = frame.name.map { "  \($0)" } ?? ""
-        let text = "  #\(frame.level)  \(srcPart)\(linePart)\(namePart)"
-        lines.append([Span(text, style: normalStyle(theme))])
-    }
-    if snapshot.callStack.count > frameCap {
-        let elided = snapshot.callStack.count - frameCap
-        lines.append([Span("  … \(elided) more frame(s)", style: dimStyle(theme))])
-    }
-
-    return [.paragraph(rect: rect, lines: lines, block: nil)]
-}
-
 /// Formats one diagnostic as the ux-spec §6.5 canonical string.
 ///
 /// Format: `<E|W> <line>:<col> <message> [<code>]`
@@ -1669,7 +1630,10 @@ private func buildLeftIndicators(state: AppState, cols: Int) -> String {
         } else {
             displayName = "<unknown>"
         }
-        return buildPausedStatusHint(displayName: displayName, line: snapshot.fragmentLine)
+        let hint = buildPausedStatusHint(displayName: displayName, line: snapshot.fragmentLine)
+        // While a `g` globals capture is in flight, append the pending indicator
+        // (ux-spec §7.2 / UX-R2-01).
+        return state.debugGlobalsRequested ? hint + "  [globals pending…]" : hint
     }
 
     // Full indicator strings (ux-spec §5.2 — exact literals).

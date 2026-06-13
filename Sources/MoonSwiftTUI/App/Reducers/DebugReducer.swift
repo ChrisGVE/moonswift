@@ -180,8 +180,9 @@ func reduceDebugRestartKey(
 /// on the paused line.
 func reduceDebugPaused(_ s: AppState, snapshot: DebugSnapshot) -> (AppState, [Effect]) {
     var s = s
-    s.currentDebugSnapshot = snapshot
-    s.activeDebugSessionID = snapshot.sessionID
+
+    // F6.3 inspection-state transition (DebugInspectionReducer.swift, §4.1).
+    applyPauseInspection(&s, snapshot: snapshot)
 
     // Auto-show the Debug tab (ux-spec §6.1, §7.2).
     s.bottomPane.activeTab = .debug
@@ -223,6 +224,7 @@ func reduceDebugFinished(
     s.activeDebugSessionID = nil
     s.currentDebugSnapshot = nil
     s.debugRestartPending = false
+    clearDebugInspectionState(&s)
 
     // Rebuild gutter marks: remove the `▶`/`●` paused marker.
     if let sid = s.selection {
@@ -373,6 +375,8 @@ func reduceDebugStepKey(
     // Paused: deliver the command and clear the snapshot (Case-2 transition).
     var s = s
     s.currentDebugSnapshot = nil
+    // A latched-but-unresolved `g` is discarded on resume (§6.9 Case-2).
+    s.debugGlobalsRequested = false
     // Rebuild gutter marks: remove the ▶ paused-line marker (VM no longer at that line).
     if let sid = s.selection {
         let bps = s.breakpoints[sid] ?? []
@@ -396,6 +400,7 @@ func reduceDebugStop(_ s: AppState, sessionID: DebugSessionID) -> (AppState, [Ef
     s.activeDebugSessionID = nil
     s.currentDebugSnapshot = nil
     s.debugRestartPending = false
+    clearDebugInspectionState(&s)
     // Rebuild gutter marks: remove the paused-line marker.
     if let sid = s.selection {
         let bps = s.breakpoints[sid] ?? []

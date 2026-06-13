@@ -38,21 +38,52 @@ bottom pane switches to the **Debug** tab.
 
 ## The Debug tab
 
-The Debug tab (key `3`, or `<Tab>` to cycle) shows the current pause state:
+The Debug tab (key `3`, or `<Tab>` to cycle) appears only while a debug session
+is active. Pressing `3` with no session shows `Debug tab not active.`
 
-- **No debug session** — idle message.
-- **Running** — `Running…` while the VM is executing between pauses.
-- **Paused** — pause header and call stack:
+### Inspecting variables & the call stack
+
+While **paused**, the tab shows four sections:
 
 ```
-── Paused at line N ──
-  #0  test.lua:7  main
+── Locals ──
+  local count = 3
+  ▸ local cfg = {table}
+── Upvalues ──
+  upvalue base = 10
+── Globals ──
+── Call Stack ──
+▸ #0  test.lua:7  main
   #1  test.lua:2  helper
 ```
 
-Each stack frame shows: level, source file, current line, and function name
-(when available). Up to 8 frames are shown; deeper stacks show a `… N
-more frame(s)` suffix.
+- **Locals** / **Upvalues** — the variables of the *selected* frame, as
+  `local <name> = <value>` / `upvalue <name> = <value>`.
+- **Globals** — not captured automatically. Press `g` while paused to capture a
+  bounded, filtered slice of user-defined globals (standard-library and reserved
+  names are excluded). While the capture is in flight the section shows
+  `(globals pending…)` and the status bar appends `[globals pending…]`. The
+  states are: header only (not yet fetched), `(no globals defined)` (fetched, no
+  user globals), and `(… N more globals)` when the slice is capped at 256.
+- **Call Stack** — one line per frame, `#<level>  <source>:<line>  <name>`.
+
+Navigate with `j`/`k` (the `❯` cursor marks the active row) and act with
+`<Enter>`:
+
+- On a **call-stack frame**, `<Enter>` selects it (marked `▸`) — the Locals and
+  Upvalues sections re-render for that frame and the code pane jumps to its line.
+  Frame data is captured eagerly at the pause, so switching frames never
+  re-enters the engine.
+- On an **expandable table value** (`▸`), `<Enter>` expands it inline (`▾`) to
+  show its children; `<Enter>` again collapses it. Values past the depth limit
+  render `(…)` and cyclic references render `(cycle)`.
+
+### While the VM is running between pauses
+
+The Debug tab stays visible between pauses. Before the first pause it shows
+`VM running…` with each section reading `(VM running — no snapshot yet)`. After a
+step or continue it shows `VM running… (showing last pause)` and keeps the last
+pause's data, dimmed, so you don't lose your place.
 
 ## Gutter marks during a debug session
 

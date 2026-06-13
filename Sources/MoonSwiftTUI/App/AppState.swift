@@ -781,6 +781,40 @@ public struct AppState: Sendable {
     /// restart (`Restart debug session? [y/N]` — ux-spec §7.2 precondition (c)).
     public var debugRestartPending: Bool
 
+    // MARK: Debug-tab inspection state (P2 F6.3, ux-spec §7.2)
+
+    /// The retained last-pause snapshot, kept across a resume so the Debug tab
+    /// can render §6.9 Case-2 ("VM running… (showing last pause)") with the prior
+    /// frame data dimmed. Distinct from `currentDebugSnapshot`, which is `nil`
+    /// whenever the VM is NOT paused: the pair lets the tab tell apart the three
+    /// states — paused (`currentDebugSnapshot != nil`), Case-1 fresh-open
+    /// (`lastPauseSnapshot == nil`), Case-2 after-pause (`lastPauseSnapshot != nil`).
+    /// Cleared only when the session ends (`debugFinished` / `x` stop).
+    public var lastPauseSnapshot: DebugSnapshot?
+
+    /// The selected call-stack frame level (0 = current/innermost). `<Enter>` on
+    /// a Call-Stack row sets this; the Locals/Upvalues sections then render
+    /// `frameVars[debugSelectedFrame]` (pure UI nav, no engine re-entry — F6.3).
+    /// Reset to 0 on every new pause.
+    public var debugSelectedFrame: Int
+
+    /// Row index of the Debug-tab selection cursor over the flattened row list
+    /// (`buildDebugRows`). `j`/`k` move it; `<Enter>` acts on the row it lands on
+    /// (select frame or toggle table expansion). Reset to 0 on every new pause.
+    public var debugSelectedRow: Int
+
+    /// The set of expanded inline-table value paths in the Debug tab. A path is
+    /// the section tag + name chain (e.g. `local:t` / `local:t/child`), so the
+    /// same key under Locals vs Globals never collides. `<Enter>` on an
+    /// expandable value toggles membership. Cleared on every new pause.
+    public var debugExpandedPaths: Set<String>
+
+    /// `true` while a `g` globals capture is in flight (between the `g` press and
+    /// the republished snapshot). Drives the `(globals pending…)` Globals-section
+    /// line and the `[globals pending…]` status indicator (UX-R2-01). Cleared
+    /// when the globals-bearing snapshot arrives, on resume, and on session end.
+    public var debugGlobalsRequested: Bool
+
     // MARK: Initialiser
 
     /// Seed state: constructed by the AppDriver before the first `reduce` call.
@@ -817,7 +851,12 @@ public struct AppState: Sendable {
         breakpoints: [SourceID: Set<Int>] = [:],
         activeDebugSessionID: DebugSessionID? = nil,
         currentDebugSnapshot: DebugSnapshot? = nil,
-        debugRestartPending: Bool = false
+        debugRestartPending: Bool = false,
+        lastPauseSnapshot: DebugSnapshot? = nil,
+        debugSelectedFrame: Int = 0,
+        debugSelectedRow: Int = 0,
+        debugExpandedPaths: Set<String> = [],
+        debugGlobalsRequested: Bool = false
     ) {
         self.launch = launch
         self.project = project
@@ -849,5 +888,10 @@ public struct AppState: Sendable {
         self.activeDebugSessionID = activeDebugSessionID
         self.currentDebugSnapshot = currentDebugSnapshot
         self.debugRestartPending = debugRestartPending
+        self.lastPauseSnapshot = lastPauseSnapshot
+        self.debugSelectedFrame = debugSelectedFrame
+        self.debugSelectedRow = debugSelectedRow
+        self.debugExpandedPaths = debugExpandedPaths
+        self.debugGlobalsRequested = debugGlobalsRequested
     }
 }
