@@ -14,7 +14,7 @@ moonswift
 |                ||  Space toggle  Enter confirm  Tab prev  Esc cancel         |
 +----------------++------------------------------------------------------------+
 +------------------------------------------------------------------------------+
-|[ Output ] [ Diagnostics ]                                                    |
+|[ Output ] [ Diagnostics ] [ Debug ]                                          |
 |                                                                              |
 |                                                                              |
 |                                                                              |

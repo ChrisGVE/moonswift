@@ -338,7 +338,7 @@ struct NavigationSequenceTests {
 
     // MARK: Code pane scroll keys
 
-    @Test("Code pane j/k/d/u/f/b/g/G scroll keys sequence")
+    @Test("Code pane j/k/d/u/f/C-b/g/G scroll keys sequence")
     func codePaneScrollKeys() {
         var state = AppState()
         state.focus = .pane(.codePane)
@@ -360,8 +360,8 @@ struct NavigationSequenceTests {
         let (s4, _) = reduce(s3, .key(.char("u"), modifiers: []))
         #expect(s4.codePane.scrollOffset == 21)
 
-        // b scrolls up full page (20)
-        let (s5, _) = reduce(s4, .key(.char("b"), modifiers: []))
+        // C-b scrolls up full page (20) — UX-01: b moved to breakpoint-toggle
+        let (s5, _) = reduce(s4, .key(.char("b"), modifiers: .ctrl))
         #expect(s5.codePane.scrollOffset == 1)
 
         // k scrolls up 1
@@ -391,8 +391,8 @@ struct NavigationSequenceTests {
         let (s1, _) = reduce(state, .key(.char("u"), modifiers: []))
         #expect(s1.codePane.scrollOffset == 0)
 
-        // b from 0 → clamped at 0
-        let (s2, _) = reduce(s1, .key(.char("b"), modifiers: []))
+        // C-b from 0 → clamped at 0 (UX-01: b moved to breakpoint-toggle)
+        let (s2, _) = reduce(s1, .key(.char("b"), modifiers: .ctrl))
         #expect(s2.codePane.scrollOffset == 0)
     }
 

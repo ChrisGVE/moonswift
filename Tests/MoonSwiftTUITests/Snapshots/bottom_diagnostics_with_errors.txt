@@ -14,7 +14,7 @@ moonswift
 |                ||                                                            |
 +----------------++------------------------------------------------------------+
 +------------------------------------------------------------------------------+
-|[ Output ] [ Diagnostics ]                                           hello.lua|
+|[ Output ] [ Diagnostics ] [ Debug ]                                 hello.lua|
 |── Syntax ──                                                                  |
 |E 1:1 unexpected symbol near '}'                                              |
 |── Lint ──                                                                    |

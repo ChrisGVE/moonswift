@@ -205,12 +205,12 @@ struct CodePaneScrollTests {
         #expect(next.codePane.scrollOffset == 20, "f must scroll down fullPageSize (20)")
     }
 
-    @Test("b scrolls up by fullPageSize, clamped to 0")
-    func bScrollsFullPageUp() {
+    @Test("C-b scrolls up by fullPageSize, clamped to 0 (UX-01: b moved to breakpoint-toggle)")
+    func ctrlBScrollsFullPageUp() {
         var (state, _) = codePaneState(code: (1...50).map { "\($0)" }.joined(separator: "\n"))
         state.codePane.scrollOffset = 10
-        let (next, _) = reduce(state, .key(.char("b"), modifiers: []))
-        #expect(next.codePane.scrollOffset == 0, "b from offset 10 clamped to 0 (fullPage=20)")
+        let (next, _) = reduce(state, .key(.char("b"), modifiers: .ctrl))
+        #expect(next.codePane.scrollOffset == 0, "C-b from offset 10 clamped to 0 (fullPage=20)")
     }
 }
 
