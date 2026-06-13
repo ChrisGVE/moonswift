@@ -635,12 +635,23 @@ F5.5 acceptance criteria, CONS-02]
 **Variable / Debug tab placement**: the bottom pane gains a `[ Debug ]` tab (auto-shown when `<C-g>` starts). Tab content:
 - **Locals** section: `local <name> = <value>` per local in the current frame.
 - **Upvalues** section: `upvalue <name> = <value>`.
-- **Globals** section: on-demand, expanded with a key (`g` to toggle).
+- **Globals** section: on-demand; press `g` while paused to capture.
 - **Call stack** section: one line per frame, `<Enter>` on a frame retargets the code pane to that frame's source line.
 
 Table values support inline expansion with `<Enter>` on the value line. [PRD F6]
 
+**Globals section binding strings** (F6.0 / PRD §F6.0 §2, DOM-10 / UX-R3-02):
+
+| State | Binding string | Colour |
+|-------|---------------|--------|
+| Not yet fetched (`globals == nil`) | _(nothing — section header only)_ | — |
+| Fetched, no user globals (`globals == []`) | `(no globals defined)` | `dim` |
+| Capture in flight (between `g` and re-published snapshot) | `(globals pending…)` | `dim` |
+| Slice breadth-capped at 256 (N entries elided) | `(… N more globals)` | `dim` |
+
 Status bar while paused: `[paused at <display-name>:<line>]  s/i/o step  c continue  x stop`.
+
+Status bar while globals capture is in flight: append `[globals pending…]` after the paused hint. [PRD §F6.0 §2, UX-R2-01]
 
 ### 7.3 P4a — Suspend-to-`$EDITOR` round trip
 

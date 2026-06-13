@@ -32,12 +32,14 @@
 // executor, which is occupied by the parked `runForDebug` block during a pause.
 // A stale id is a silent no-op (ARCH-06).
 //
-// ## F5.0 scope
+// ## F5.0 + F6.0 scope
 //
 // startSession installs the engine + print capture + stdlib baseline. Mock
 // SERVER registration (engine.register(server:)) is the F5.1/F5.2 increment to
-// startSession; the debug pause HOOK is the F6.0 increment to runForDebug. Both
-// are clean seams, marked below — not stubs.
+// startSession. F6.0 (#9) wired the debug pause hook into runForDebug via the
+// new runForDebugOnQueue helper, which builds a LuaDebugHandler via
+// makeDebugHookHandler (DebugHookAdapter.swift) and runs the fragment under
+// engine.runDebug (full LINE/CALL/RET mask).
 //
 // Upstream: LuaSwift (LuaEngine, LuaError, LuaValue, LuaEngineConfiguration,
 //           LuaDebugCommand), RunConfig, MockStore, LuaSourceFragment,
@@ -207,12 +209,9 @@ public final class SessionEngine: SessionEngineProtocol {
         onPause: @escaping @Sendable (DebugSnapshot) -> Void
     ) async -> (DebugSessionID, CoreRunOutcome) {
         // The DebugSession (mailbox owner) is created up front so its id can be
-        // returned and command delivery can address it. F6.0 installs the debug
-        // hook that drives onPause + the mailbox; F5.0 establishes the lifecycle
-        // and runs the fragment to completion.
+        // returned and command delivery can address it before the VM thread starts.
         let session = DebugSession(breakpoints: breakpoints)
         registerSession(session)
-        _ = onPause  // F6.0 wires this into the debug hook adapter.
 
         let outcome = await withCheckedContinuation { (continuation: CheckedContinuation<CoreRunOutcome, Never>) in
             queue.async { [weak self] in
@@ -220,12 +219,22 @@ public final class SessionEngine: SessionEngineProtocol {
                     continuation.resume(returning: .cancelled)
                     return
                 }
-                continuation.resume(returning: self.runOnQueue(fragment))
+                // baselineStdlibNames is queue-guarded (nonisolated(unsafe), written
+                // only on queue in startSession/endSession). Reading here is safe.
+                let baseline = self.baselineStdlibNames
+                continuation.resume(
+                    returning: self.runForDebugOnQueue(
+                        fragment,
+                        session: session,
+                        baselineStdlibNames: baseline,
+                        onPause: onPause
+                    )
+                )
             }
         }
 
-        // Completion ends the session (F5.0 lifecycle): discard the DebugSession
-        // and its mailbox. A later command addressed at this id is a no-op.
+        // Completion ends the session: discard the DebugSession and its mailbox.
+        // A later command addressed at this id is a silent no-op (ARCH-06).
         unregisterSession(session.id)
         return (session.id, outcome)
     }
@@ -326,6 +335,83 @@ public final class SessionEngine: SessionEngineProtocol {
 
     // MARK: - Private: run-on-queue
 
+    /// Runs `fragment` under the F6.0 debug hook adapter on the serial executor.
+    ///
+    /// Installs the debug hook via `makeDebugHookHandler`, runs under
+    /// `engine.runDebug` (full LINE/CALL/RET mask), and removes the handler after
+    /// the run so non-debug `sessionRun` calls carry zero overhead
+    /// (`LuaEngine+Debug.swift:48` no-debug overhead guarantee).
+    ///
+    /// The `setRunState` closure bridges `DebugHookRunState` back to the engine's
+    /// private `RunState`: `.paused` when the adapter parks, `.running` when it
+    /// resumes. The `defer` sets `.idle` after `runDebug` returns.
+    private func runForDebugOnQueue(
+        _ fragment: LuaSourceFragment,
+        session: DebugSession,
+        baselineStdlibNames: Set<String>,
+        onPause: @escaping @Sendable (DebugSnapshot) -> Void
+    ) -> CoreRunOutcome {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard let engine, let config else {
+            let diag = Diagnostic(
+                severity: .error,
+                line: 0,
+                message: "Session engine not started — call startSession first",
+                source: .runtime
+            )
+            return .error(diag, traceback: nil)
+        }
+
+        // onResumed: the full AppEvent plumbing (AppDriver posting debugResumed) is
+        // wired in F6.2. The adapter calls this seam but the closure is empty until
+        // F6.2 adds the real AppEvent post. The adapter's behavior (returning the
+        // command to the VM) is unchanged.
+        let onResumed: @Sendable () -> Void = {}
+
+        let handler = makeDebugHookHandler(
+            session: session,
+            fragment: fragment,
+            baselineStdlibNames: baselineStdlibNames,
+            setRunState: { [weak self] state in
+                guard let self else { return }
+                switch state {
+                case .paused: self.setRunState(.paused)
+                case .running: self.setRunState(.running)
+                }
+            },
+            onPause: onPause,
+            onResumed: onResumed
+        )
+        engine.setDebugHandler(handler)
+        defer {
+            engine.setDebugHandler(nil)
+            setRunState(.idle)
+        }
+
+        setRunState(.running)
+        #if MOONSWIFT_LUASWIFT_22
+            engine.resetCancellation()
+        #endif
+
+        let start = ContinuousClock.now
+        let result: LuaValue
+        do {
+            result = try engine.runDebug(fragment.code)
+        } catch let luaError as LuaError {
+            return outcome(for: luaError, provenance: fragment.provenance, config: config)
+        } catch {
+            let diag = Diagnostic(
+                severity: .error,
+                line: 0,
+                message: "Unexpected engine error: \(error.localizedDescription)",
+                source: .runtime
+            )
+            return .error(diag, traceback: nil)
+        }
+        let duration = ContinuousClock.now - start
+        return .done(value: luaValueDisplayString(result), duration: duration)
+    }
+
     /// Runs `fragment` in the session engine on the serial executor and maps the
     /// result to a `CoreRunOutcome`. Sets RunState `.running` for the body and
     /// `.idle` after. The engine survives — this is the keep-alive contract.
@@ -375,10 +461,11 @@ public final class SessionEngine: SessionEngineProtocol {
         switch luaError {
         case .instructionLimitExceeded:
             return .limitExceeded(kind: .instructions(count: config.instructionLimit))
-        #if MOONSWIFT_LUASWIFT_22
-            case .cancelled:
-                return .cancelled
-        #endif
+        case .cancelled:
+            // LuaError.cancelled exists in LuaSwift 1.12.4; produced by .stop debug
+            // command or by engine.requestCancellation() (F6.0). The MOONSWIFT_LUASWIFT_22
+            // gate only covers engine.resetCancellation() — catching .cancelled is ungated.
+            return .cancelled
         default:
             let diag = Diagnostic.from(luaError: luaError, provenance: provenance)
             return .error(diag, traceback: nil)

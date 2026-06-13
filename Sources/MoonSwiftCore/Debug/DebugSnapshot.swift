@@ -116,10 +116,21 @@ public struct DebugFrame: Sendable, Equatable {
 /// snapshot with `globals` populated rather than mutating a shared value — a
 /// `var` would invite a Swift 6 data race on a `Sendable` value shared across
 /// threads.
+///
+/// `sessionID` carries the opaque handle for the session that produced this
+/// snapshot. The TUI (and tests) use it to address `sendDebugCommand` /
+/// `requestGlobals` without holding a separate reference to the session registry.
+/// It is always the same value for every snapshot emitted within one run.
 public struct DebugSnapshot: Sendable {
     /// Hard cap on the breadth of the user-globals slice (F6.0 §2).
     public static let globalsBreadthCap = 256
 
+    /// Opaque handle for the live session that produced this snapshot.
+    ///
+    /// Used by the TUI reducer and tests to address `sendDebugCommand` /
+    /// `requestGlobals` calls without storing a separate out-of-band reference.
+    /// A stale id (session already ended) is a silent no-op (ARCH-06).
+    public let sessionID: DebugSessionID
     /// Whether this pause landed on a stepping line or a breakpoint.
     public let event: DebugEventKind
     /// The fragment-relative line of the pause (`lineOffset` already applied).
@@ -134,12 +145,14 @@ public struct DebugSnapshot: Sendable {
     public let globals: [DebugVariable]?
 
     public init(
+        sessionID: DebugSessionID,
         event: DebugEventKind,
         fragmentLine: Int,
         callStack: [DebugFrame],
         frameVars: [Int: ([DebugVariable], [DebugVariable])],
         globals: [DebugVariable]?
     ) {
+        self.sessionID = sessionID
         self.event = event
         self.fragmentLine = fragmentLine
         self.callStack = callStack
