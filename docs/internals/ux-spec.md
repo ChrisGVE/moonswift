@@ -113,6 +113,7 @@ The `<Tab>` context-sensitivity is the **only** context-sensitive key in P1. The
 | `<C-h>` | Jump to navigator | [PRD §6.2] |
 | `<C-l>` | Jump to code pane | [PRD §6.2] |
 | `<C-j>` | Jump to bottom pane | [PRD §6.2] |
+| `<C-g>` | Start / restart debug run | P2 F6.1; four precondition gates (see §7.2 and debugging.md) |
 
 **Navigator keys** (focus = navigator):
 
@@ -137,7 +138,8 @@ The `<Tab>` context-sensitivity is the **only** context-sensitive key in P1. The
 | `d` | Scroll down half-page (`Ctrl-d` vim equivalent) |
 | `u` | Scroll up half-page |
 | `f` | Scroll down full page |
-| `b` | Scroll up full page |
+| `<C-b>` | Scroll up full page (UX-01: was `b`; `b` now = breakpoint toggle — see below) |
+| `b` | Toggle breakpoint on cursor line; context-scoped: code-pane focus + fragment loaded + code line (P2 F6.1) |
 | `g` | Jump to top |
 | `G` | Jump to bottom |
 | `:<N><Enter>` | Jump to line N (the **only** `:` command in P1; `:q` shows "use q to quit" transient) |
@@ -157,6 +159,7 @@ The `<Tab>` context-sensitivity is the **only** context-sensitive key in P1. The
 | `y` | Yank (copy to pbcopy) the focused line |
 | `1` | Quick-jump to Output tab [PRD §6.7] |
 | `2` | Quick-jump to Diagnostics tab [PRD §6.7] |
+| `3` | Quick-jump to Debug tab (P2 F6.1) |
 | `<Tab>` | Cycle to next tab (context-sensitive behavior) [PRD §6.2] |
 | `<C-l>` | Clear output buffer [PRD §6.2] |
 

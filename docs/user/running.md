@@ -162,3 +162,26 @@ how any other Lua code behaves under the configured engine mode.
 
 For the full mock schema, see the [project file reference](project-file.md).
 For worked examples, see [mocking.md](mocking.md).
+
+## Debug run (`<C-g>`)
+
+A debug run lets you pause execution at breakpoints and inspect the call
+stack. See [debugging.md](debugging.md) for the full guide.
+
+**Quick start:**
+
+1. Press `b` with the code pane focused to toggle a breakpoint on the cursor
+   line (gutter shows `●`).
+2. Press `<C-g>` to start a debug run. The bottom pane switches to the Debug
+   tab automatically.
+3. When the VM hits a breakpoint the Debug tab shows the call stack. Press
+   `<C-g>` again to restart, or wait for the run to finish.
+
+**Preconditions for `<C-g>`:**
+
+| Situation | Transient message |
+|-----------|-------------------|
+| No source loaded | `No source to debug.` |
+| A run is already in progress | `A run is already in progress.` |
+| Debug session already active | `Restart debug session? [y/N]` |
+| Unsupported Lua version | `Debugging unavailable for this Lua version.` |
