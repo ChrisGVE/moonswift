@@ -93,6 +93,12 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         s.sources = [:]
         s.navigatorOrder = []
         s.selection = nil
+        // F5.4: load declared mocks; reset the mock-section cursor + live cache
+        // (stale on reload — repopulated on the next run).
+        s.mockStore = file.mocks
+        s.mockLiveState = nil
+        s.navigator.inMockSection = false
+        s.navigator.mockSelectedIndex = 0
         // F5.6: restore the saved navigator/bottom split ratios into the layout.
         applySplitRatios(&s, settings: file.settings)
         // Re-load sources from the freshly loaded project.
@@ -278,6 +284,13 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // Clears the paused snapshot so the Debug tab enters "VM running between
         // pauses" state. Stale session ID is a silent no-op (ARCH-06).
         return reduceDebugResumed(s, sessionID: sessionID)
+
+    case .mockLiveStateReady(let liveState):
+        // F5.4: store the introspection snapshot so the Mock Environment section
+        // shows live values. `isEmpty` snapshots keep the
+        // `(run to populate live state)` hint (DATA-09, handled by buildMockNavRows).
+        s.mockLiveState = liveState
+        return (s, [])
 
     case .debugRestartConfirmed:
         // Internal event: the reducer posted this to itself after confirmation.
@@ -832,6 +845,8 @@ private func reduceKey(
         return reducePickerKey(s, code: code, modifiers: modifiers)
     case .initForm:
         return reduceInitFormKey(s, code: code, modifiers: modifiers)
+    case .mockForm:
+        return reduceMockFormKey(s, code: code, modifiers: modifiers)
     case .nvimPane:
         return reduceNvimPaneKey(s, code: code, modifiers: modifiers)
     case .nvimSpawning:
@@ -850,6 +865,12 @@ private func reduceKey(
     // of pane focus (ARCH §F6.1). Runs before all other dispatch.
     if s.debugRestartPending {
         return reduceDebugRestartKey(s, code: code, modifiers: modifiers)
+    }
+
+    // F5.4 mock delete confirmation gate: `Delete this mock? [y/N]` — the next
+    // key resolves it (navigator focus, form closed). Runs before pane dispatch.
+    if s.mockDeletePending {
+        return reduceMockDeleteConfirm(s, code: code)
     }
 
     // Colon command interception: when the code pane is actively collecting a
@@ -1075,30 +1096,14 @@ private func reduceNavigatorKey(
     switch (code, modifiers) {
 
     case (.char("j"), []):
-        // Navigate within the filtered list, then map back to the full order index.
-        let filtered = filteredIDs(from: s)
-        if !filtered.isEmpty {
-            let currentPos = filteredPosition(
-                selectedIndex: s.navigator.selectedIndex, filtered: filtered, order: s.navigatorOrder)
-            let nextPos = min((currentPos ?? 0) + 1, filtered.count - 1)
-            s.navigator.selectedIndex = fullOrderIndex(
-                filteredPos: nextPos, filtered: filtered, order: s.navigatorOrder)
-        }
-        return (s, [])
+        return (reduceNavigatorMoveDown(s), [])
 
     case (.char("k"), []):
-        let filtered = filteredIDs(from: s)
-        if !filtered.isEmpty {
-            let currentPos = filteredPosition(
-                selectedIndex: s.navigator.selectedIndex, filtered: filtered, order: s.navigatorOrder)
-            let prevPos = max((currentPos ?? 0) - 1, 0)
-            s.navigator.selectedIndex = fullOrderIndex(
-                filteredPos: prevPos, filtered: filtered, order: s.navigatorOrder)
-        }
-        return (s, [])
+        return (reduceNavigatorMoveUp(s), [])
 
     case (.char("g"), []):
-        // Jump to the first entry in the filtered list.
+        // Jump to the first entry in the filtered list (returns to the source section).
+        s.navigator.inMockSection = false
         let filtered = filteredIDs(from: s)
         if !filtered.isEmpty {
             s.navigator.selectedIndex = fullOrderIndex(
@@ -1107,7 +1112,8 @@ private func reduceNavigatorKey(
         return (s, [])
 
     case (.char("G"), []):
-        // Jump to the last entry in the filtered list.
+        // Jump to the last entry in the filtered list (returns to the source section).
+        s.navigator.inMockSection = false
         let filtered = filteredIDs(from: s)
         if !filtered.isEmpty {
             s.navigator.selectedIndex = fullOrderIndex(
@@ -1120,6 +1126,20 @@ private func reduceNavigatorKey(
 
     case (.enter, []), (.char("o"), []), (.char(" "), []):
         return selectNavigatorEntry(s)
+
+    // F5.4 Mock Environment: `a` add (always, so the first mock can be created),
+    // `e` edit / `d` delete (only on a selected mock in the section).
+    case (.char("a"), []):
+        guard case .loaded = s.project else { return (s, []) }
+        return reduceMockAddForm(s)
+
+    case (.char("e"), []):
+        guard s.navigator.inMockSection else { return (s, []) }
+        return reduceMockEditForm(s)
+
+    case (.char("d"), []):
+        guard s.navigator.inMockSection else { return (s, []) }
+        return reduceMockDeleteRequest(s)
 
     case (.char("/"), []):
         // Activate inline filter mode with an empty query. Pressing / again
@@ -2077,6 +2097,9 @@ private func extractExtraModules(from project: ProjectState) -> [String] {
 /// diagnostic index all start fresh for the newly selected source.
 private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
+    // F5.4: in the Mock Environment section, Enter does not load a source. Mock
+    // add/edit/delete are the `a`/`e`/`d` keys (F5.4 forms); a no-op here.
+    if s.navigator.inMockSection { return (s, []) }
     guard s.navigator.selectedIndex < s.navigatorOrder.count else {
         return (s, [])
     }
@@ -2103,13 +2126,13 @@ private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
 ///
 /// Delegates to `filteredNavigatorIDs` in Renderer.swift (the same logic drives
 /// both the display list and navigation so the two stay in sync).
-private func filteredIDs(from s: AppState) -> [SourceID] {
+func filteredIDs(from s: AppState) -> [SourceID] {
     filteredNavigatorIDs(order: s.navigatorOrder, filterText: s.navigator.filterText)
 }
 
 /// Returns the position of the selected entry within the filtered list, or nil
 /// if the currently selected source ID is not present in `filtered`.
-private func filteredPosition(
+func filteredPosition(
     selectedIndex: Int,
     filtered: [SourceID],
     order: [SourceID]
@@ -2122,7 +2145,7 @@ private func filteredPosition(
 /// Maps a position in the filtered list back to an index in the full `order` array.
 ///
 /// Returns the last valid index as a fallback so `selectedIndex` never goes out of range.
-private func fullOrderIndex(filteredPos: Int, filtered: [SourceID], order: [SourceID]) -> Int {
+func fullOrderIndex(filteredPos: Int, filtered: [SourceID], order: [SourceID]) -> Int {
     guard filtered.indices.contains(filteredPos) else { return max(0, order.count - 1) }
     let id = filtered[filteredPos]
     return order.firstIndex(of: id) ?? max(0, order.count - 1)

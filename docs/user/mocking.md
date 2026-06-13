@@ -289,6 +289,34 @@ for the complete `[[mock.function]]` schema.
 
 ---
 
+## The Mock Environment navigator
+
+The navigator has a second section below the source list, under a
+`─── Mock Environment ───` divider. It shows the declared mock values
+(`namespace.path = value`) and functions (`name (behavior)`), and — after a run —
+the live state (introspected current values), or `(run to populate live state)`
+before the first run.
+
+Move between the two sections with `j`/`k`: pressing `j` on the last source steps
+into the Mock Environment, and `k` on its first row steps back out (the divider
+is skipped). `g`/`G` return to the source list.
+
+### Editing mocks from the navigator
+
+| Key | Action |
+|-----|--------|
+| `a` | Add a mock — a popup chooses Value / Function / Namespace, then an inline form |
+| `e` | Edit the selected mock (form pre-filled) |
+| `d` | Delete the selected mock (`Delete this mock? [y/N]`) |
+
+In the form, `Tab` moves between fields, typing edits text fields, `Space`/`←`/`→`
+cycle the Type / Behavior / Writable fields, `Enter` confirms, and `Esc` cancels.
+Every add, edit, or delete is saved to `moonswift.toml` immediately.
+
+- **Value form**: Namespace, Key path, Type, Value, Writable.
+- **Function form**: Function name, Behavior, then Return value (for
+  `fixed-return`) or Error message (for `raise-error`).
+
 ## Running against mocks
 
 See [running.md](running.md) for how mock setup integrates with the run

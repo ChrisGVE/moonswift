@@ -334,6 +334,9 @@ public final class AppDriver: @unchecked Sendable {
         case .persistSplitRatios(let navigatorSplit, let bottomSplit):
             executePersistSplitRatios(navigatorSplit: navigatorSplit, bottomSplit: bottomSplit)
 
+        case .saveMockStore(let mocks):
+            executeSaveMockStore(mocks)
+
         case .loadPickerTree(let id, let projectRoot):
             // Short: one-liner Task dispatch (CR-013 [channel] capture).
             Task { [channel] in
@@ -632,6 +635,31 @@ public final class AppDriver: @unchecked Sendable {
                 try ProjectStore.save(updatedFile, to: fileURL)
             } catch {
                 Logger.shared.error("Could not persist split ratios: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Execute `Effect.saveMockStore` (F5.4) — write the mock definitions into
+    /// `[[mock.*]]`, preserving every other key (mirrors `executePersistSplitRatios`).
+    private func executeSaveMockStore(_ mocks: MockStore) {
+        guard let projectDir = projectDirectoryURL(),
+            case .loaded(let projectFile, _) = state.project
+        else { return }
+
+        let updatedFile = ProjectFile(
+            luaVersion: projectFile.luaVersion,
+            sources: projectFile.sources,
+            run: projectFile.run,
+            lint: projectFile.lint,
+            settings: projectFile.settings,
+            mocks: mocks
+        )
+        let fileURL = projectDir.appendingPathComponent(ProjectStore.fileName)
+        Task {
+            do {
+                try ProjectStore.save(updatedFile, to: fileURL)
+            } catch {
+                Logger.shared.error("Could not save mock definitions: \(error.localizedDescription)")
             }
         }
     }

@@ -53,6 +53,9 @@ public enum FocusState: Sendable, Equatable {
     case pickerModal
     /// The project-initialisation form is open.
     case initForm
+    /// The Mock Environment add/edit form is open (F5.4); state in
+    /// `AppState.mockFormState`.
+    case mockForm
 
     // MARK: P4 nvim focus cases (ARCHITECTURE.md §10.4.3)
 
@@ -441,14 +444,31 @@ public struct NavigatorState: Sendable, Equatable {
     /// Spinner animation phase (0-based, advanced on each .tick).
     public var spinnerPhase: Int
 
+    // MARK: F5.4 Mock Environment section
+
+    /// `true` when the navigator cursor is in the Mock Environment section
+    /// (below the divider) rather than the source list. `j`/`k` cross the divider
+    /// to flip this; the source selection (`selectedIndex`) is preserved while in
+    /// the mock section so returning lands back where it left.
+    public var inMockSection: Bool
+
+    /// The cursor index within the Mock Environment section's SELECTABLE rows
+    /// (declared values/functions — see `mockSelectableRows`). Only meaningful
+    /// when `inMockSection` is true.
+    public var mockSelectedIndex: Int
+
     public init(
         selectedIndex: Int = 0,
         filterText: String? = nil,
-        spinnerPhase: Int = 0
+        spinnerPhase: Int = 0,
+        inMockSection: Bool = false,
+        mockSelectedIndex: Int = 0
     ) {
         self.selectedIndex = selectedIndex
         self.filterText = filterText
         self.spinnerPhase = spinnerPhase
+        self.inMockSection = inMockSection
+        self.mockSelectedIndex = mockSelectedIndex
     }
 }
 
@@ -621,6 +641,25 @@ public struct AppState: Sendable {
 
     /// Current project file state.
     public var project: ProjectState
+
+    // MARK: Mock environment (F5.4)
+
+    /// Declared mock definitions for the loaded project (from `ProjectFile.mocks`).
+    /// Holds ONLY definitions — never engine value-state, which is read live via
+    /// introspection into `mockLiveState` (DATA-01). Reset on each project load.
+    public var mockStore: MockStore
+
+    /// The most recent post-run introspection snapshot of live mock/global state,
+    /// or `nil` before the first run / during the no-cache window (the navigator
+    /// then shows `(run to populate live state)`, DATA-09).
+    public var mockLiveState: MockLiveState?
+
+    /// The Mock Environment add/edit form, or `nil` when closed (F5.4). Non-nil
+    /// iff `focus == .mockForm`.
+    public var mockFormState: MockFormState?
+
+    /// `true` while awaiting `Delete this mock? [y/N]` confirmation (F5.4).
+    public var mockDeletePending: Bool
 
     // MARK: Sources
 
@@ -824,6 +863,10 @@ public struct AppState: Sendable {
     public init(
         launch: LaunchMode = .empty,
         project: ProjectState = .none,
+        mockStore: MockStore = .empty,
+        mockLiveState: MockLiveState? = nil,
+        mockFormState: MockFormState? = nil,
+        mockDeletePending: Bool = false,
         sources: [SourceID: SourceState] = [:],
         navigatorOrder: [SourceID] = [],
         selection: SourceID? = nil,
@@ -860,6 +903,10 @@ public struct AppState: Sendable {
     ) {
         self.launch = launch
         self.project = project
+        self.mockStore = mockStore
+        self.mockLiveState = mockLiveState
+        self.mockFormState = mockFormState
+        self.mockDeletePending = mockDeletePending
         self.sources = sources
         self.navigatorOrder = navigatorOrder
         self.selection = selection

@@ -75,7 +75,7 @@ public func render(_ state: AppState, size: TerminalSize) -> [RenderCommand] {
             commands += renderConflictModal(rect: codeInner, theme: theme)
         case .diffView(let phase):
             commands += renderDiffView(phase: phase, rect: codeInner, theme: theme)
-        case .pane, .helpOverlay, .pickerModal, .initForm, .nvimPane, .nvimSpawning:
+        case .pane, .helpOverlay, .pickerModal, .initForm, .mockForm, .nvimPane, .nvimSpawning:
             break
         }
     }
@@ -304,11 +304,28 @@ private func renderNavigator(
     // Highlight style for the selected row depends on navigator focus.
     let highlightStyle = navFocused ? tokenStyle(.focusBg, theme: theme) : dimStyle(theme)
 
+    // F5.4: append the Mock Environment section below the source list (only for a
+    // loaded project — quick-file / malformed states have no mocks). The combined
+    // selectedIndex points into the mock section when the cursor is there.
+    var finalSelectedIndex = selectedInFiltered
+    if case .loaded = state.project {
+        let sourceItemCount = items.count
+        let mockRows = buildMockNavRows(state)
+        items.append(contentsOf: mockNavRowSpans(mockRows, theme: theme))
+        if state.navigator.inMockSection {
+            let selectable = mockSelectableRowIndices(mockRows)
+            if !selectable.isEmpty {
+                let idx = min(max(state.navigator.mockSelectedIndex, 0), selectable.count - 1)
+                finalSelectedIndex = sourceItemCount + selectable[idx]
+            }
+        }
+    }
+
     var commands: [RenderCommand] = [
         .navigatorList(
             rect: listRect,
             items: items,
-            selectedIndex: selectedInFiltered,
+            selectedIndex: finalSelectedIndex,
             title: []
         )
     ]
@@ -423,6 +440,11 @@ private func renderCodePane(
     // Init form modal: replace code pane with the init form (ux-spec §3.1, task 24).
     if state.focus == .initForm, let form = state.initFormState {
         return renderInitForm(form: form, rect: inner, theme: theme)
+    }
+
+    // Mock form: replace code pane with the add/edit form (F5.4, ux-spec §7.1).
+    if state.focus == .mockForm, let form = state.mockFormState {
+        return renderMockForm(form: form, rect: inner, theme: theme)
     }
 
     // ux-spec §4.2: malformed project file overrides the code pane with a fixed

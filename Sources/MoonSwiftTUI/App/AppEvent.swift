@@ -313,6 +313,14 @@ public enum AppEvent: Sendable {
     /// A stale `sessionID` (session already torn down) is a silent no-op.
     case debugResumed(DebugSessionID)
 
+    /// A post-run live-state introspection snapshot is ready (F5.4). Posted by
+    /// the AppDriver after `Effect.queryLiveState` reads the session engine's
+    /// `liveState()` (introspection-backed — `registeredValueServerNames` /
+    /// `globalValue` etc., never TUI bookkeeping). The reducer stores it in
+    /// `AppState.mockLiveState`; the navigator's Mock Environment section then
+    /// shows the live values instead of `(run to populate live state)`.
+    case mockLiveStateReady(MockLiveState)
+
     /// A debug-restart was confirmed by the user (`y` in the confirmation prompt).
     ///
     /// Posted internally by the reducer when the restart-confirmation gate
