@@ -218,7 +218,12 @@ public final class SessionEngine: SessionEngineProtocol {
     public func runForDebug(
         _ fragment: LuaSourceFragment,
         breakpoints: Set<Int>,
-        onPause: @escaping @Sendable (DebugSnapshot) -> Void
+        onPause: @escaping @Sendable (DebugSnapshot) -> Void,
+        // Defaulted on the concrete engine so tests that do not exercise the
+        // resume seam (the adapter/engine suites that predate F6.2) compile
+        // unchanged. The protocol requirement is NOT defaulted — production
+        // callers (AppDriver+DebugEffects) must supply it explicitly (ARCH-07).
+        onResumed: @escaping @Sendable () -> Void = {}
     ) async -> (DebugSessionID, CoreRunOutcome) {
         // The DebugSession (mailbox owner) is created up front so its id can be
         // returned and command delivery can address it before the VM thread starts.
@@ -239,7 +244,8 @@ public final class SessionEngine: SessionEngineProtocol {
                         fragment,
                         session: session,
                         baselineStdlibNames: baseline,
-                        onPause: onPause
+                        onPause: onPause,
+                        onResumed: onResumed
                     )
                 )
             }
@@ -361,7 +367,8 @@ public final class SessionEngine: SessionEngineProtocol {
         _ fragment: LuaSourceFragment,
         session: DebugSession,
         baselineStdlibNames: Set<String>,
-        onPause: @escaping @Sendable (DebugSnapshot) -> Void
+        onPause: @escaping @Sendable (DebugSnapshot) -> Void,
+        onResumed: @escaping @Sendable () -> Void
     ) -> CoreRunOutcome {
         dispatchPrecondition(condition: .onQueue(queue))
         guard let engine, let config else {
@@ -373,12 +380,6 @@ public final class SessionEngine: SessionEngineProtocol {
             )
             return .error(diag, traceback: nil)
         }
-
-        // onResumed: the full AppEvent plumbing (AppDriver posting debugResumed) is
-        // wired in F6.2. The adapter calls this seam but the closure is empty until
-        // F6.2 adds the real AppEvent post. The adapter's behavior (returning the
-        // command to the VM) is unchanged.
-        let onResumed: @Sendable () -> Void = {}
 
         let handler = makeDebugHookHandler(
             session: session,
