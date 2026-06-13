@@ -1121,6 +1121,9 @@ private func formatGutterCell(
         switch mark {
         case .error: markChar = "E"
         case .warning: markChar = "W"
+        case .breakpoint: markChar = "●"
+        case .pausedBreakpoint: markChar = "●"
+        case .debugPaused: markChar = "▶"
         }
     } else if isCursor {
         // ux-spec §6.6: ▶ truecolor/256, > NO_COLOR.
@@ -1151,6 +1154,10 @@ private func gutterCellStyle(mark: GutterMark?, isCursor: Bool, isPulseLine: Boo
         switch mark {
         case .error: return tokenStyle(.error, theme: theme)
         case .warning: return tokenStyle(.warning, theme: theme)
+        // ux-spec §6.6: breakpoint = error-token color; paused = highlight_pulse color.
+        case .breakpoint: return tokenStyle(.error, theme: theme)
+        case .pausedBreakpoint: return tokenStyle(.highlightPulse, theme: theme)
+        case .debugPaused: return tokenStyle(.highlightPulse, theme: theme)
         }
     }
     return tokenStyle(.gutterBg, theme: theme)
@@ -1260,6 +1267,8 @@ private func renderBottomPane(
         commands += renderOutputTab(state: state, rect: contentRect, theme: theme)
     case .diagnostics:
         commands += renderDiagnosticsTab(state: state, rect: contentRect, theme: theme)
+    case .debug:
+        commands += renderDebugTab(state: state, rect: contentRect, theme: theme)
     }
 
     return commands
@@ -1272,7 +1281,7 @@ private func renderBottomPane(
 /// Tab layout (ux-spec §6.1, §8.5 accessibility):
 /// - Active tab: text underlined in `focus_border` color.
 /// - Inactive tab: normal style.
-/// - Exact tab labels: `[ Output ]` and `[ Diagnostics ]` (ux-spec §6.1).
+/// - Exact tab labels: `[ Output ]`, `[ Diagnostics ]`, `[ Debug ]` (ux-spec §6.1).
 /// - Source provenance (display name) is right-justified in the same row when
 ///   a source is loaded (ux-spec §6.1).
 private func renderBottomPaneTabBar(
@@ -1283,23 +1292,16 @@ private func renderBottomPaneTabBar(
 ) -> [RenderCommand] {
     let outputLabel = "[ Output ]"
     let diagLabel = "[ Diagnostics ]"
-
-    // Build the tab line left-to-right with exact labels.
-    let activeIsOutput = state.bottomPane.activeTab == .output
-    // Two spans: active tab underlined, inactive normal.
-    let outputStyle: CellStyle
-    let diagStyle: CellStyle
-    if activeIsOutput {
-        outputStyle = tabActiveStyle(theme)
-        diagStyle = normalStyle(theme)
-    } else {
-        outputStyle = normalStyle(theme)
-        diagStyle = tabActiveStyle(theme)
-    }
-
-    // Separator between the two tab labels.
+    let debugLabel = "[ Debug ]"
     let separator = " "
-    let tabsText = outputLabel + separator + diagLabel
+
+    // Per-tab style: active = underlined focus_border; inactive = normal.
+    let activeTab = state.bottomPane.activeTab
+    let outputStyle = activeTab == .output ? tabActiveStyle(theme) : normalStyle(theme)
+    let diagStyle = activeTab == .diagnostics ? tabActiveStyle(theme) : normalStyle(theme)
+    let debugStyle = activeTab == .debug ? tabActiveStyle(theme) : normalStyle(theme)
+
+    let tabsText = outputLabel + separator + diagLabel + separator + debugLabel
 
     // Right-justified source provenance (ux-spec §6.1).
     let provenance: String?
@@ -1309,25 +1311,23 @@ private func renderBottomPaneTabBar(
         provenance = nil
     }
 
-    // Total tab row as cell runs: output tab | sep | diagnostics tab | padding | provenance.
+    // Build cell runs left-to-right: output | sep | diagnostics | sep | debug | padding | provenance.
     var commands: [RenderCommand] = []
     let row = rect.y
     let startCol = rect.x
 
     // Output tab span.
-    commands.append(
-        .cellRun(col: startCol, row: row, text: outputLabel, style: outputStyle)
-    )
-    // Separator.
-    let sepCol = startCol + UInt16(outputLabel.count)
-    commands.append(
-        .cellRun(col: sepCol, row: row, text: separator, style: normalStyle(theme))
-    )
+    commands.append(.cellRun(col: startCol, row: row, text: outputLabel, style: outputStyle))
+    let sep1Col = startCol + UInt16(outputLabel.count)
+    commands.append(.cellRun(col: sep1Col, row: row, text: separator, style: normalStyle(theme)))
     // Diagnostics tab span.
-    let diagCol = sepCol + UInt16(separator.count)
-    commands.append(
-        .cellRun(col: diagCol, row: row, text: diagLabel, style: diagStyle)
-    )
+    let diagCol = sep1Col + UInt16(separator.count)
+    commands.append(.cellRun(col: diagCol, row: row, text: diagLabel, style: diagStyle))
+    let sep2Col = diagCol + UInt16(diagLabel.count)
+    commands.append(.cellRun(col: sep2Col, row: row, text: separator, style: normalStyle(theme)))
+    // Debug tab span.
+    let debugCol = sep2Col + UInt16(separator.count)
+    commands.append(.cellRun(col: debugCol, row: row, text: debugLabel, style: debugStyle))
 
     // Provenance and padding fill the rest of the row.
     let usedCols = tabsText.count
@@ -1346,9 +1346,7 @@ private func renderBottomPaneTabBar(
             )
         }
         let provCol = padCol + UInt16(padCount)
-        commands.append(
-            .cellRun(col: provCol, row: row, text: truncated, style: dimStyle(theme))
-        )
+        commands.append(.cellRun(col: provCol, row: row, text: truncated, style: dimStyle(theme)))
     } else if remainingCols > 0 {
         // Fill remaining space with spaces.
         let padCol = startCol + UInt16(usedCols)
@@ -1562,6 +1560,54 @@ private func renderDiagnosticsTab(
     return [.paragraph(rect: rect, lines: lines, block: nil)]
 }
 
+/// Renders the Debug tab content (P2 F6.1, ux-spec §7.2).
+///
+/// Shows the current debug snapshot when a session is paused, or an idle message.
+/// Layout:
+///   - Idle/no-session: "No debug session." centered.
+///   - Paused:
+///       `── Paused at line N ──`
+///       One row per stack frame: `  #N  <source>:<line>  <what>`
+///       (Up to 8 frames; rest elided.)
+private func renderDebugTab(
+    state: AppState,
+    rect: Rect,
+    theme: ThemeState
+) -> [RenderCommand] {
+    guard let snapshot = state.currentDebugSnapshot else {
+        // Idle state — no active debug session.
+        let msg = state.activeDebugSessionID != nil ? "Running…" : "No debug session."
+        let lineW = msg.count
+        let padLeft = max(0, (Int(rect.width) - lineW) / 2)
+        let padRight = max(0, Int(rect.width) - padLeft - lineW)
+        let centeredText = String(repeating: " ", count: padLeft) + msg + String(repeating: " ", count: padRight)
+        return [.paragraph(rect: rect, lines: [[Span(centeredText, style: dimStyle(theme))]], block: nil)]
+    }
+
+    var lines: [[Span]] = []
+
+    // Header: paused line.
+    let headerText = "── Paused at line \(snapshot.fragmentLine) ──"
+    lines.append([Span(headerText, style: dimStyle(theme))])
+
+    // Stack frames (up to 8).
+    let frameCap = 8
+    let frames = snapshot.callStack.prefix(frameCap)
+    for frame in frames {
+        let srcPart = frame.source ?? "<chunk>"
+        let linePart = frame.line > 0 ? ":\(frame.line)" : ""
+        let namePart = frame.name.map { "  \($0)" } ?? ""
+        let text = "  #\(frame.level)  \(srcPart)\(linePart)\(namePart)"
+        lines.append([Span(text, style: normalStyle(theme))])
+    }
+    if snapshot.callStack.count > frameCap {
+        let elided = snapshot.callStack.count - frameCap
+        lines.append([Span("  … \(elided) more frame(s)", style: dimStyle(theme))])
+    }
+
+    return [.paragraph(rect: rect, lines: lines, block: nil)]
+}
+
 /// Formats one diagnostic as the ux-spec §6.5 canonical string.
 ///
 /// Format: `<E|W> <line>:<col> <message> [<code>]`
@@ -1666,13 +1712,16 @@ private func buildRightHints(state: AppState, cols: Int) -> String {
     case .pane(.bottomPane):
         switch state.bottomPane.activeTab {
         case .output:
-            fullHints = "j/k scroll  Enter jump  y yank  1/2 tabs  C-l clear"
-            shortHints = "j/k  Enter  1/2"
+            fullHints = "j/k scroll  Enter jump  y yank  1/2/3 tabs  C-l clear"
+            shortHints = "j/k  Enter  1/2/3"
         case .diagnostics:
             // n/N diagnostic navigation is wired to the code pane (ux-spec §2.3),
             // not the bottom pane — removed misleading hint.
-            fullHints = "j/k scroll  Enter jump  1/2 tabs"
-            shortHints = "j/k  Enter  1/2"
+            fullHints = "j/k scroll  Enter jump  1/2/3 tabs"
+            shortHints = "j/k  Enter  1/2/3"
+        case .debug:
+            fullHints = "j/k scroll  1/2/3 tabs"
+            shortHints = "j/k  1/2/3"
         }
     default:
         return ""
