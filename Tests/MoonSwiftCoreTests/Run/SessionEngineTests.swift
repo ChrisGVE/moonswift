@@ -355,4 +355,71 @@ struct DebugCommandMailboxTests {
         #expect(session.consumePauseRequested())
         #expect(!session.consumePauseRequested())
     }
+
+    // #24: concurrency stress. The mailbox is single-slot OVERWRITE-LAST
+    // (PERF-10): concurrent producers may legitimately drop intermediate
+    // commands — "exactly-once delivery" is NOT an invariant of this design.
+    // The binding requirement (risk R1) is that contention never deadlocks the
+    // parked consumer, never loses a wakeup, and never yields a malformed Wake.
+    // We hammer N producers against one consumer, then deliver a terminal
+    // `.stop` once every producer has returned; the consumer MUST observe it
+    // and terminate well inside the watchdog ceiling.
+    @Test("concurrent producers never deadlock or lose a wakeup (overwrite-last, R1)")
+    func concurrentProducersNoDeadlockNoLostWakeup() {
+        let mailbox = DebugCommandMailbox()
+        let producerCount = 64
+
+        final class Outcome: @unchecked Sendable {
+            let lock = NSLock()
+            var commandsSeen = 0
+            var sawStop = false
+            var sawServiceGlobals = false
+        }
+        let outcome = Outcome()
+
+        // Consumer parks in take() and drains until it observes the terminal stop.
+        let consumer = Thread {
+            while true {
+                switch mailbox.take() {
+                case .command(let cmd):
+                    outcome.lock.withLock { outcome.commandsSeen += 1 }
+                    if cmd == .stop {
+                        outcome.lock.withLock { outcome.sawStop = true }
+                        return
+                    }
+                case .serviceGlobals:
+                    // No signalGlobals is issued here, so this must never occur.
+                    outcome.lock.withLock { outcome.sawServiceGlobals = true }
+                    return
+                }
+            }
+        }
+        consumer.start()
+
+        // N producers hammer the single slot concurrently.
+        DispatchQueue.concurrentPerform(iterations: producerCount) { _ in
+            mailbox.put(.stepOver)
+        }
+        // Every producer has returned; deliver the terminal command.
+        mailbox.put(.stop)
+
+        // Bounded join: terminate the test far before the 300 s watchdog.
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while !consumer.isFinished {
+            if Date() > deadline {
+                Issue.record("consumer did not terminate — deadlock or lost wakeup")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+
+        outcome.lock.withLock {
+            #expect(outcome.sawStop, "terminal .stop must be observed (no lost wakeup)")
+            #expect(!outcome.sawServiceGlobals, "no .serviceGlobals without signalGlobals")
+            #expect(outcome.commandsSeen >= 1, "at least the terminal command is delivered")
+            #expect(
+                outcome.commandsSeen <= producerCount + 1,
+                "overwrite-last bounds total deliveries")
+        }
+    }
 }
