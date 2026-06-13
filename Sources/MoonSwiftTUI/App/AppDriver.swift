@@ -77,6 +77,14 @@ public final class AppDriver: @unchecked Sendable {
     /// when nil the skeleton no-ops.
     private let sourceStore: SourceStore?
 
+    /// The long-lived session engine for mock/debug runs (P2 F5.0/F6.1).
+    ///
+    /// When non-nil, `Effect.debugRun` dispatches to `runForDebug` and
+    /// `Effect.stopDebug` delivers stop commands. When nil the skeleton posts
+    /// a synthetic `debugFinished(.cancelled)` immediately (same skeleton pattern
+    /// as `runService`). Production code injects a live `SessionEngine`.
+    let sessionEngine: (any SessionEngineProtocol)?
+
     // MARK: Output coalescer (run-scoped)
 
     /// The active Coalescer for the current run, or nil when no run is in progress.
@@ -163,6 +171,7 @@ public final class AppDriver: @unchecked Sendable {
     ///   - runService: Optional `RunService` for real Lua execution. Nil = skeleton.
     ///   - lintService: Optional `LintService` for real linting. Nil = skeleton.
     ///   - sourceStore: Optional `SourceStore` for real file loading. Nil = skeleton.
+    ///   - sessionEngine: Optional `SessionEngineProtocol` for debug/mock runs. Nil = skeleton.
     public init(
         channel: EventChannel,
         pump: EventPump,
@@ -173,7 +182,8 @@ public final class AppDriver: @unchecked Sendable {
         seed: AppState,
         runService: (any RunServiceProtocol)? = nil,
         lintService: (any LintServiceProtocol)? = nil,
-        sourceStore: SourceStore? = nil
+        sourceStore: SourceStore? = nil,
+        sessionEngine: (any SessionEngineProtocol)? = nil
     ) {
         self.channel = channel
         self.pump = pump
@@ -185,6 +195,7 @@ public final class AppDriver: @unchecked Sendable {
         self.runService = runService
         self.lintService = lintService
         self.sourceStore = sourceStore
+        self.sessionEngine = sessionEngine
     }
 
     // MARK: Run
@@ -387,6 +398,15 @@ public final class AppDriver: @unchecked Sendable {
                 editedText: editedText,
                 fragment: fragment
             )
+
+        // MARK: Debug effects (P2 F6.1, ARCHITECTURE.md §10.9)
+        // Bodies extracted to AppDriver+DebugEffects.swift.
+
+        case .debugRun(let fragment, let breakpoints):
+            executeDebugRun(fragment, breakpoints: breakpoints)
+
+        case .stopDebug(let sessionID):
+            executeStopDebug(sessionID)
         }
     }
 
