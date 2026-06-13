@@ -7,8 +7,9 @@
 //            that luacheck's std= key expects, so the linter knows which globals
 //            are valid.
 //
-//         2. completionItems(prefix:) — returns [CompletionItem] for the TUI
-//            completion engine (P3a scope; stub in P1).
+//         2. completionItems(prefix:liveMocks:tomlProbed:) — returns [CompletionItem]
+//            for the TUI completion engine (F7a.1). Implementation in
+//            CatalogConsumers+Completion.swift (CONS-R2-01 — two-parameter form only).
 //
 //         3. luaLSMetaFiles() — returns [GeneratedFile] for LuaLS meta files
 //            (P3b scope; stub in P1).
@@ -216,20 +217,11 @@ public struct LuaModuleCatalog: Sendable {
         return ["luaswift": ["fields": luaswiftFields]]
     }
 
-    // MARK: - Completion items (P3a stub)
+    // MARK: - Completion items
 
-    /// Returns completion items for the given prefix string.
-    ///
-    /// P1 stub — returns an empty array. P3a replaces this body with real
-    /// prefix-filtered completion construction from the catalog data.
-    ///
-    /// - Parameter prefix: The Lua text before the cursor (e.g. `"luaswift.json."`).
-    /// - Returns: An empty array in P1. P3a populates this with `CompletionItem` values.
-    public func completionItems(prefix: String) -> [String] {
-        // P3a integration point: replace with CompletionItem construction.
-        _ = prefix
-        return []
-    }
+    // The canonical `completionItems(prefix:liveMocks:tomlProbed:) -> [CompletionItem]`
+    // method lives in CatalogConsumers+Completion.swift (F7a.1, CONS-R2-01).
+    // There is no one-parameter overload — callers always pass the live-mock slice.
 
     // MARK: - LuaLS meta files (P3b stub)
 

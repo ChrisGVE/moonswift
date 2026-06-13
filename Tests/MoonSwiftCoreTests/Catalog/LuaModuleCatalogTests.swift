@@ -427,17 +427,25 @@ struct LuaModuleCatalogOptInNamesTests {
     }
 }
 
-// MARK: - P3a/P3b stub tests
+// MARK: - P3a/P3b implementation tests
 
-@Suite("LuaModuleCatalog — P3a/P3b stubs")
-struct LuaModuleCatalogStubTests {
+@Suite("LuaModuleCatalog — P3a/P3b")
+struct LuaModuleCatalogP3aTests {
 
     private let catalog = LuaModuleCatalog.v0
 
-    @Test("completionItems returns empty array in P1")
-    func completionItemsIsEmptyStub() {
-        let items = catalog.completionItems(prefix: "luaswift.json.")
-        #expect(items.isEmpty)
+    // IMPL-03: the P1 stub completionItems(prefix:) -> [String] was replaced by
+    // the canonical two-parameter form in F7a.1. This test is migrated to use
+    // the new signature (CONS-R2-01). The canonical form with no live mocks and
+    // tomlProbed=false (default) returns catalog items for the json module.
+    @Test("completionItems two-parameter form returns json functions for json prefix")
+    func completionItemsTwoParameterFormReturnsJsonFunctions() {
+        let items = catalog.completionItems(prefix: "luaswift.json.", liveMocks: [])
+        // The json module has functions: encode, decode, decode_jsonc, decode_json5, is_null
+        #expect(!items.isEmpty)
+        let names = items.map(\.insertText)
+        #expect(names.contains("encode"))
+        #expect(names.contains("decode"))
     }
 
     @Test("luaLSMetaFiles returns empty array in P1")
