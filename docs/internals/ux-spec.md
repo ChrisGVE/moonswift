@@ -656,6 +656,16 @@ Status bar while paused: `[paused at <display-name>:<line>]  s/i/o step  c conti
 
 Status bar while globals capture is in flight: append `[globals pending…]` after the paused hint. [PRD §F6.0 §2, UX-R2-01]
 
+**F6.2 stepping transient strings** (binding — snapshot tests depend on exact text):
+
+| Situation | Transient string |
+|-----------|-----------------|
+| s/i/o/c pressed while VM is running between pauses | `VM running…` |
+| s/i/o/c pressed in navigator while session is paused | `Stepping is in the Debug tab — press 3.` |
+| x stop delivered to active debug session (DOM-N01) | `Session stopped.` |
+
+`x` stop never surfaces `LuaError.cancelled` as a `.cancelled` error diagnostic (DOM-N01). The neutral `"Session stopped."` string is shown instead.
+
 ### 7.3 P4a — Suspend-to-`$EDITOR` round trip
 
 1. User presses `<C-e>` (source file) from the code pane. [PRD F8a]

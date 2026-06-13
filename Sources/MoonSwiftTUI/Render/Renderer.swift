@@ -1651,8 +1651,27 @@ private func renderStatusBar(
     return [.cellRun(col: rect.x, row: rect.y, text: line, style: normalStyle(theme))]
 }
 
-/// Builds the left-zone persistent indicator string (ux-spec §5.2, §5.5).
+/// Builds the left-zone persistent indicator string (ux-spec §5.2, §5.5, §7.2).
+///
+/// F6.2: when a debug session is paused (`currentDebugSnapshot` is non-nil),
+/// the entire left zone is replaced by the paused-mode hint (PRD §1473–1474).
+/// The exact string is produced by `buildPausedStatusHint` (ux-spec binding).
 private func buildLeftIndicators(state: AppState, cols: Int) -> String {
+    // F6.2 paused-mode hint overrides all other left-zone indicators (ux-spec §7.2).
+    // Display name comes from the loaded fragment's provenance (the same source
+    // used for the renderer's navigator row label — see `renderSourceRow`).
+    if let snapshot = state.currentDebugSnapshot {
+        let displayName: String
+        if let sid = state.selection,
+            case .loaded(let fragment) = state.sources[sid]
+        {
+            displayName = fragment.provenance.displayName
+        } else {
+            displayName = "<unknown>"
+        }
+        return buildPausedStatusHint(displayName: displayName, line: snapshot.fragmentLine)
+    }
+
     // Full indicator strings (ux-spec §5.2 — exact literals).
     var full: [String] = []
     // Abbreviated versions for the elision ladder (ux-spec §5.5 step 3).

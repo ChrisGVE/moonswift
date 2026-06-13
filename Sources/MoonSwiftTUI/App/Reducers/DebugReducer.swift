@@ -1,9 +1,10 @@
 // File: Sources/MoonSwiftTUI/App/Reducers/DebugReducer.swift
 // Location: MoonSwiftTUI/App/Reducers/
-// Role: Pure reducer logic for F6.1 — breakpoint toggling, <C-g> debug-run
-//       preconditions, and AppEvent.debug* event handlers. Called by Reducer.swift;
-//       never calls impure code. All impure work (calling runForDebug, posting
-//       debug events) is done by AppDriver+DebugEffects.swift.
+// Role: Pure reducer logic for P2 F6.1/F6.2 — breakpoint toggling, <C-g>
+//       debug-run preconditions, AppEvent.debug* event handlers, and F6.2
+//       stepping/continue/stop key routing. Called by Reducer.swift; never calls
+//       impure code. All impure work (runForDebug, sendDebugCommand) is done by
+//       AppDriver+DebugEffects.swift.
 //
 //       Key UX decisions (ux-spec §7.2, §2.3 amended):
 //         - `b` toggles a breakpoint on the cursor line, context-scoped: only when
@@ -15,10 +16,20 @@
 //         - Restart confirmation (`y`/`N`) gates a live debug-session restart.
 //         - Breakpoints are stored fragment-relative (1-based cursor line),
 //           per-SourceID, in AppState.breakpoints.
+//         - F6.2: s/i/o/c step keys route through `reduceDebugStepKey`:
+//             paused → Effect.sendDebugCommand + clear snapshot
+//             VM running (not paused) → "VM running…" disabled transient
+//           x stop routes through `reduceDebugStop` regardless of paused state.
+//         - F6.2: navigator s/i/o/c while paused → transient "Stepping is in
+//           the Debug tab — press 3." (PRD §2566).
+//         - DOM-N01: x stop maps LuaError.cancelled to the neutral "Session
+//           stopped." message — never surfaced as a .cancelled diagnostic.
 //
-// Upstream: AppState, AppEvent, Effect (Effect.debugRun, .stopDebug)
+// Upstream: AppState, AppEvent, Effect (Effect.debugRun, .stopDebug,
+//           .sendDebugCommand)
 // Downstream: Reducer.swift (calls reduceDebugEvent, tryDebugRun,
-//             reduceBreakpointToggle), AppDriver+DebugEffects.swift
+//             reduceBreakpointToggle, reduceDebugStepKey, reduceDebugStop,
+//             reduceNavigatorDebugKeyTransient), AppDriver+DebugEffects.swift
 
 import Foundation
 import LuaSwift
@@ -185,6 +196,16 @@ func reduceDebugPaused(_ s: AppState, snapshot: DebugSnapshot) -> (AppState, [Ef
         )
     }
 
+    // Auto-scroll the code pane to the paused line (F6.2, PRD §1466).
+    // `fragmentLine` is 1-based; `scrollOffset` is 0-based — subtract one.
+    s.codePane.scrollOffset = max(0, snapshot.fragmentLine - 1)
+    s.codePane.cursorLine = s.codePane.scrollOffset
+
+    // Auto-focus the Debug tab on breakpoint hit (F6.2, PRD §1488).
+    if snapshot.event == .breakpoint {
+        s.focus = .pane(.bottomPane)
+    }
+
     return (s, [armDebugTickIfNeeded(s)].compactMap { $0 })
 }
 
@@ -326,4 +347,88 @@ private func disabledTransient(_ s: AppState, text: String) -> (AppState, [Effec
     var s = s
     s.transient = TransientMessage(text: text)
     return (s, [.startTick(interval: TickInterval.transientExpiry)])
+}
+
+// MARK: - F6.2 Stepping key handlers
+
+/// Handle s/i/o/c step keys while the code pane or Debug tab is focused.
+///
+/// Paused (snapshot present): emit `Effect.sendDebugCommand` and clear the
+/// snapshot so the Debug tab enters §6.9 Case-2 "VM running between pauses".
+/// VM running (session active, no snapshot): show `"VM running…"` disabled
+/// transient (step keys are inert while the VM is between pauses).
+/// No active session: silent no-op (keys have no meaning outside debug).
+func reduceDebugStepKey(
+    _ s: AppState,
+    command: LuaDebugCommand
+) -> (AppState, [Effect]) {
+    // No session → these keys have no debug meaning in this context.
+    guard let sessionID = s.activeDebugSessionID else { return (s, []) }
+
+    // Session active but NOT paused → VM is running between pauses (§6.9 Case-2).
+    guard s.currentDebugSnapshot != nil else {
+        return disabledTransient(s, text: "VM running…")
+    }
+
+    // Paused: deliver the command and clear the snapshot (Case-2 transition).
+    var s = s
+    s.currentDebugSnapshot = nil
+    // Rebuild gutter marks: remove the ▶ paused-line marker (VM no longer at that line).
+    if let sid = s.selection {
+        let bps = s.breakpoints[sid] ?? []
+        s.codePane.gutterMarks = debugGutterMarks(
+            diagnosticMarks: diagnosticGutterMarks(s),
+            breakpoints: bps,
+            pausedLine: nil
+        )
+    }
+    return (s, [.sendDebugCommand(sessionID, command)])
+}
+
+/// Handle `x` stop key while a debug session is active (F6.2 override of global cancel).
+///
+/// Posts `.stop` to the session, clears the session ID and snapshot, and shows
+/// the neutral `"Session stopped."` message (DOM-N01 — `LuaError.cancelled`
+/// raised internally by `.stop` is mapped here, never surfaced as a `.cancelled`
+/// error diagnostic).
+func reduceDebugStop(_ s: AppState, sessionID: DebugSessionID) -> (AppState, [Effect]) {
+    var s = s
+    s.activeDebugSessionID = nil
+    s.currentDebugSnapshot = nil
+    s.debugRestartPending = false
+    // Rebuild gutter marks: remove the paused-line marker.
+    if let sid = s.selection {
+        let bps = s.breakpoints[sid] ?? []
+        s.codePane.gutterMarks = debugGutterMarks(
+            diagnosticMarks: diagnosticGutterMarks(s),
+            breakpoints: bps,
+            pausedLine: nil
+        )
+    }
+    s.transient = TransientMessage(text: "Session stopped.")
+    return (
+        s,
+        [
+            .sendDebugCommand(sessionID, .stop),
+            .startTick(interval: TickInterval.transientExpiry),
+        ]
+    )
+}
+
+/// Show transient directing paused-mode step keys to the Debug tab (F6.2 navigator guard).
+///
+/// Exact string (PRD §2566, ux-spec binding): `"Stepping is in the Debug tab — press 3."`
+func reduceNavigatorDebugKeyTransient(_ s: AppState) -> (AppState, [Effect]) {
+    return disabledTransient(s, text: "Stepping is in the Debug tab — press 3.")
+}
+
+// MARK: - Status bar paused hint
+
+/// Build status-bar paused hint string (ux-spec §7.2, PRD §1473–1474).
+///
+/// Format (binding — snapshot tests depend on exact spacing):
+/// `[paused at <display-name>:<line>]  s/i/o step  c continue  x stop`
+/// Two spaces between groups per PRD.
+func buildPausedStatusHint(displayName: String, line: Int) -> String {
+    "[paused at \(displayName):\(line)]  s/i/o step  c continue  x stop"
 }

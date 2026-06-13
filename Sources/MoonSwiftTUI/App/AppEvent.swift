@@ -301,6 +301,18 @@ public enum AppEvent: Sendable {
     /// The reducer clears the active debug session ID from `AppState`.
     case debugFinished(DebugSessionID, CoreRunOutcome)
 
+    /// The paused VM resumed executing (step or continue command delivered).
+    ///
+    /// Posted by `AppDriver+DebugEffects` via the `onResumed` callback passed to
+    /// `makeDebugHookHandler` (F6.0 §step 5b / ARCH-07). This triggers the
+    /// §6.9 Case-2 "VM running after a pause" state: the Debug tab retains the
+    /// last pause snapshot but renders it dimmed under the `VM running…
+    /// (showing last pause)` header. The reducer clears `currentDebugSnapshot`
+    /// so the tab's rendering branch switches to Case 2.
+    ///
+    /// A stale `sessionID` (session already torn down) is a silent no-op.
+    case debugResumed(DebugSessionID)
+
     /// A debug-restart was confirmed by the user (`y` in the confirmation prompt).
     ///
     /// Posted internally by the reducer when the restart-confirmation gate

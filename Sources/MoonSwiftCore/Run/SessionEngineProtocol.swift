@@ -89,10 +89,16 @@ public protocol SessionEngineProtocol: Sendable {
     /// returns its opaque `DebugSessionID` and the final outcome. The actual
     /// pause hook is installed by F6.0; in F5.0 this establishes the session
     /// lifecycle and runs the fragment.
+    ///
+    /// `onResumed` is called once per advancing command (`.stepOver`, `.stepInto`,
+    /// `.stepOut`, `.continueRun`) — never for `.stop` or globals-only wakes
+    /// (ARCH-07 / F6.2). The AppDriver uses it to post `AppEvent.debugResumed`
+    /// so the reducer can enter §6.9 Case-2 "VM running after a pause" state.
     func runForDebug(
         _ fragment: LuaSourceFragment,
         breakpoints: Set<Int>,
-        onPause: @escaping @Sendable (DebugSnapshot) -> Void
+        onPause: @escaping @Sendable (DebugSnapshot) -> Void,
+        onResumed: @escaping @Sendable () -> Void
     ) async -> (DebugSessionID, CoreRunOutcome)
 
     /// Deliver a debug command to the live session addressed by `id`. Stale id

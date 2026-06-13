@@ -271,11 +271,32 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     case .debugFinished(let sessionID, let outcome):
         return reduceDebugFinished(s, sessionID: sessionID, outcome: outcome)
 
+    case .debugResumed(let sessionID):
+        // VM resumed after a step/continue command — §6.9 Case-2 transition.
+        // Clears the paused snapshot so the Debug tab enters "VM running between
+        // pauses" state. Stale session ID is a silent no-op (ARCH-06).
+        return reduceDebugResumed(s, sessionID: sessionID)
+
     case .debugRestartConfirmed:
         // Internal event: the reducer posted this to itself after confirmation.
         // Nothing to do here — the actual relaunch is in reduceDebugRestartKey.
         return (s, [])
     }
+}
+
+// MARK: - Debug resumed handler
+
+/// Handle `AppEvent.debugResumed` — VM resumed after a step or continue command.
+///
+/// Enters §6.9 Case-2 "VM running between pauses" state: clears the current
+/// snapshot so the Debug-tab renderer switches from the paused view to the
+/// "VM running…" between-pauses header. The session ID is still live; the
+/// next `debugPaused` will restore a new snapshot. Stale ID = silent no-op.
+private func reduceDebugResumed(_ s: AppState, sessionID: DebugSessionID) -> (AppState, [Effect]) {
+    var s = s
+    guard s.activeDebugSessionID == sessionID else { return (s, []) }
+    s.currentDebugSnapshot = nil
+    return (s, [])
 }
 
 // MARK: - Nvim redraw handler
@@ -911,8 +932,17 @@ private func reduceGlobalKey(
     case (.char("g"), .ctrl):
         return tryDebugRun(s)
 
-    // x — cancel run
+    // x — stop debug session when one is active (F6.2 override); else cancel run.
+    //
+    // When a debug session is active `x` delivers `.stop` to the session (the
+    // user ends debugging intentionally). This overrides the global cancel-run
+    // binding so the same key works consistently in both debug and run contexts
+    // (ux-spec §7.2, PRD F6.2). When no debug session is active `x` falls
+    // through to the normal `.cancelRun` path.
     case (.char("x"), []):
+        if let activeID = s.activeDebugSessionID {
+            return reduceDebugStop(s, sessionID: activeID)
+        }
         return (s, [.cancelRun])
 
     // l — lint selected source
@@ -996,8 +1026,17 @@ private func reduceGlobalKey(
         s.paneLayout.bottomPaneHeight = min(PaneLayout.bottomPaneMaxRatio, current + 1)
         return (s, [])
 
-    // i — open init form in empty state; transient no-op in quick-file mode
+    // i — open init form in empty state; transient no-op in quick-file mode.
+    //
+    // While a debug session is active, `i` is step-into (F6.2) and is routed
+    // per focus by the pane handlers (code pane / Debug tab → stepInto;
+    // navigator → "press 3" transient; VM running → "VM running…"). Defer to
+    // pane routing in that case so the global init-form binding does not shadow
+    // it — the same precedence the `x` stop override uses above.
     case (.char("i"), []):
+        if s.activeDebugSessionID != nil {
+            return nil
+        }
         return reduceInitFormOpen(s)
 
     default:
@@ -1013,6 +1052,19 @@ private func reduceNavigatorKey(
     modifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
     var s = s
+
+    // F6.2 navigator interception: while a debug session is paused, s/i/o/c
+    // show a transient directing the user to the Debug tab (PRD §2566).
+    // These keys have no navigator meaning, so interception does not shadow any
+    // existing binding. The check is pre-switch so it takes priority.
+    if s.activeDebugSessionID != nil, s.currentDebugSnapshot != nil {
+        switch (code, modifiers) {
+        case (.char("s"), []), (.char("i"), []), (.char("o"), []), (.char("c"), []):
+            return reduceNavigatorDebugKeyTransient(s)
+        default:
+            break
+        }
+    }
 
     switch (code, modifiers) {
 
@@ -1223,6 +1275,19 @@ private func reduceCodePaneKey(
     case (.char("e"), .ctrl):
         return reduceCodePaneSpawnNvim(s)
 
+    // s/i/o/c — step over / into / out / continue (F6.2 paused-mode keys).
+    // Active only while a debug session is paused (snapshot present); otherwise
+    // a disabled transient (ux-spec §7.2, §6.9). The `x` stop key is handled
+    // globally (see reduceGlobalKey) so it does not appear here.
+    case (.char("s"), []):
+        return reduceDebugStepKey(s, command: .stepOver)
+    case (.char("i"), []):
+        return reduceDebugStepKey(s, command: .stepInto)
+    case (.char("o"), []):
+        return reduceDebugStepKey(s, command: .stepOut)
+    case (.char("c"), []):
+        return reduceDebugStepKey(s, command: .continueRun)
+
     default:
         return (s, [])
     }
@@ -1350,6 +1415,24 @@ private func reduceBottomPaneKey(
         // declines the key when bottomPane is focused, per ux-spec §2.2).
         s.bottomPane.clearOutputWithNotice()
         return (s, [])
+
+    // s/i/o/c — step over / into / out / continue while Debug tab active (F6.2).
+    // Active only while the Debug tab is shown AND the session is paused. When the
+    // VM is running (snapshot nil, session active) they produce a "VM running…"
+    // disabled transient. Routing matches the code-pane paused-mode keys so the
+    // user can step from either focused pane (ux-spec §7.2).
+    case (.char("s"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugStepKey(s, command: .stepOver)
+    case (.char("i"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugStepKey(s, command: .stepInto)
+    case (.char("o"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugStepKey(s, command: .stepOut)
+    case (.char("c"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugStepKey(s, command: .continueRun)
 
     default:
         return (s, [])
