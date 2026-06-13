@@ -43,12 +43,18 @@ public enum ProjectValidation {
     ///     module names. Defaults to `LuaModuleCatalog.v0.optInNames` — the
     ///     canonical opt-in set from the catalog. Pass a custom closure in tests.
     ///     The closure is called at most once per validate invocation.
+    ///   - mockLintService: A `LintServiceProtocol` instance for syntax-checking
+    ///     mock value expressions via the `syntaxPrePass(_ code: String)` overload
+    ///     (F5.5 IMPL-01). Pass `nil` to skip syntax validation — diagnostics for
+    ///     other mock rules are still produced. Defaults to `nil` so existing call
+    ///     sites do not need to be updated.
     /// - Returns: All collected diagnostics. Empty = the file is valid.
     public static func validate(
         _ projectFile: ProjectFile,
         projectRoot: URL? = nil,
         unknownKeyDiagnostics: [Diagnostic] = [],
-        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
+        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames },
+        mockLintService: (any LintServiceProtocol)? = nil
     ) -> [Diagnostic] {
 
         var diagnostics: [Diagnostic] = []
@@ -75,6 +81,9 @@ public enum ProjectValidation {
         // Rule 9 — lint.extra_modules allow-list.
         let allowList = extraModulesAllowList()
         validateExtraModules(projectFile.lint.extraModules, allowList: allowList, into: &diagnostics)
+
+        // Rules 10+ — mock definitions (F5.5).
+        validateMocks(projectFile.mocks, lintService: mockLintService, into: &diagnostics)
 
         return diagnostics
     }
@@ -434,14 +443,16 @@ extension ProjectValidation {
         projectRoot: URL? = nil,
         rawRunConfig: String?,
         unknownKeyDiagnostics: [Diagnostic] = [],
-        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames }
+        extraModulesAllowList: () -> Set<String> = { LuaModuleCatalog.v0.optInNames },
+        mockLintService: (any LintServiceProtocol)? = nil
     ) -> [Diagnostic] {
 
         var diagnostics = validate(
             projectFile,
             projectRoot: projectRoot,
             unknownKeyDiagnostics: unknownKeyDiagnostics,
-            extraModulesAllowList: extraModulesAllowList
+            extraModulesAllowList: extraModulesAllowList,
+            mockLintService: mockLintService
         )
 
         // If a raw run.config string was provided, validate it explicitly.

@@ -36,9 +36,13 @@ public enum ProjectFileCodec {
 
     // MARK: - Known top-level keys
 
-    /// P1-recognised top-level keys. Unknown keys trigger one warn diagnostic.
+    /// P2-recognised top-level keys. Unknown keys trigger one warn diagnostic.
+    ///
+    /// `"mock"` was added in P2 (F5.5). Older binaries that do not list `"mock"`
+    /// here will warn and preserve the section — that is forward-compat. A P2
+    /// binary adds `"mock"` so NO warning fires when loading a P2 project file.
     private static let knownTopLevelKeys: Set<String> = [
-        "lua_version", "source", "run", "lint", "settings",
+        "lua_version", "source", "run", "lint", "settings", "mock",
     ]
 
     // MARK: - Decode
@@ -78,14 +82,22 @@ public enum ProjectFileCodec {
         let lint = decodeLintConfig(from: table)
         let settings = decodeSettingsConfig(from: table)
 
+        // Mock tables (F5.5): codec emits diagnostics for raw-string violations
+        // (unknown type/behavior, writable not-boolean) alongside the decoded store.
+        let (mocks, mockCodecDiagnostics) = ProjectFileCodecMock.decodeMockStore(from: table)
+
         let projectFile = ProjectFile(
             luaVersion: luaVersion,
             sources: sources,
             run: run,
             lint: lint,
-            settings: settings
+            settings: settings,
+            mocks: mocks
         )
-        return (projectFile, unknownDiagnostics)
+        // Merge the unknown-key warnings and mock codec diagnostics.
+        // Both sets are produced at decode time from raw TOML evidence.
+        let allCodecDiagnostics = unknownDiagnostics + mockCodecDiagnostics
+        return (projectFile, allCodecDiagnostics)
     }
 
     // MARK: - Save (decode-modify-encode)
@@ -133,6 +145,10 @@ public enum ProjectFileCodec {
 
         // Write [settings] table.
         table["settings"] = TOMLValue(buildSettingsTable(projectFile.settings))
+
+        // Write [[mock.value]] and [[mock.function]] arrays-of-tables (F5.5).
+        // Delegates to the mock-codec extension to keep this file lean.
+        ProjectFileCodecMock.encodeMockStore(projectFile.mocks, into: table)
 
         return table.convert(to: .toml)
     }

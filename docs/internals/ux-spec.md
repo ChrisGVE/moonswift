@@ -558,6 +558,40 @@ The 4-step ladder (§5.5) applies to the status bar. For the Output tab header l
 
 ---
 
+### 6.9 Mock validation diagnostics
+
+These diagnostic strings are NORMATIVE — F5.5 tests assert them
+character-for-character. The `—` separator is U+2014 EM DASH. [PRD §6.5,
+F5.5 acceptance criteria, CONS-02]
+
+**`[[mock.value]]` diagnostics:**
+
+| Trigger | Exact diagnostic text |
+|---------|----------------------|
+| Unrecognised `type` value | `unknown mock type "<type>" — expected string \| number \| boolean \| table \| expr` |
+| `value` fails syntax pre-pass | `unparseable mock value: <detail>` (detail = Diagnostic message from `syntaxPrePass`) |
+| `namespace` is empty | `mock namespace must not be empty` |
+| `path` is empty | `mock name must not be empty` |
+| `writable` is not a boolean | `mock writable must be a boolean` |
+| Duplicate `(namespace, path)` pair | `duplicate mock value "<namespace>.<path>"` |
+| > 64 mock literals in one project | `N mock literals exceed the 64-literal validation budget — validating the first 64; re-validate the rest on edit.` |
+
+**`[[mock.function]]` diagnostics:**
+
+| Trigger | Exact diagnostic text |
+|---------|----------------------|
+| Unrecognised `behavior` value | `unknown mock behavior "<behavior>" — expected echo-args \| fixed-return \| raise-error` |
+| `name` equals a catalog symbol | `mock name "<name>" collides with catalog symbol` |
+| `name` starts with `__moonswift_` | `mock name "<name>" uses reserved prefix __moonswift_` |
+| `name` is empty | `mock name must not be empty` |
+| `return_value` absent for `fixed-return` | `return_value is required for behavior fixed-return` |
+| `error_message` absent for `raise-error` | `error_message is required for behavior raise-error` |
+| Irrelevant conditional field present | `irrelevant field <field> for behavior <behavior>` |
+| `return_value` fails syntax pre-pass | `unparseable mock value: <detail>` |
+| Duplicate `name` | `duplicate mock function "<name>"` |
+
+---
+
 ## §7 P2–P4 Flow Sketches
 
 ### 7.1 P2 — Mock Environment forms

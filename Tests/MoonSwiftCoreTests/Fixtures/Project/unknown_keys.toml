@@ -1,5 +1,8 @@
 lua_version = "5.4"
 
-# This key is unknown in P1 — used to test warn-once forward-compat behaviour.
-[mock.value]
-namespace = "myapp"
+# This key is unknown — tests the warn-once forward-compat behaviour.
+# Note: [mock] is now a recognised P2 key (F5.5, task #2), so a different
+# future-looking key is used here so the fixture remains a valid test of
+# the unknown-key warning path.
+[future_p3_feature]
+enabled = true

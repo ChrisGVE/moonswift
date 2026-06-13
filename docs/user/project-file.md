@@ -173,6 +173,120 @@ theme = "default"
 
 ---
 
+## `[[mock.value]]` — mock value definitions
+
+Each `[[mock.value]]` entry injects a named Lua value into the engine's global
+table at session start. Scripts can read (and optionally write) the value
+without a real host implementation.
+
+```toml
+[[mock.value]]
+namespace = "myapp"         # required, non-empty; must not collide with catalog
+path = "settings.debug"     # required key path within the namespace
+type = "boolean"            # "string" | "number" | "boolean" | "table" | "expr"
+value = "true"              # required Lua value expression (see below)
+writable = true             # required boolean: whether scripts may write this path
+```
+
+### `namespace` (required, string)
+
+The top-level Lua table name for the mock. Must not be empty and must not
+equal a known catalog symbol name (e.g. `"luaswift"`, `"json"`, `"yaml"`).
+
+### `path` (required, string)
+
+The dotted key path within the namespace (e.g. `"settings.debug"` for
+`myapp.settings.debug`). Must not be empty.
+
+### `type` (required, string)
+
+Informational label for the mock value. Does not restrict what the `value`
+expression produces. Valid values:
+
+| Value | Meaning |
+|-------|---------|
+| `"string"` | The value is expected to be a Lua string |
+| `"number"` | The value is expected to be a Lua number |
+| `"boolean"` | The value is expected to be a Lua boolean |
+| `"table"` | The value is expected to be a Lua table constructor |
+| `"expr"` | An arbitrary Lua value expression (function literal, computed value, etc.) |
+
+### `value` (required, string)
+
+A Lua value expression that is syntax-checked at load time and evaluated at
+session start via `evaluate("return <value>")`. Any syntactically valid Lua
+value expression is accepted: scalar literals, table constructors, function
+literals (`function() return os.time() end`), or computed expressions.
+
+### `writable` (required, boolean)
+
+When `true`, Lua scripts may write to the mock path during a run and the
+post-run navigator reflects the written value.
+
+### Duplicate detection
+
+Two `[[mock.value]]` entries with the same `namespace` and `path` are a
+load-time error. Each `(namespace, path)` pair must be unique.
+
+---
+
+## `[[mock.function]]` — mock function definitions
+
+Each `[[mock.function]]` entry registers a callable Lua function that scripts
+can invoke without a real host implementation.
+
+```toml
+[[mock.function]]
+name = "host_log"           # required; no catalog or __moonswift_ collision
+behavior = "echo-args"      # "echo-args" | "fixed-return" | "raise-error"
+```
+
+### `name` (required, string)
+
+The bare Lua function name (no dots). Must not be empty, must not begin with
+`__moonswift_`, and must not equal a catalog symbol name.
+
+### `behavior` (required, string)
+
+Controls what the function does when called:
+
+| Value | Behaviour | Conditional field |
+|-------|-----------|-------------------|
+| `"echo-args"` | Returns all arguments as a single Lua table | (none) |
+| `"fixed-return"` | Returns a fixed Lua value expression | `return_value` (required) |
+| `"raise-error"` | Raises a Lua error with a given message | `error_message` (required) |
+
+### `return_value` (string, conditional)
+
+Present only when `behavior = "fixed-return"`. A Lua value expression
+syntax-checked and materialized the same way as `[[mock.value]].value`.
+Omit for all other behaviors.
+
+```toml
+[[mock.function]]
+name = "get_count"
+behavior = "fixed-return"
+return_value = "42"
+```
+
+### `error_message` (string, conditional)
+
+Present only when `behavior = "raise-error"`. The error string raised into
+the Lua environment. Omit for all other behaviors.
+
+```toml
+[[mock.function]]
+name = "fail_now"
+behavior = "raise-error"
+error_message = "simulated failure"
+```
+
+### Duplicate detection
+
+Two `[[mock.function]]` entries with the same `name` are a load-time error.
+
+---
+
 ## Forward compatibility
 
 Unknown top-level keys produce one warning diagnostic and are preserved on

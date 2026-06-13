@@ -114,6 +114,36 @@ public struct LuaModuleCatalog: Sendable {
         Set(optInModules.map(\.tableName))
     }
 
+    /// The set of catalog-reserved symbol names for mock-function collision detection.
+    ///
+    /// A mock function whose `name` equals any member of this set collides with
+    /// a known catalog symbol and is rejected at validation (F5.5 rule).
+    ///
+    /// Includes:
+    /// - `"luaswift"` — the top-level namespace global itself.
+    /// - All non-empty module table names (e.g. `"json"`, `"yaml"`, `"regex"`).
+    /// - All root-module function names (e.g. `"extend_stdlib"`).
+    ///
+    /// **Conservative choice:** only top-level identifiers are checked because mock
+    /// functions register themselves as bare Lua globals; a dotted sub-function
+    /// (`json.decode`) cannot conflict with a bare-identifier mock name.
+    public var catalogSymbolNames: Set<String> {
+        var names: Set<String> = ["luaswift"]
+        for module in modules {
+            if module.tableName.isEmpty {
+                // Root module — its functions go directly into the luaswift table.
+                // They are accessed as luaswift.extend_stdlib, not as bare globals,
+                // but we include them for conservative collision detection.
+                for fn in module.functions {
+                    names.insert(fn.name)
+                }
+            } else {
+                names.insert(module.tableName)
+            }
+        }
+        return names
+    }
+
     // MARK: - luacheck globals producer
 
     /// Produces the globals table that luacheck's `std=` option expects.

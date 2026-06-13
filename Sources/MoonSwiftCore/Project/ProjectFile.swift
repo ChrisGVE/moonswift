@@ -3,10 +3,11 @@
 //       of a project file. All fields map directly to the normative schema
 //       (PRD §4.2). Encoding/decoding lives in ProjectFileCodec.swift;
 //       validation rules live in ProjectValidation.swift.
-// Upstream: (none — pure data model)
+// Upstream: MockStore (mock field type)
 // Downstream: ProjectFileCodec (decode target), ProjectValidation (validates),
 //             AppState (holds ProjectFile after load), RunService (RunConfig),
-//             LintService (LintConfig.extraModules)
+//             LintService (LintConfig.extraModules),
+//             SessionEngine.startSession(config:mocks:) (MockStore)
 
 import Foundation
 
@@ -37,18 +38,24 @@ public struct ProjectFile: Sendable, Equatable {
     /// User-visible settings (theme). Nil means `[settings]` was absent.
     public let settings: SettingsConfig
 
+    /// Mock environment definitions. Empty means no mocks are declared for this
+    /// project; the session engine runs with no injected mock values or functions.
+    public let mocks: MockStore
+
     public init(
         luaVersion: String,
         sources: [SourceEntry] = [],
         run: RunConfig = RunConfig(),
         lint: LintConfig = LintConfig(),
-        settings: SettingsConfig = SettingsConfig()
+        settings: SettingsConfig = SettingsConfig(),
+        mocks: MockStore = .empty
     ) {
         self.luaVersion = luaVersion
         self.sources = sources
         self.run = run
         self.lint = lint
         self.settings = settings
+        self.mocks = mocks
     }
 }
 
