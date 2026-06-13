@@ -569,8 +569,8 @@ The 4-step ladder (§5.5) applies to the status bar. For the Output tab header l
 
 **Add mock** (`a` key in navigator, focus on Mock Environment section):
 - Code pane area becomes an inline form: popup selects type (Value / Function / Namespace).
-- **Value form fields**: Namespace, Key path, Type (`string`/`number`/`boolean`/`table`), Value (Lua literal), Writable (toggle).
-- **Function form fields**: Function name, Behavior (`echo-args` / `fixed-return` / `raise-error`), Return value (Lua literal, shown only for `fixed-return`), Error message (shown only for `raise-error`).
+- **Value form fields**: Namespace, Key path, Type (`string`/`number`/`boolean`/`table`/`expr`), Value (Lua value expression — RQ1: a scalar/table literal, or any value expression incl. a function literal when type is `expr`), Writable (toggle). [PRD §F5.1]
+- **Function form fields**: Function name, Behavior (`echo-args` / `fixed-return` / `raise-error`), Return value (Lua value expression, shown only for `fixed-return`), Error message (shown only for `raise-error`). [PRD §F5.2]
 - **Namespace form fields**: Namespace name only.
 - `<Enter>` confirms; `<Esc>` cancels; fields validate on confirm.
 
@@ -642,13 +642,46 @@ Status bar while paused: `[paused at <display-name>:<line>]  s/i/o step  c conti
    ```
    [PRD F8b]
 
-### 7.5 P3 — Lua function invocation picker
+### 7.5 P2/P3 — Lua function invocation (full call-expression form)
 
-1. In the P2 Mock Environment navigator section, user focuses on a Lua function entry.
-2. User presses `<Enter>` to open the invocation form in the code pane area.
-3. Form fields: one text input per expected argument (type shown from catalog if available).
-4. `<Enter>` confirms; MoonSwift calls `callAndReleaseLuaFunction` with the constructed `LuaValue` args.
-5. Result appears in the Output tab as `→ <result display string>`. [PRD F5]
+> Supersedes the retired per-argument form (one input per argument calling
+> `callAndReleaseLuaFunction`). RQ2 (Chris 2026-06-13) chose the richest form: a
+> single Lua call-expression input, syntax-linted, evaluated under the project's
+> `RunConfigMode`. [PRD §F5.3, §6.6]
+
+1. In the P2 Mock Environment navigator section, user focuses on a script-defined
+   Lua function entry (discovered post-run via introspection).
+2. User presses `<Enter>` to open the invocation form in the code pane area: a
+   **single input line** pre-filled with the selected function name and an opening
+   `(`. The user types a **full Lua call expression** with arbitrarily rich
+   arguments — scalars, nested tables, metatable OOP, inline function literals — e.g.
+   `on_event("tick", 42)` or
+   `myCallback({a = 2, nested = {3, 4}}, function() return 5 end)`. [PRD §6.6]
+3. `<Enter>` runs three controls in order (the lint + target checks run in the
+   AppDriver, not the reducer — side-effectful):
+   - **Lint:** the expression is wrapped `return <expr>` and syntax-checked. On a
+     syntax error the form shows, inline, `Invalid call expression: <detail>` and
+     does NOT proceed. [PRD §6.5, §6.6]
+   - **Target no-dots check:** the call head must be a bare top-level identifier
+     (`^[A-Za-z_][A-Za-z0-9_]*$`); the three Lua call forms `f(...)`, `f"..."`,
+     `f{...}` (optionally whitespace-separated) are accepted. A dotted / indexed /
+     method target (`a.b(...)`, `a[c](...)`, `obj:m(...)`) is rejected with
+     `Invalid function name.` before any evaluation. [PRD §6.5, §F5.3]
+   - **Evaluate:** the whole call is evaluated as `evaluate("return <expr>")` under
+     the project's `RunConfigMode` (sandbox by default), so Lua natively builds the
+     rich arguments. A target that does not resolve to a callable global yields the
+     transient `<name> is not a function.` [PRD §F5.3]
+   - **Form lifecycle (post-condition):** on a successful evaluation the form
+     **closes** (focus returns to the navigator) and the result is written to the
+     Output tab (step 5). On a failed control — a lint error (`Invalid call
+     expression: <detail>`), a rejected target (`Invalid function name.`), or a
+     runtime/not-a-function failure — the form **stays open** with the typed
+     expression preserved so the user can correct it in place. [PRD §6.6]
+4. `<Esc>` cancels the form without evaluating. [PRD §6.6]
+5. Result appears in the Output tab as `→ <display string>` — the **first
+   return value only** (multi-return functions are truncated to the first). [PRD §6.3, §F5.3]
+6. If no session engine is alive (no run yet this session), the action posts the
+   transient `Invoke a Lua function: run the source first.` [PRD §F5.3]
 
 ### 7.6 P3 — Completion popup and hover overlay
 
@@ -659,7 +692,7 @@ Status bar while paused: `[paused at <display-name>:<line>]  s/i/o step  c conti
 - `<Esc>` dismisses.
 
 **Hover overlay** (`K` in code pane, or `<Enter>` in the completion popup) [PRD F7a]:
-- Centered modal, max 60 columns × 15 rows.
+- Centered modal, max 60 columns × 20 rows. [PRD §6.7 UX-14]
 - Content: function/module name, full signature, doc string.
 - `<Esc>` or `K` dismisses.
 
