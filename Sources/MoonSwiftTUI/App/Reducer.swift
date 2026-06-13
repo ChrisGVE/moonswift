@@ -262,6 +262,19 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // Off-thread build complete: transition to .diffView(.ready).
         s.focus = .diffView(.ready(diffState))
         return (s, [])
+
+    // MARK: Debug (P2 F6.1, ARCHITECTURE.md §10.9)
+
+    case .debugPaused(let snapshot):
+        return reduceDebugPaused(s, snapshot: snapshot)
+
+    case .debugFinished(let sessionID, let outcome):
+        return reduceDebugFinished(s, sessionID: sessionID, outcome: outcome)
+
+    case .debugRestartConfirmed:
+        // Internal event: the reducer posted this to itself after confirmation.
+        // Nothing to do here — the actual relaunch is in reduceDebugRestartKey.
+        return (s, [])
     }
 }
 
@@ -806,6 +819,13 @@ private func reduceKey(
         break
     }
 
+    // Debug restart confirmation gate: when `debugRestartPending` is true, the
+    // very next key (y or anything else) resolves the `[y/N]` prompt regardless
+    // of pane focus (ARCH §F6.1). Runs before all other dispatch.
+    if s.debugRestartPending {
+        return reduceDebugRestartKey(s, code: code, modifiers: modifiers)
+    }
+
     // Colon command interception: when the code pane is actively collecting a
     // `:N<Enter>` sequence, ALL keys go to the colon handler — including ones
     // that would normally be global (e.g. `q`, which would otherwise quit).
@@ -886,6 +906,10 @@ private func reduceGlobalKey(
     // r — run selected source
     case (.char("r"), []):
         return tryRun(s)
+
+    // <C-g> — start (or restart-confirm) a debug run (ux-spec §7.2)
+    case (.char("g"), .ctrl):
+        return tryDebugRun(s)
 
     // x — cancel run
     case (.char("x"), []):
@@ -1154,7 +1178,13 @@ private func reduceCodePaneKey(
         s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
 
+    // b — toggle breakpoint on cursor line (UX-01 collision resolution: formerly
+    // scroll-up-full-page; that binding moves to <C-b> per ux-spec §2.3 amendment).
     case (.char("b"), []):
+        return reduceBreakpointToggle(s)
+
+    // <C-b> — scroll up full page (replaces the retired plain `b` binding).
+    case (.char("b"), .ctrl):
         s.codePane.scrollOffset = max(0, s.codePane.scrollOffset - fullPageSize)
         s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
@@ -1290,12 +1320,24 @@ private func reduceBottomPaneKey(
         s.bottomPane.scrollOffset = 0
         return (s, [])
 
+    case (.char("3"), []):
+        s.bottomPane.activeTab = .debug
+        s.bottomPane.scrollOffset = 0
+        return (s, [])
+
     case (.tab, []):
         // Cycle tabs within the bottom pane (context-sensitive Tab).
+        // Debug tab is included when a debug session is active (ux-spec §6.2).
         switch s.bottomPane.activeTab {
         case .output:
             s.bottomPane.activeTab = .diagnostics
         case .diagnostics:
+            if s.activeDebugSessionID != nil {
+                s.bottomPane.activeTab = .debug
+            } else {
+                s.bottomPane.activeTab = .output
+            }
+        case .debug:
             s.bottomPane.activeTab = .output
         }
         s.bottomPane.scrollOffset = 0
@@ -1706,12 +1748,21 @@ private func reduceCycleFocus(
     }
 
     // Context-sensitive Tab: when the bottom pane is focused, cycle its tabs.
+    // Includes the Debug tab when a debug session is active (ux-spec §6.1, §6.2).
     if forward && current == .bottomPane {
         switch s.bottomPane.activeTab {
         case .output:
             s.bottomPane.activeTab = .diagnostics
         case .diagnostics:
-            // Tab at the last tab cycles back to navigator.
+            if s.activeDebugSessionID != nil {
+                // Debug tab is present — cycle into it.
+                s.bottomPane.activeTab = .debug
+            } else {
+                // No debug session: last tab, wrap back to navigator.
+                s.focus = .pane(.navigator)
+            }
+        case .debug:
+            // Last tab in debug mode — wrap back to navigator.
             s.focus = .pane(.navigator)
         }
         s.bottomPane.scrollOffset = 0
@@ -2094,6 +2145,13 @@ private func jumpCodePaneFromBottomPane(_ s: AppState) -> (AppState, [Effect]) {
         diagIdx = min(adjusted, diags.count - 1)
     case .output:
         diagIdx = min(rawOffset, diags.count - 1)
+    case .debug:
+        // Debug tab Enter: jump code pane to the paused debug line if available.
+        guard let snapshot = s.currentDebugSnapshot else { return (s, []) }
+        let targetLine = max(0, snapshot.fragmentLine - 1)
+        s.codePane.cursorLine = targetLine
+        s.codePane.scrollOffset = max(0, targetLine - halfPageSize)
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
     }
 
     let line = diags[diagIdx].line
@@ -2142,6 +2200,9 @@ private func yankFocusedLine(from s: AppState) -> String? {
         let colStr = d.column.map { ":\($0)" } ?? ""
         let codeStr = d.code.map { " [\($0)]" } ?? ""
         return "\(prefix) \(d.line)\(colStr) \(d.message)\(codeStr)"
+    case .debug:
+        // Debug tab yank: no structured data to copy in F6.1; no-op.
+        return nil
     }
 }
 
