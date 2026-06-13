@@ -285,6 +285,13 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // pauses" state. Stale session ID is a silent no-op (ARCH-06).
         return reduceDebugResumed(s, sessionID: sessionID)
 
+    case .mockLiveStateReady(let liveState):
+        // F5.4: store the introspection snapshot so the Mock Environment section
+        // shows live values. `isEmpty` snapshots keep the
+        // `(run to populate live state)` hint (DATA-09, handled by buildMockNavRows).
+        s.mockLiveState = liveState
+        return (s, [])
+
     case .debugRestartConfirmed:
         // Internal event: the reducer posted this to itself after confirmation.
         // Nothing to do here — the actual relaunch is in reduceDebugRestartKey.
@@ -838,6 +845,8 @@ private func reduceKey(
         return reducePickerKey(s, code: code, modifiers: modifiers)
     case .initForm:
         return reduceInitFormKey(s, code: code, modifiers: modifiers)
+    case .mockForm:
+        return reduceMockFormKey(s, code: code, modifiers: modifiers)
     case .nvimPane:
         return reduceNvimPaneKey(s, code: code, modifiers: modifiers)
     case .nvimSpawning:
@@ -856,6 +865,12 @@ private func reduceKey(
     // of pane focus (ARCH §F6.1). Runs before all other dispatch.
     if s.debugRestartPending {
         return reduceDebugRestartKey(s, code: code, modifiers: modifiers)
+    }
+
+    // F5.4 mock delete confirmation gate: `Delete this mock? [y/N]` — the next
+    // key resolves it (navigator focus, form closed). Runs before pane dispatch.
+    if s.mockDeletePending {
+        return reduceMockDeleteConfirm(s, code: code)
     }
 
     // Colon command interception: when the code pane is actively collecting a
@@ -1111,6 +1126,20 @@ private func reduceNavigatorKey(
 
     case (.enter, []), (.char("o"), []), (.char(" "), []):
         return selectNavigatorEntry(s)
+
+    // F5.4 Mock Environment: `a` add (always, so the first mock can be created),
+    // `e` edit / `d` delete (only on a selected mock in the section).
+    case (.char("a"), []):
+        guard case .loaded = s.project else { return (s, []) }
+        return reduceMockAddForm(s)
+
+    case (.char("e"), []):
+        guard s.navigator.inMockSection else { return (s, []) }
+        return reduceMockEditForm(s)
+
+    case (.char("d"), []):
+        guard s.navigator.inMockSection else { return (s, []) }
+        return reduceMockDeleteRequest(s)
 
     case (.char("/"), []):
         // Activate inline filter mode with an empty query. Pressing / again

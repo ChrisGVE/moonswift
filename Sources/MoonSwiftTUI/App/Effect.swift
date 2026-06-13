@@ -253,6 +253,12 @@ public enum Effect: Sendable {
     /// stepping UI (distinct from `.stopDebug` which was F6.1's teardown-only path).
     case sendDebugCommand(DebugSessionID, LuaDebugCommand)
 
+    /// Persist the mock definitions to `[[mock.*]]` in moonswift.toml after an
+    /// add/edit/delete (F5.4). AppDriver decode-modifies-encodes the project file
+    /// (preserving all other keys) with the new `MockStore` and writes it back;
+    /// fire-and-forget on success, logged on failure. No-op without a loaded project.
+    case saveMockStore(MockStore)
+
     /// Persist the navigator/bottom split ratios to `[settings]` in moonswift.toml
     /// after a TUI resize (F5.6). AppDriver decode-modifies-encodes the project
     /// file (preserving all other keys) and writes it back; fire-and-forget on

@@ -75,7 +75,7 @@ public func render(_ state: AppState, size: TerminalSize) -> [RenderCommand] {
             commands += renderConflictModal(rect: codeInner, theme: theme)
         case .diffView(let phase):
             commands += renderDiffView(phase: phase, rect: codeInner, theme: theme)
-        case .pane, .helpOverlay, .pickerModal, .initForm, .nvimPane, .nvimSpawning:
+        case .pane, .helpOverlay, .pickerModal, .initForm, .mockForm, .nvimPane, .nvimSpawning:
             break
         }
     }
@@ -440,6 +440,11 @@ private func renderCodePane(
     // Init form modal: replace code pane with the init form (ux-spec §3.1, task 24).
     if state.focus == .initForm, let form = state.initFormState {
         return renderInitForm(form: form, rect: inner, theme: theme)
+    }
+
+    // Mock form: replace code pane with the add/edit form (F5.4, ux-spec §7.1).
+    if state.focus == .mockForm, let form = state.mockFormState {
+        return renderMockForm(form: form, rect: inner, theme: theme)
     }
 
     // ux-spec §4.2: malformed project file overrides the code pane with a fixed

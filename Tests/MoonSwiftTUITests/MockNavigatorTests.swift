@@ -90,6 +90,27 @@ struct MockNavRowModelTests {
         #expect(rows == [.divider, .info("(run to populate live state)")])
         #expect(mockSelectableRows(s).isEmpty)
     }
+
+    @Test("a mockLiveStateReady snapshot replaces the hint with live rows (F5.4)")
+    func liveStateReplacesHint() {
+        var s = loadedStateWithMocks(values: [], functions: [])
+        let live = MockLiveState(
+            mockValues: [],
+            mockFunctionNames: [],
+            userGlobals: [MockLiveValue(name: "result", displayValue: "42")],
+            isEmpty: false)
+        s = reduce(s, .mockLiveStateReady(live)).0
+        let rows = buildMockNavRows(s)
+        #expect(rows.contains(.live(name: "result", displayValue: "42")))
+        #expect(!rows.contains(.info("(run to populate live state)")))
+    }
+
+    @Test("an isEmpty live snapshot keeps the (run to populate live state) hint (DATA-09)")
+    func emptyLiveKeepsHint() {
+        var s = loadedStateWithMocks(values: [], functions: [])
+        s = reduce(s, .mockLiveStateReady(.empty)).0
+        #expect(buildMockNavRows(s).contains(.info("(run to populate live state)")))
+    }
 }
 
 // MARK: - j/k cursor crossing the divider
