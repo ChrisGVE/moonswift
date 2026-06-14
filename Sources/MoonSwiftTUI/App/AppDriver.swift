@@ -996,8 +996,10 @@ public final class AppDriver: @unchecked Sendable {
         case .done(let value, let duration):
             return .done(value: value, duration: duration)
         case .error(let diag, let traceback):
-            // CoreRunOutcome.error carries traceback as String?; RunOutcome expects [String].
-            return .error(diag, traceback: traceback.map { [$0] } ?? [])
+            // CoreRunOutcome.error carries the traceback as a single multi-line
+            // String? (newest frame first, #19); RunOutcome expects one entry per
+            // frame line for the Output tab (F6.4).
+            return .error(diag, traceback: tracebackLines(traceback))
         case .cancelled:
             return .cancelled
         case .limitExceeded(let kind):

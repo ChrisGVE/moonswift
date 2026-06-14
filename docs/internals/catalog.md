@@ -176,6 +176,13 @@ For each module, look at:
 
 ## Maintenance
 
+**Current LuaSwift minimum: the 1.12 minor** (`Package.swift`,
+`.upToNextMinor(from: "1.12.0")`). P2 depends on this line for two engine
+features: #19 structured runtime errors (`LuaError.runtimeFailure` —
+message/line/traceback, F6.4) and #23 `chunkName` on `evaluate`/`runDebug` for
+faithful traceback frame names (F6.4). The earlier `LuaErrorLineParser` regex
+seam was deleted once #19 landed (see `docs/internals/debugger.md`).
+
 Every LuaSwift minimum-version bump **must** include a catalog review:
 
 1. Check `LuaSwift/Sources/LuaSwift/Modules/Swift/*.swift` for added or

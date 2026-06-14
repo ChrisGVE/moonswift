@@ -168,6 +168,23 @@ A debug run ends when:
 When a session ends, all paused-line markers are cleared from the gutter and
 the Debug tab returns to the idle message.
 
+## Errors & tracebacks
+
+When a run or debug run hits a runtime error, the Output tab shows the error
+footer (`error — <message> → jump to line N`) followed by the **traceback** —
+one line per stack frame, newest frame first. The traceback comes straight from
+the Lua engine's structured error (it captures the failing stack while it is
+still intact), so the line numbers are accurate.
+
+Frame names are **faithful**: each frame is labelled with the fragment's display
+name — the filename for whole `.lua` files, or `<filename>:<jsonpath>` for a
+script embedded in a JSON/YAML/TOML field (e.g. `config.yaml:$.scripts.init`) —
+instead of a truncated snippet of the source text. This makes a traceback that
+crosses several embedded fragments readable at a glance.
+
+A debug run that ends in an error surfaces the same footer and traceback in the
+Output tab (the Debug tab closes when the session ends).
+
 ## Line mapping
 
 Breakpoints are stored as fragment-relative line numbers (1-based). For

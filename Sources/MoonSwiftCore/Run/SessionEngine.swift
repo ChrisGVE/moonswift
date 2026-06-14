@@ -433,7 +433,10 @@ public final class SessionEngine: SessionEngineProtocol {
         let start = ContinuousClock.now
         let result: LuaValue
         do {
-            result = try engine.runDebug(fragment.code)
+            // F6.4: pass the fragment's display name as chunkName so engine-reported
+            // frames carry faithful names (e.g. `config.yaml:$.scripts.init`) in the
+            // structured traceback instead of truncated source text (#23).
+            result = try engine.runDebug(fragment.code, chunkName: fragment.provenance.displayName)
         } catch let luaError as LuaError {
             return outcome(for: luaError, provenance: fragment.provenance, config: config)
         } catch {
@@ -491,7 +494,9 @@ public final class SessionEngine: SessionEngineProtocol {
         let start = ContinuousClock.now
         let result: LuaValue
         do {
-            result = try engine.evaluate(fragment.code)
+            // F6.4: faithful frame names in the structured traceback (#23 chunkName),
+            // matching the debug-run path.
+            result = try engine.evaluate(fragment.code, chunkName: fragment.provenance.displayName)
         } catch let luaError as LuaError {
             return outcome(for: luaError, provenance: fragment.provenance, config: config)
         } catch {
@@ -539,7 +544,16 @@ public final class SessionEngine: SessionEngineProtocol {
             return .cancelled
         default:
             let diag = Diagnostic.from(luaError: luaError, provenance: provenance)
-            return .error(diag, traceback: nil)
+            // F6.4: surface the LuaSwift #19 structured traceback (newest frame
+            // first, faithful frame names when the chunk was run with a chunkName).
+            // Only `.runtimeFailure` carries one; other error kinds have none.
+            let traceback: String?
+            if case .runtimeFailure(let failure) = luaError {
+                traceback = failure.traceback
+            } else {
+                traceback = nil
+            }
+            return .error(diag, traceback: traceback)
         }
     }
 

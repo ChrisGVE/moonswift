@@ -236,9 +236,14 @@ func reduceDebugFinished(
         )
     }
 
-    // Log engine-level failures.
-    if case .error(let diag, _) = outcome {
+    // F6.4: a debug-run error surfaces in the Output tab (the Debug tab clears on
+    // finish), mirroring the plain-run error path — the footer plus the structured
+    // traceback frames (newest first). Also logged for post-mortem diagnosis.
+    if case .error(let diag, let traceback) = outcome {
         Logger.shared.error("Debug run error: \(diag.message)")
+        let lines = tracebackLines(traceback)
+        s.bottomPane.appendOutputLines([buildRunFooter(outcome: .error(diag, traceback: lines))])
+        if !lines.isEmpty { s.bottomPane.appendOutputLines(lines) }
     }
 
     return (s, [armDebugTickIfNeeded(s)].compactMap { $0 })

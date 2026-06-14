@@ -148,6 +148,11 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
             s.bottomPane.appendOutputLines(["→ \(v)"])
         }
         s.bottomPane.appendOutputLines([buildRunFooter(outcome: outcome)])
+        // F6.4: append the structured traceback frames (newest first) below the
+        // error footer so the Output tab shows where the error occurred.
+        if case .error(_, let traceback) = outcome, !traceback.isEmpty {
+            s.bottomPane.appendOutputLines(traceback)
+        }
         return (s, tickEffectsAfterRunEnds(s))
 
     case .transient(let message):

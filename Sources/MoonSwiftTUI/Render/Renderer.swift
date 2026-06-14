@@ -1486,6 +1486,17 @@ func buildRunHeader(runNumber: Int, startTime: Date, width: Int) -> String {
 /// The `→ jump to line N` affordance is interactive in the rendered pane:
 /// pressing Enter on that line triggers the jump (handled by the reducer's
 /// `jumpCodePaneFromBottomPane` function). Exact string per ux-spec §6.3.
+/// Split a LuaSwift #19 structured traceback (a single multi-line String, newest
+/// frame first) into one Output-tab line per frame (F6.4). `nil` or empty → `[]`.
+/// Trailing empty lines are dropped; interior blank lines are preserved so the
+/// `stack traceback:` header and its frames render faithfully.
+func tracebackLines(_ traceback: String?) -> [String] {
+    guard let traceback, !traceback.isEmpty else { return [] }
+    var lines = traceback.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    while let last = lines.last, last.isEmpty { lines.removeLast() }
+    return lines
+}
+
 func buildRunFooter(outcome: RunOutcome) -> String {
     switch outcome {
     case .done(_, let duration):

@@ -368,3 +368,58 @@ struct SessionEngineIntegrationInvokeTests {
         await engine.endSession()
     }
 }
+
+// MARK: - F6.4 structured errors & tracebacks (chunkName)
+
+@Suite("SessionEngineIntegration — F6.4 structured errors & tracebacks")
+struct SessionEngineIntegrationTracebackTests {
+
+    /// A nested-call runtime error on the plain run path produces a structured
+    /// `.error` whose traceback is populated (newest frame first) and carries the
+    /// fragment's faithful display name (#23 chunkName = provenance.displayName);
+    /// `intFrag` uses `/test/integration.lua`, so the display name is
+    /// `integration.lua`.
+    @Test("sessionRun error populates a traceback with faithful frame names")
+    func sessionRunErrorTraceback() async throws {
+        let engine = intEngine()
+        try await engine.startSession(config: RunConfig(), mocks: .empty)
+
+        let outcome = await engine.sessionRun(
+            intFrag("local function inner() error('boom') end\ninner()"))
+        guard case .error(let diag, let traceback) = outcome else {
+            Issue.record("expected .error, got \(outcome)")
+            await engine.endSession()
+            return
+        }
+        #expect(diag.message.contains("boom"))
+        let tb = try #require(traceback, "runtime error must carry a structured traceback (#19)")
+        #expect(!tb.isEmpty)
+        #expect(
+            tb.contains("integration.lua"),
+            "traceback frames must carry the faithful chunkName: \(tb)")
+        await engine.endSession()
+    }
+
+    /// The debug run path (`runForDebug` → `runDebug(_:chunkName:)`) likewise
+    /// carries a faithful-named traceback on error.
+    @Test("runForDebug error populates a traceback with faithful frame names")
+    func debugRunErrorTraceback() async throws {
+        let engine = intEngine()
+        try await engine.startSession(config: RunConfig(), mocks: .empty)
+
+        let (_, outcome) = await engine.runForDebug(
+            intFrag("local function inner() error('kaboom') end\ninner()"),
+            breakpoints: [],
+            onPause: { _ in },
+            onResumed: {})
+        guard case .error(let diag, let traceback) = outcome else {
+            Issue.record("expected .error, got \(outcome)")
+            await engine.endSession()
+            return
+        }
+        #expect(diag.message.contains("kaboom"))
+        let tb = try #require(traceback, "debug-run error must carry a structured traceback")
+        #expect(tb.contains("integration.lua"), "debug traceback must carry the chunkName: \(tb)")
+        await engine.endSession()
+    }
+}

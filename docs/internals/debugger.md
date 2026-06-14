@@ -240,3 +240,27 @@ is restored. The adapter posts an internal diagnostic string
 `Debug session timed out waiting for a command — session ended.` so the condition
 is visible in the output rather than silent. This is a watchdog for an AppDriver bug
 path, not a normal-operation limit.
+
+## Structured errors & tracebacks (F6.4)
+
+Runtime errors flow through the LuaSwift #19 structured surface
+(`LuaError.runtimeFailure(LuaRuntimeFailure)`), which carries the stripped
+`message`, the 1-based source `line`, and a full `traceback` (newest frame
+first), all captured by the engine's error-message handler **while the failing
+stack is still intact** — `lua_pcall` has already unwound by the time the Swift
+`catch` runs, so there is nothing left to parse there.
+
+`Diagnostic.from(luaError:provenance:)` consumes `failure.line`/`failure.message`
+directly for runtime errors; `SessionEngine.outcome(for:)` carries
+`failure.traceback` through to `CoreRunOutcome.error(_, traceback:)`, which the
+TUI renders in the Output tab (`tracebackLines` splits it into one line per
+frame). Both the plain run (`evaluate(_:chunkName:)`) and the debug run
+(`runDebug(_:chunkName:)`) pass the fragment's `provenance.displayName` as the
+#23 **chunkName**, so engine-reported frames carry faithful names
+(`config.yaml:$.scripts.init`) rather than truncated source text.
+
+The standalone `LuaErrorLineParser` regex seam was **deleted** in F6.4: runtime
+errors no longer need string parsing. Only compile errors (`LuaError.syntaxError`)
+and the rare legacy `.runtimeError` string still need a line number — a compact
+bounded-anchor extractor (`compileErrorLineNumber`, private to
+`LuaErrorDiagnostics`) handles those two cases.
