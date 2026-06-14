@@ -1,14 +1,17 @@
 // File: Tests/MoonSwiftCoreTests/Diagnostics/LuaErrorDiagnosticsTests.swift
 // Folder: Tests/MoonSwiftCoreTests/Diagnostics/
-// Role: Unit tests for Diagnostic.from(luaError:provenance:) covering the error
-//       cases not exercised by LuaErrorLineParserTests.swift:
+// Role: Unit tests for Diagnostic.from(luaError:provenance:):
 //         • LuaError.memoryError — maps to a "Memory error: …" message
 //         • LuaError.unknown (and other non-matched cases) — maps to
 //           localizedDescription
+//         • LuaError.syntaxError — compile-error line extraction via the inlined
+//           bounded-anchor `compileErrorLineNumber` (the F6.4 replacement for the
+//           deleted LuaErrorLineParser), including the hostile chunk-name /
+//           message / window-boundary cases.
 //
-//       syntaxError and runtimeError are indirectly tested via the live-engine
-//       tests in LuaErrorLineParserTests.swift, so they are not duplicated here.
-//       instructionLimitExceeded is tested in RunServiceTests.swift.
+//       instructionLimitExceeded is tested in RunServiceTests.swift; the
+//       structured `.runtimeFailure` path (#19) is covered by the live-engine
+//       SessionEngine/RunService tests.
 //
 // Upstream: MoonSwiftCore/Diagnostics/LuaErrorDiagnostics.swift
 // Downstream: (test target — nothing imports this)
@@ -118,5 +121,50 @@ struct DiagnosticFromLuaErrorTests {
         // Message should start with "Memory error:" exactly once.
         let prefixCount = diag.message.components(separatedBy: "Memory error:").count - 1
         #expect(prefixCount == 1)
+    }
+}
+
+// MARK: - syntaxError compile-line extraction (F6.4 — replaces LuaErrorLineParser)
+
+/// Exercises `compileErrorLineNumber` through the public `.syntaxError` seam,
+/// covering the same formats and hostile classes the deleted
+/// `LuaErrorLineParserTests` did — now asserted at the seam (`Diagnostic.from`)
+/// where it actually matters, since `.syntaxError(String)` is directly
+/// constructible in a test.
+@Suite("Diagnostic.from(.syntaxError) — compile-error line extraction")
+struct DiagnosticSyntaxErrorLineTests {
+
+    private func line(_ raw: String) -> Int {
+        Diagnostic.from(luaError: .syntaxError(raw), provenance: makeProvenance()).line
+    }
+
+    @Test("standard [string \"…\"]:N: format extracts the line")
+    func standardChunkFormat() {
+        #expect(line("[string \"x = \"]:1: unexpected symbol near '<eof>'") == 1)
+        #expect(line("[string \"line1\\nline2\"]:42: '=' expected") == 42)
+        #expect(line("[string \"y\"]:100: bad") == 100)
+    }
+
+    @Test("bytecode:N: format extracts the line")
+    func bytecodeFormat() {
+        #expect(line("bytecode:7: malformed number") == 7)
+    }
+
+    @Test("last ]:N: in the window wins when the chunk name has a lookalike")
+    func lastMatchWins() {
+        // Chunk name itself contains a `]:9:` lookalike; the real marker is `]:3:`.
+        #expect(line("[string \"a]:9: b\"]:3: real error") == 3)
+    }
+
+    @Test("a ]:N: lookalike past the 70-byte window is invisible")
+    func lookalikeBeyondWindow() {
+        // No marker within the first ~70 bytes → line 0 (the trailing ]:5: is out of window).
+        let padded = "[string \"" + String(repeating: "z", count: 90) + "\"]:5: late"
+        #expect(line(padded) == 0)
+    }
+
+    @Test("an unparseable string yields line 0")
+    func unparseable() {
+        #expect(line("totally unstructured message") == 0)
     }
 }
