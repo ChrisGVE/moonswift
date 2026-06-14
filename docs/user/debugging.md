@@ -8,7 +8,7 @@ inspect the call stack at each pause.
 With the **code pane focused**, position the cursor on any line and press `b`
 to toggle a breakpoint:
 
-- `○` (empty gutter) — no breakpoint on this line.
+- blank gutter — no breakpoint on this line.
 - `●` (filled, error color) — breakpoint set.
 
 Press `b` again on the same line to remove the breakpoint.

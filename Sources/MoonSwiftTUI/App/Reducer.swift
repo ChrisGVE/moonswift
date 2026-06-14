@@ -297,11 +297,6 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         s.mockLiveState = liveState
         return (s, [])
 
-    case .debugRestartConfirmed:
-        // Internal event: the reducer posted this to itself after confirmation.
-        // Nothing to do here — the actual relaunch is in reduceDebugRestartKey.
-        return (s, [])
-
     // MARK: Lua invocation (F5.3 — handlers in InvokeFormReducer.swift)
 
     case .luaInvocationResult(let display):
@@ -1978,6 +1973,15 @@ private func tryRun(_ s: AppState) -> (AppState, [Effect]) {
     // Guard: a run must not be already in progress.
     if case .running = s.runState {
         s.transient = TransientMessage(text: "Run in progress")
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+    }
+
+    // Guard: a debug session must not be live (CR-001). Debug runs do NOT set
+    // `runState`, so without this guard a plain `r` during a paused (or
+    // launching) debug session starts a normal run whose `endSession` deadlocks
+    // behind the VM thread parked in the mailbox. Stop the debugger first.
+    if s.activeDebugSessionID != nil || s.debugLaunchPending {
+        s.transient = TransientMessage(text: "Debug session active — press x to stop first.")
         return (s, [armTickIfNeeded(s)].compactMap { $0 })
     }
 

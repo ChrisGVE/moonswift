@@ -357,6 +357,15 @@ public final class SessionEngine: SessionEngineProtocol {
     // MARK: - SessionEngineProtocol: endSession
 
     public func endSession() async {
+        // Wake any parked debug VM thread FIRST (CR-001/CR-004). A debug session
+        // blocks the serial queue inside `mailbox.take()`; the teardown block
+        // below is dispatched onto that SAME queue, so it would queue behind the
+        // parked `take()` and never run — `await` would hang until the 300 s
+        // watchdog. Delivering `.stop` goes direct-to-mailbox (nonisolated, not
+        // via the queue), so the parked `runForDebug` returns and frees the queue.
+        let live = registryLock.withLock { Array(sessions.values) }
+        for session in live { session.deliver(.stop) }
+
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.async { [weak self] in
                 guard let self else {

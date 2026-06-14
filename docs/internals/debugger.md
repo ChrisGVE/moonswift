@@ -235,11 +235,11 @@ same way.
 `mailbox.take()` uses `NSCondition.wait(until:)` with a hard ceiling of 5 minutes
 (`DebugCommandMailbox.takeTimeout`). If no command and no globals request arrives
 within that window, `take()` returns `.command(.stop)` as a fail-safe: the VM
-unwinds via the cancellation path, the session ends cleanly, and the alternate screen
-is restored. The adapter posts an internal diagnostic string
-`Debug session timed out waiting for a command — session ended.` so the condition
-is visible in the output rather than silent. This is a watchdog for an AppDriver bug
-path, not a normal-operation limit.
+unwinds via the stop path, the session ends cleanly, and the alternate screen
+is restored. The timeout reuses the ordinary stop path, so the user sees the
+neutral `Session stopped.` message — there is **no** distinct timeout string
+(the PRD §6.5 enumerated one, but the implementation reuses `.stop`; see issue
+#14). This is a watchdog for an AppDriver bug path, not a normal-operation limit.
 
 ## Structured errors & tracebacks (F6.4)
 

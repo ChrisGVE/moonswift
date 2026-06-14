@@ -834,6 +834,14 @@ public struct AppState: Sendable {
     /// restart (`Restart debug session? [y/N]` — ux-spec §7.2 precondition (c)).
     public var debugRestartPending: Bool
 
+    /// When `true`, a debug run has been launched (`Effect.debugRun` emitted) but
+    /// has not yet hit its first pause — so `activeDebugSessionID` is still nil.
+    /// This flag closes that window: `tryRun` and `tryDebugRun` both treat it as
+    /// "a debug session is live" so a second `<C-g>` cannot double-launch and a
+    /// plain `r` cannot deadlock the engine (CR-001/CR-002). Cleared on the first
+    /// pause (`applyPauseInspection`), on `debugFinished`, and on `x` stop.
+    public var debugLaunchPending: Bool
+
     // MARK: Debug-tab inspection state (P2 F6.3, ux-spec §7.2)
 
     /// The retained last-pause snapshot, kept across a resume so the Debug tab
@@ -911,6 +919,7 @@ public struct AppState: Sendable {
         activeDebugSessionID: DebugSessionID? = nil,
         currentDebugSnapshot: DebugSnapshot? = nil,
         debugRestartPending: Bool = false,
+        debugLaunchPending: Bool = false,
         lastPauseSnapshot: DebugSnapshot? = nil,
         debugSelectedFrame: Int = 0,
         debugSelectedRow: Int = 0,
@@ -953,6 +962,7 @@ public struct AppState: Sendable {
         self.activeDebugSessionID = activeDebugSessionID
         self.currentDebugSnapshot = currentDebugSnapshot
         self.debugRestartPending = debugRestartPending
+        self.debugLaunchPending = debugLaunchPending
         self.lastPauseSnapshot = lastPauseSnapshot
         self.debugSelectedFrame = debugSelectedFrame
         self.debugSelectedRow = debugSelectedRow

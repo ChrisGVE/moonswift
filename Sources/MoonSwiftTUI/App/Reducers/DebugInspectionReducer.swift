@@ -42,6 +42,8 @@ func applyPauseInspection(_ s: inout AppState, snapshot: DebugSnapshot) {
     s.currentDebugSnapshot = snapshot
     s.lastPauseSnapshot = snapshot
     s.activeDebugSessionID = snapshot.sessionID
+    // The launch has resolved into a real session ID (CR-002).
+    s.debugLaunchPending = false
     // The globals capture (if any) has now resolved into this snapshot.
     s.debugGlobalsRequested = false
     if !isGlobalsRepublish {

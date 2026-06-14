@@ -159,7 +159,7 @@ struct DebugRunPreconditionTests {
         #expect(next.transient?.text == "Debugging unavailable for this Lua version.")
     }
 
-    @Test("C-g with ready state emits debugRun effect")
+    @Test("C-g with ready state emits debugRun effect and marks the launch pending")
     func readyStateEmitsDebugRun() {
         let (state, _) = stateWithCode()
         let (next, effects) = reduce(state, .key(.char("g"), modifiers: .ctrl))
@@ -169,6 +169,77 @@ struct DebugRunPreconditionTests {
         }
         #expect(hasDebugRun, "C-g in ready state must emit .debugRun")
         #expect(next.bottomPane.activeTab == .debug, "debug tab shown on launch")
+        #expect(next.debugLaunchPending, "launch is marked pending until the first pause (CR-002)")
+    }
+}
+
+// MARK: - Debug-session lifecycle guards (CR-001 / CR-002)
+
+@Suite("DebugReducer — lifecycle guards (deadlock / double-launch)")
+struct DebugLifecycleGuardTests {
+
+    /// CR-002: a second `<C-g>` while the first launch has not yet paused
+    /// (`debugLaunchPending`, no session ID) must NOT start a second run.
+    @Test("second C-g while launch pending is declined, no second debugRun")
+    func secondCgWhileLaunchPendingDeclined() {
+        var (state, _) = stateWithCode()
+        state.debugLaunchPending = true
+        let (next, effects) = reduce(state, .key(.char("g"), modifiers: .ctrl))
+        #expect(next.transient?.text == "A debug run is already starting.")
+        #expect(
+            !effects.contains {
+                if case .debugRun = $0 { return true }
+                return false
+            },
+            "a second debug run must not launch while one is pending")
+    }
+
+    /// CR-001: a plain `r` while a debug session is paused must NOT start a run
+    /// (debug runs don't set runState, so the normal-run path would deadlock
+    /// endSession behind the parked mailbox).
+    @Test("r while a debug session is active is declined, no run started")
+    func runWhileDebugActiveDeclined() {
+        var (state, _) = stateWithCode()
+        state.activeDebugSessionID = DebugSessionID()
+        let (next, _) = reduce(state, .key(.char("r"), modifiers: []))
+        #expect(next.transient?.text == "Debug session active — press x to stop first.")
+        if case .running = next.runState {
+            Issue.record("r must not transition runState to .running while debugging")
+        }
+    }
+
+    /// CR-001: same guard for the launch-pending window (no session ID yet).
+    @Test("r while a debug launch is pending is declined")
+    func runWhileLaunchPendingDeclined() {
+        var (state, _) = stateWithCode()
+        state.debugLaunchPending = true
+        let (next, _) = reduce(state, .key(.char("r"), modifiers: []))
+        #expect(next.transient?.text == "Debug session active — press x to stop first.")
+        if case .running = next.runState {
+            Issue.record("r must not start a run while a debug launch is pending")
+        }
+    }
+
+    /// CR-002: a finished run clears the pending flag even when it never paused
+    /// (the finish arrives with no matching active session ID).
+    @Test("debugFinished clears debugLaunchPending for a never-paused run")
+    func debugFinishedClearsPendingNeverPaused() {
+        var (state, _) = stateWithCode()
+        state.debugLaunchPending = true
+        // activeDebugSessionID stays nil — the run finished before any pause.
+        let (next, _) = reduce(state, .debugFinished(DebugSessionID(), .done(value: nil, duration: .zero)))
+        #expect(!next.debugLaunchPending, "a finished run must clear the pending launch flag")
+    }
+
+    /// The first pause resolves the pending launch into a real session ID.
+    @Test("first pause clears debugLaunchPending and sets the session ID")
+    func firstPauseClearsPending() {
+        var (state, _) = stateWithCode()
+        state.debugLaunchPending = true
+        let snap = makeSnapshot()
+        let (next, _) = reduce(state, .debugPaused(snap))
+        #expect(!next.debugLaunchPending, "pending cleared on first pause")
+        #expect(next.activeDebugSessionID == snap.sessionID, "session ID set from the pause snapshot")
     }
 }
 

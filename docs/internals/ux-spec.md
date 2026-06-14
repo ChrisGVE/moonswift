@@ -452,7 +452,7 @@ Displayed as a space-separated sequence of bracketed labels. Multiple may coexis
 
 - Displayed in the left zone, replacing normal indicators for **1.5 s**. [PRD §6.5, §6.7]
 - Never stacked: a new transient replaces any active transient immediately. [PRD §6.5]
-- Examples: "Run disabled: no source selected.", "lint engine starting…", "cancellation requires LuaSwift ≥ <version>".
+- Examples: "Run disabled: no source selected.", "lint engine starting…", and the degraded-cancellation note `Cancellation requires a newer LuaSwift — run will finish naturally` (emitted by `RunService` only while `MOONSWIFT_LUASWIFT_22` is undefined — see ARCHITECTURE §5.3).
 
 ### 5.4 Contextual hints per pane (right zone)
 
@@ -625,7 +625,7 @@ F5.5 acceptance criteria, CONS-02]
 - Code pane area becomes an inline form whose first stage is the type-select popup titled `Add mock — Value / Function / Namespace` (binding string).
 - **Value form fields**: Namespace, Key path, Type (`string`/`number`/`boolean`/`table`/`expr`), Value (Lua value expression — RQ1: a scalar/table literal, or any value expression incl. a function literal when type is `expr`), Writable (toggle). [PRD §F5.1]
 - **Function form fields**: Function name, Behavior (`echo-args` / `fixed-return` / `raise-error`), Return value (Lua value expression, shown only for `fixed-return`), Error message (shown only for `raise-error`). [PRD §F5.2]
-- **Namespace form fields**: Namespace name only.
+- **Namespace choice**: opens the Value form pre-focused on the Namespace field (there is no standalone namespace entity — values are grouped by namespace, mocking.md "Value form"); fields are identical to a direct Value add.
 - `<Enter>` confirms; `<Esc>` cancels; fields validate on confirm.
 
 **Edit mock** (`e` key, focused on an existing mock entry): same form pre-filled.
@@ -638,7 +638,7 @@ F5.5 acceptance criteria, CONS-02]
 
 **Debug run**: `<C-g>` starts a debug run (distinct from `r` plain run). [PRD F6]
 
-**Breakpoints**: `b` in the code pane toggles a breakpoint on the cursor line. Gutter marks: `○` (no breakpoint) / `●` (breakpoint set). [PRD F6]
+**Breakpoints**: `b` in the code pane toggles a breakpoint on the cursor line. Gutter marks: `●` (breakpoint set); a line with no breakpoint shows a blank gutter (there is no hollow-circle glyph). [PRD F6]
 
 **While paused** (debug session active, execution stopped at a line):
 

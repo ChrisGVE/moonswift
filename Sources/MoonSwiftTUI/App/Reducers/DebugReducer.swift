@@ -114,6 +114,13 @@ func tryDebugRun(_ s: AppState) -> (AppState, [Effect]) {
         return disabledTransient(s, text: "A run is already in progress.")
     }
 
+    // Precondition (b'): a debug run is launched but not yet paused (CR-002). The
+    // session has no ID yet, so there is nothing to restart-confirm against —
+    // decline until the first pause arrives (or the run finishes).
+    if s.debugLaunchPending {
+        return disabledTransient(s, text: "A debug run is already starting.")
+    }
+
     // Precondition (c): debug session already active → request restart confirmation.
     if s.activeDebugSessionID != nil {
         s.transient = TransientMessage(text: "Restart debug session? [y/N]")
@@ -218,7 +225,13 @@ func reduceDebugFinished(
 ) -> (AppState, [Effect]) {
     var s = s
 
-    // Only clear if this event matches the active session (stale IDs are no-ops).
+    // A finished run ends any pending launch (incl. a run that completed without
+    // ever pausing, where `activeDebugSessionID` is still nil). Cleared before the
+    // stale-ID guard; the FIFO event loop guarantees this finish is processed
+    // before any subsequent `<C-g>`, so it never clears a newer launch (CR-002).
+    s.debugLaunchPending = false
+
+    // Only clear the rest if this event matches the active session (stale = no-op).
     guard s.activeDebugSessionID == sessionID else { return (s, []) }
 
     s.activeDebugSessionID = nil
@@ -307,6 +320,9 @@ private func launchDebugRun(
 
     // Auto-show Debug tab (ux-spec §7.2).
     s.bottomPane.activeTab = .debug
+    // Mark the launch in flight until the first pause sets `activeDebugSessionID`,
+    // so a second `<C-g>` or a plain `r` cannot race the gate (CR-001/CR-002).
+    s.debugLaunchPending = true
 
     let effects: [Effect] = [
         .debugRun(fragment, breakpoints: bps),
@@ -405,6 +421,7 @@ func reduceDebugStop(_ s: AppState, sessionID: DebugSessionID) -> (AppState, [Ef
     s.activeDebugSessionID = nil
     s.currentDebugSnapshot = nil
     s.debugRestartPending = false
+    s.debugLaunchPending = false
     clearDebugInspectionState(&s)
     // Rebuild gutter marks: remove the paused-line marker.
     if let sid = s.selection {

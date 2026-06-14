@@ -958,7 +958,18 @@ change in a *minor* bump — so `.upToNextMinor` accepts hardening patches insid
 | `LuaEngine.runDebug(_:chunkName:)` + `setDebugHandler(_:)` | #20 debug hooks | `SessionEngine.swift`, `DebugHookAdapter.swift` — LINE/CALL/RET-masked debug run |
 | `LuaInspector` — `.callStack`, `.locals(frameLevel:)`, `.upvalues(frameLevel:)`, `.globals()` | #21 introspection | `DebugHookAdapter.swift` — eager all-frame snapshot inside the paused handler |
 | `LuaRuntimeFailure { message, line, traceback, frames }` + `LuaError.runtimeFailure` | #19 structured errors | `LuaErrorDiagnostics.swift`, `SessionEngine.swift` — replaces the deleted `LuaErrorLineParser` |
-| `LuaEngine.requestCancellation()` / `resetCancellation()` / `LuaError.cancelled` | #22 cooperative cancellation | `RunService.swift`, `SessionEngine.swift` — `x` stop + watchdog force-unwind |
+| `LuaEngine.requestCancellation()` / `resetCancellation()` / `LuaError.cancelled` | #22 cooperative cancellation | `RunService.swift`, `SessionEngine.swift` — **wired but flag-gated, see below** |
+
+**#22 cooperative cancellation — wired, NOT yet activated.** The
+`requestCancellation()` / `resetCancellation()` / `LuaError.cancelled` call sites
+exist in `RunService.swift` and `SessionEngine.swift`, but every one is wrapped in
+`#if MOONSWIFT_LUASWIFT_22 … #else … #endif`, and that compile flag is **not
+defined** in `Package.swift` (`swiftSettings` carries only `.swiftLanguageMode(.v6)`
+and `.enableUpcomingFeature("StrictConcurrency")`). So in every shipped binary the
+cancellation branch compiles OUT: `x` stop / cancel-run currently rely on the
+SEC-01 watchdog and natural run completion, NOT on an immediate engine cancel.
+Activating the flag (and validating the cancellation path against pinned LuaSwift
+1.12.4) is tracked as a separate task — GitHub issue #15.
 
 With #23 released, **`LuaErrorLineParser` is deleted** (F6.4 / task #13;
 structured `frames` carry faithful names, so the heuristic line-parser is gone).

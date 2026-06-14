@@ -347,13 +347,6 @@ public enum AppEvent: Sendable {
     /// and keeps the form open for correction (§6.6 lifecycle). The not-a-function
     /// and no-session cases surface as `.transient` instead.
     case luaInvocationFailed(String)
-
-    /// A debug-restart was confirmed by the user (`y` in the confirmation prompt).
-    ///
-    /// Posted internally by the reducer when the restart-confirmation gate
-    /// transitions to `confirmed`. The AppDriver tears down the existing session
-    /// before the next `debugRun` effect executes.
-    case debugRestartConfirmed
 }
 
 // MARK: - HighlightSpan
