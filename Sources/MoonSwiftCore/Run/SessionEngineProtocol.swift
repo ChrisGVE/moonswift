@@ -113,6 +113,11 @@ public protocol SessionEngineProtocol: Sendable {
     /// (ARCH-05). Stale id → silent no-op.
     nonisolated func requestGlobals(_ id: DebugSessionID)
 
+    /// Cooperatively cancel the in-flight `sessionRun` (user `x` / cancel-run).
+    /// Calls `requestCancellation()` on the running engine off the serial queue;
+    /// a no-op when no run is in flight (ARCH-06-style silent no-op). #44.
+    nonisolated func cancelRun()
+
     /// Evaluate a full Lua call expression against the surviving engine
     /// (RQ2: `evaluate("return \(callExpression)")`). The lint + target checks
     /// run in the AppDriver BEFORE this call (§F5.3); by here the expression is
