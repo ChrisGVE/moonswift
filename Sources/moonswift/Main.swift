@@ -133,6 +133,13 @@ private func run(launchMode: LaunchMode) {
         channel.post(.transient(message))
     })
     let lintService = LintService()
+    // Long-lived mock-aware engine for debug runs (F6) and mock sessions (F5).
+    // Without this the AppDriver's `sessionEngine` is nil and those features fall
+    // through to their skeleton no-op guards in the real binary. Its output sink
+    // posts run/print lines to the same channel the RunService uses.
+    let sessionEngine = SessionEngine(onOutput: { line in
+        channel.post(.runOutput([line]))
+    })
     let sourceStore = SourceStore(callback: { event in
         switch event {
         case .loaded(let id, let fragment):
@@ -151,7 +158,8 @@ private func run(launchMode: LaunchMode) {
         seed: seed,
         runService: runService,
         lintService: lintService,
-        sourceStore: sourceStore
+        sourceStore: sourceStore,
+        sessionEngine: sessionEngine
     )
 
     // ── 6. Enter the loop ─────────────────────────────────────────────────────

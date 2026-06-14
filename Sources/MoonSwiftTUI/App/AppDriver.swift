@@ -302,7 +302,8 @@ public final class AppDriver: @unchecked Sendable {
 
         case .cancelRun:
             runService?.cancel()
-        // Skeleton: no-op.
+            sessionEngine?.cancelRun()  // F5.4/#44: cancel a mock-aware session run too.
+        // Skeleton (no service): no-op.
 
         case .syntaxPrePass(let fragment):
             executeSyntaxPrePass(fragment)
@@ -424,8 +425,15 @@ public final class AppDriver: @unchecked Sendable {
 
     // MARK: Effect helpers — core services
 
-    /// Dispatch a run to the live `RunService`, or post a synthetic result in skeleton mode.
+    /// Dispatch a run. With a session engine present (production, F5.4/#44) the run
+    /// goes through the mock-aware `sessionRun` so declared mocks are injected and
+    /// post-run live state is available; otherwise it falls back to the P1
+    /// `RunService` (tests/skeleton).
     private func executeRun(_ fragment: LuaSourceFragment, config: RunConfig) {
+        if let engine = sessionEngine {
+            executeSessionRun(fragment, config: config, engine: engine)
+            return
+        }
         if let svc = runService {
             // Dispatch to the real RunService on a background Task.
             // Capture coalescer, channel, and svc explicitly — all Sendable.
@@ -443,6 +451,37 @@ public final class AppDriver: @unchecked Sendable {
         } else {
             // Skeleton: post a synthetic .done immediately.
             channel.post(.runFinished(.done(value: nil, duration: .zero)))
+        }
+    }
+
+    /// Run `fragment` through the mock-aware session engine (F5.4/#44).
+    ///
+    /// Lifecycle per run (RQ3 "implicit end-session on a new run"): tear down any
+    /// prior session, start a fresh one installing the current `mockStore`, run,
+    /// then snapshot `liveState()` so the navigator's Mock Environment shows the
+    /// post-run live values. Output reaches the Output tab via the engine's
+    /// `onOutput` sink (wired in Main.swift → `channel.post(.runOutput)`). The
+    /// engine enforces the instruction + wall-clock limits and honours `cancelRun`.
+    private func executeSessionRun(
+        _ fragment: LuaSourceFragment,
+        config: RunConfig,
+        engine: any SessionEngineProtocol
+    ) {
+        let mocks = state.mockStore
+        Task { [channel] in
+            await engine.endSession()
+            do {
+                try await engine.startSession(config: config, mocks: mocks)
+            } catch {
+                channel.post(
+                    .runFinished(.engineError("Failed to start session: \(error.localizedDescription)")))
+                return
+            }
+            let outcome = await engine.sessionRun(fragment)
+            channel.post(.runFinished(Self.appOutcome(from: outcome)))
+            // Post-run introspection snapshot for the Mock Environment live state.
+            let live = await engine.liveState()
+            channel.post(.mockLiveStateReady(live))
         }
     }
 

@@ -91,6 +91,17 @@ public final class SessionEngine: SessionEngineProtocol {
     /// (DATA-N04). `liveState` subtracts this baseline to isolate user globals.
     nonisolated(unsafe) private var baselineStdlibNames: Set<String> = []
 
+    // MARK: - Cancellation handle (F5.4/#44 — parity with RunService)
+
+    /// Lock-guarded handle to the engine of the in-flight `sessionRun`, so the
+    /// user `x` (`cancelRun`) and the wall-clock timer can call
+    /// `requestCancellation()` from OFF the serial queue while `runOnQueue` is
+    /// executing on it. Mirror of `RunService.activeEngine` (CR-014): every
+    /// access is bracketed by `cancelLock`; set/cleared only in `runOnQueue`.
+    /// `nonisolated(unsafe)` because `cancelLock` IS the synchronisation.
+    private let cancelLock = NSLock()
+    nonisolated(unsafe) private var cancellableEngine: LuaEngine?
+
     // MARK: - RunState atomic
 
     /// Guards `_runState`.
@@ -271,6 +282,19 @@ public final class SessionEngine: SessionEngineProtocol {
         liveSession(id)?.requestGlobals()
     }
 
+    public func cancelRun() {
+        // Cooperative cancellation of the in-flight `sessionRun` (user `x`).
+        // Mirrors RunService.cancel: read the engine under the lock, copy out,
+        // call requestCancellation OUTSIDE the lock (it may block). A run that has
+        // already finished leaves `cancellableEngine` nil → silent no-op.
+        #if MOONSWIFT_LUASWIFT_22
+            cancelLock.lock()
+            let engine = cancellableEngine
+            cancelLock.unlock()
+            engine?.requestCancellation()
+        #endif
+    }
+
     // MARK: - SessionEngineProtocol: invokeLuaCall
 
     public func invokeLuaCall(_ callExpression: String) async throws -> LuaValue {
@@ -445,6 +469,25 @@ public final class SessionEngine: SessionEngineProtocol {
             engine.resetCancellation()
         #endif
 
+        // Register the engine for off-queue cancellation (user `x` via cancelRun,
+        // and the wall-clock timer) for the duration of this run.
+        cancelLock.lock()
+        cancellableEngine = engine
+        cancelLock.unlock()
+        defer {
+            cancelLock.lock()
+            cancellableEngine = nil
+            cancelLock.unlock()
+        }
+
+        // Wall-clock limit parity with RunService: arm a timer that cancels the
+        // engine after the limit; cancel it when the run finishes naturally.
+        var wallClockTask: Task<Void, Never>? = nil
+        if config.wallClockLimitMs > 0 {
+            wallClockTask = startWallClockTimer(limitMs: config.wallClockLimitMs, engine: engine)
+        }
+        defer { wallClockTask?.cancel() }
+
         let start = ContinuousClock.now
         let result: LuaValue
         do {
@@ -462,6 +505,21 @@ public final class SessionEngine: SessionEngineProtocol {
         }
         let duration = ContinuousClock.now - start
         return .done(value: luaValueDisplayString(result), duration: duration)
+    }
+
+    /// Start a background task that cancels the engine after `limitMs` ms (parity
+    /// with `RunService.startWallClockTimer`). Returns the `Task` so the caller
+    /// cancels it when the run finishes naturally (no spurious cancel after a fast
+    /// run). Without LuaSwift#22 the timer fires but `requestCancellation` is a
+    /// no-op — the run continues (ProjectValidation warned at load time).
+    private func startWallClockTimer(limitMs: Int, engine: LuaEngine) -> Task<Void, Never> {
+        Task.detached {
+            try? await Task.sleep(for: .milliseconds(limitMs))
+            guard !Task.isCancelled else { return }
+            #if MOONSWIFT_LUASWIFT_22
+                engine.requestCancellation()
+            #endif
+        }
     }
 
     /// Maps a `LuaError` to a `CoreRunOutcome`, mirroring RunService so the
