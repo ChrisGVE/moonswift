@@ -204,7 +204,9 @@ public final class SessionEngine: SessionEngineProtocol {
                 // misreported as user globals by liveState().
                 for ns in mocks.namespaces {
                     let defs = mocks.values(in: ns)
-                    let server = MockValueServer(namespace: ns, defs: defs, engine: newEngine)
+                    let server = MockValueServer(
+                        namespace: ns, defs: defs, engine: newEngine,
+                        onError: { self.onOutput($0) })
                     newEngine.register(server: server)
                 }
                 // F5.2 seam: synthesized callbacks per function registered here.
@@ -212,7 +214,8 @@ public final class SessionEngine: SessionEngineProtocol {
                 // captures a trivial closure (echo-args / raise-error) and registers
                 // the result as a global Lua callable under def.name.
                 for def in mocks.functions {
-                    let callback = def.makeMaterializedCallback(engine: newEngine)
+                    let callback = def.makeMaterializedCallback(
+                        engine: newEngine, onError: { self.onOutput($0) })
                     newEngine.registerFunction(name: def.name, callback: callback)
                 }
 
@@ -483,7 +486,7 @@ public final class SessionEngine: SessionEngineProtocol {
             return .error(diag, traceback: nil)
         }
         let duration = ContinuousClock.now - start
-        return .done(value: luaValueDisplayString(result), duration: duration)
+        return .done(value: luaValueDisplayOrNil(result), duration: duration)
     }
 
     /// Runs `fragment` in the session engine on the serial executor and maps the
@@ -543,7 +546,7 @@ public final class SessionEngine: SessionEngineProtocol {
             return .error(diag, traceback: nil)
         }
         let duration = ContinuousClock.now - start
-        return .done(value: luaValueDisplayString(result), duration: duration)
+        return .done(value: luaValueDisplayOrNil(result), duration: duration)
     }
 
     /// Start a background task that cancels the engine after `limitMs` ms (parity
@@ -652,11 +655,11 @@ public final class SessionEngine: SessionEngineProtocol {
     private func installPrintCapture(engine: LuaEngine) {
         let sink = onOutput
         engine.registerFunction(name: "__moonswift_sink") { args in
-            let line = args.map { luaValueToString($0) }.joined(separator: "\t")
+            let line = args.map { renderLuaValue($0) }.joined(separator: "\t")
             sink(line)
             return .nil
         }
-        // // swift-format-ignore
+        // swift-format-ignore
         let prelude = """
             local __sink = __moonswift_sink
             rawset(_G, "__moonswift_sink", nil)
@@ -683,20 +686,11 @@ public final class SessionEngine: SessionEngineProtocol {
 /// `MockLiveValue`. Scalars render literally; compound values render their type
 /// name (function-typed → `function`, DATA-N07). Deep table expansion / the
 /// `(…)` depth-cap sentinel is the inspector's concern (F5.4 refinement).
+/// Renders an optional global value, mapping a missing value to the literal
+/// `"nil"`. Delegates the non-nil case to the shared public
+/// ``renderLuaValue(_:)`` (Run/LuaValueDisplay.swift) so the engine, the debug
+/// trace, and the TUI invoke path share ONE renderer.
 private func render(_ value: LuaValue?) -> String {
     guard let value else { return "nil" }
-    return luaValueToString(value)
-}
-
-/// Converts a `LuaValue` to a Lua-print-compatible display string. Delegates to
-/// the shared public ``renderLuaValue(_:)`` (Run/LuaValueDisplay.swift) so the
-/// engine and the TUI invoke path share ONE renderer.
-private func luaValueToString(_ value: LuaValue) -> String {
-    renderLuaValue(value)
-}
-
-/// Converts an `evaluate` return value to a display string, `nil` for Lua nil.
-/// Delegates to the shared public ``luaValueDisplayOrNil(_:)``.
-private func luaValueDisplayString(_ value: LuaValue) -> String? {
-    luaValueDisplayOrNil(value)
+    return renderLuaValue(value)
 }

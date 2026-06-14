@@ -85,31 +85,41 @@ public final class MockValueServer: LuaValueServer {
     ///   - defs: The `[[mock.value]]` definitions belonging to `namespace`.
     ///   - engine: The just-created `LuaEngine` used for materialization.
     ///     Must be on the serial executor; its state is not yet shared.
-    public init(namespace: String, defs: [MockValueDef], engine: LuaEngine) {
+    public init(
+        namespace: String,
+        defs: [MockValueDef],
+        engine: LuaEngine,
+        onError: (String) -> Void = { _ in }
+    ) {
         self.namespace = namespace
-        var mat: [String: LuaValue] = [:]
-        var writ: [String: Bool] = [:]
+        var materializedValues: [String: LuaValue] = [:]
+        var writableFlags: [String: Bool] = [:]
         for def in defs {
             let key = def.path
-            writ[key] = def.writable
+            writableFlags[key] = def.writable
             // Materialize: evaluate("return <value>") under the session engine.
             // Any Lua value expression works — scalar, table constructor, function
             // literal, or computed expression (RQ1). A function literal yields a
             // `.luaFunction(ref)` that the Lua script can call.
             do {
                 let value = try engine.evaluate("return \(def.value)")
-                mat[key] = value
+                materializedValues[key] = value
             } catch {
-                // Materialization failure: store `.nil` so subsequent reads
-                // return nil rather than crashing. The project has already been
-                // syntax-validated (F5.5), so a runtime failure here is the
-                // sandbox blocking a call (e.g. os.execute in sandboxed mode) —
-                // not a syntax problem.
-                mat[key] = .nil
+                // Materialization failure: store `.nil` so a single bad mock
+                // cannot crash session setup. The project has already been
+                // syntax-validated (F5.5), so a runtime failure here is almost
+                // always the sandbox blocking a call (e.g. os.execute in
+                // sandboxed mode) — not a syntax problem. The error is still
+                // reported through `onError` (CR-033) so an unexpected,
+                // non-sandbox failure is never swallowed silently.
+                onError(
+                    "mock value \"\(namespace).\(key)\" failed to materialize: "
+                        + "\(error.localizedDescription); using nil")
+                materializedValues[key] = .nil
             }
         }
-        self.materialized = mat
-        self.writability = writ
+        self.materialized = materializedValues
+        self.writability = writableFlags
     }
 
     // MARK: - LuaValueServer: resolve
@@ -156,6 +166,12 @@ public final class MockValueServer: LuaValueServer {
     ///   - value: The new `LuaValue` to store.
     /// - Throws: `LuaError.readOnlyAccess(path:)` when `canWrite` is false.
     public func write(path: [String], value: LuaValue) throws {
+        // Empty-path guard — mirrors `resolve`/`canWrite`. Without it the
+        // namespace root reads as a malformed `"<namespace>."` key and reports
+        // a misleading read-only throw; the root itself is not a writable slot.
+        guard !path.isEmpty else {
+            throw LuaError.readOnlyAccess(path: namespace)
+        }
         let key = path.joined(separator: ".")
         let fullPath = "\(namespace).\(key)"
         guard canWrite(path: path) else {

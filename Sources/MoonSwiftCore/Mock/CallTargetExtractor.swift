@@ -25,7 +25,7 @@
 // else, including dotted / indexed / method targets and bare names with no call.
 //
 // Upstream: (none — pure string algorithm)
-// Downstream: AppDriver+MockEffects (F5.3 invoke pipeline)
+// Downstream: AppDriver+InvokeEffects (F5.3 invoke pipeline)
 
 import Foundation
 

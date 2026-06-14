@@ -336,6 +336,19 @@ struct DebugCommandMailboxTests {
         }
     }
 
+    @Test("SEC-01 watchdog: an unresumed pause times out to .command(.stop)")
+    func watchdogTimeout() {
+        // CR-015: a short injected ceiling exercises the SEC-01 timeout path
+        // without the 300 s production wait. With neither a command nor a
+        // globals latch armed, `take()` must auto-resolve to `.command(.stop)`
+        // so a wedged session tears down rather than parking forever.
+        let mailbox = DebugCommandMailbox(timeout: .milliseconds(20))
+        guard case .command(let cmd) = mailbox.take(), cmd == .stop else {
+            Issue.record("expected the watchdog to return .command(.stop)")
+            return
+        }
+    }
+
     @Test("DebugSession routes a delivered command to its mailbox")
     func sessionRoutesCommand() {
         let session = DebugSession(breakpoints: [3, 7])

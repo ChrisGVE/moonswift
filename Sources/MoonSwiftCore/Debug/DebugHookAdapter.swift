@@ -109,7 +109,7 @@ public func makeDebugHookHandler(
 
     return { (event: LuaDebugEvent, inspector: LuaDebugInspector) -> LuaDebugCommand in
 
-        // ── Step 1: classify the event ──────────────────────────────────────
+        // ── Step 1: classify the event ──
         //
         // In BREAKPOINT mode (stepState == nil in LuaSwift, last cmd = .continueRun)
         // all three event kinds are delivered for every line. In STEPPING mode
@@ -120,7 +120,11 @@ public func makeDebugHookHandler(
 
         switch event {
         case .line(let engineLine):
-            pauseLine = engineLine - lineOffset
+            // CR-017: clamp at line 1. A fragment with bad provenance can yield
+            // `engineLine < lineOffset`; a negative gutter key would silently
+            // drop the ▶ pause marker. Clamping keeps the marker on the first
+            // line rather than losing it entirely.
+            pauseLine = max(1, engineLine - lineOffset)
             // The pauseRequested latch fires as a breakpoint-priority pause.
             let forcedPause = session.consumePauseRequested()
             if forcedPause || breakpoints.contains(pauseLine) {
@@ -141,7 +145,7 @@ public func makeDebugHookHandler(
             return .continueRun
         }
 
-        // ── Step 2: eager snapshot ───────────────────────────────────────────
+        // ── Step 2: eager snapshot ──
         //
         // The inspector is valid ONLY during this handler call. Capture all
         // frames' locals and upvalues now so the TUI can navigate the call
@@ -153,22 +157,26 @@ public func makeDebugHookHandler(
             inspector: inspector
         )
 
-        // ── Step 3: publish + set paused state ──────────────────────────────
+        // ── Step 3: publish + set paused state ──
         session.setSnapshot(snapshot)
         setRunState(.paused)
         onPause(snapshot)
 
-        // ── Step 4 / 5: park + service globals wakes, exit on command ───────
+        // ── Step 4 / 5: park + service globals wakes, exit on command ──
         //
         // The outer loop re-parks after each .serviceGlobals wake (globals
         // captured in-place, no VM advance). The loop exits only on a real
         // LuaDebugCommand wake.
+        // CR-008: derive the SEC-01 deadline ONCE for this pause cycle so the
+        // repeated globals-servicing wakes below cannot reset the watchdog
+        // ceiling (a `g` flood must not keep a wedged VM parked forever).
+        let pauseDeadline = session.mailbox.pauseDeadline()
         while true {
-            let wake = session.mailbox.take()
+            let wake = session.mailbox.take(until: pauseDeadline)
             switch wake {
 
             case .serviceGlobals:
-                // ── Step 5a: globals in-place capture (DOM-08) ───────────────
+                // ── Step 5a: globals in-place capture (DOM-08) ──
                 //
                 // `inspector` is still valid: the synchronous handler has not
                 // returned. Call inspector.globals() right here, at the current
@@ -192,7 +200,7 @@ public func makeDebugHookHandler(
                 continue
 
             case .command(let cmd):
-                // ── Step 5b: command → resume ────────────────────────────────
+                // ── Step 5b: command → resume ──
                 // Track stepping mode so the next .line event is correctly
                 // classified (CONS-07, stepping vs breakpoint mode distinction).
                 switch cmd {
@@ -331,7 +339,7 @@ private func inspectedValueToDebugVariable(
     case .scalar(let luaVal):
         return DebugVariable(
             name: name,
-            displayValue: luaValueDisplayString(luaVal),
+            displayValue: renderLuaValue(luaVal),
             children: nil
         )
     case .reference(_, let preview, let rawChildren):
@@ -350,32 +358,5 @@ private func inspectedValueToDebugVariable(
                 }
         }
         return DebugVariable(name: name, displayValue: preview, children: children)
-    }
-}
-
-/// Render a `LuaValue` scalar to a Lua-compatible display string.
-///
-/// Matches the `luaValueToString` logic in `SessionEngine` (private there;
-/// replicated here to avoid widening that file's API surface).
-private func luaValueDisplayString(_ value: LuaValue) -> String {
-    switch value {
-    case .nil: return "nil"
-    case .bool(let b): return b ? "true" : "false"
-    case .number(let n):
-        if n == n.rounded() && !n.isInfinite && abs(n) < 1e15 {
-            return String(Int64(n))
-        }
-        return String(n)
-    case .string(let s): return s
-    case .table, .array: return "table"
-    case .complex(let re, let im): return "\(re)+\(im)i"
-    case .luaFunction: return "function"
-    case .opaqueReference(let kind):
-        switch kind {
-        case .function: return "function"
-        case .table: return "table"
-        case .userdata: return "userdata"
-        case .thread: return "thread"
-        }
     }
 }

@@ -18,15 +18,31 @@
 
 import Foundation
 import LuaSwift
+import os
 
 /// A live debug session.
 ///
 /// `@unchecked Sendable`: the mutable `pauseRequested` / `currentSnapshot`
-/// fields are guarded by `lock`, and the mailbox is itself `Sendable` and
-/// internally synchronised. Swift 6 strict concurrency cannot see that `lock`
-/// serialises access; the `NSLock` IS the synchronisation mechanism (mirrors
-/// the documented lock-guarded patterns in `RunService` / `LintService`).
+/// fields are guarded by `state` (an `OSAllocatedUnfairLock`), and the mailbox
+/// is itself `Sendable` and internally synchronised. Swift 6 strict concurrency
+/// cannot see that the lock serialises access; the lock IS the synchronisation
+/// mechanism (mirrors the documented lock-guarded patterns in `RunService` /
+/// `LintService`).
+///
+/// CR-025: the latch is read once per `.line` event in breakpoint mode (the
+/// VM-hook hot path), so the lighter `os_unfair_lock` is used in place of
+/// `NSLock` — uncontended acquisition is a handful of nanoseconds, keeping the
+/// per-line mutex cost negligible while preserving cross-thread safety (the
+/// pause request is armed on the AppDriver thread, consumed on the VM thread).
 public final class DebugSession: @unchecked Sendable {
+
+    /// The lock-guarded mutable state: the pause-request latch and the latest
+    /// published snapshot. Bundled under one `os_unfair_lock` so a `.line`-event
+    /// latch read is a single cheap acquisition.
+    private struct MutableState {
+        var pauseRequested = false
+        var currentSnapshot: DebugSnapshot?
+    }
 
     /// The opaque handle held by `AppState` and used to address this session.
     public let id: DebugSessionID
@@ -37,14 +53,13 @@ public final class DebugSession: @unchecked Sendable {
     /// The fragment-relative breakpoint lines, fixed for the session lifetime.
     public let breakpoints: Set<Int>
 
-    /// Guards `pauseRequested` and `currentSnapshot`.
-    private let lock = NSLock()
-    /// Set by `requestPause()` (AppDriver thread), consumed by the F6.0 hook
-    /// (VM thread) at its next safe checkpoint (ARCH-05).
-    private var pauseRequested = false
-    /// The latest published snapshot, for re-publication on the globals path
-    /// and for "VM running… (showing last pause)" rendering.
-    private var currentSnapshot: DebugSnapshot?
+    /// Guards `pauseRequested` and `currentSnapshot` (see `MutableState`).
+    /// `pauseRequested` is set by `requestPause()` (AppDriver thread) and
+    /// consumed by the F6.0 hook (VM thread) at its next safe checkpoint
+    /// (ARCH-05); `currentSnapshot` is the latest published snapshot, for
+    /// re-publication on the globals path and "VM running… (showing last
+    /// pause)" rendering.
+    private let state = OSAllocatedUnfairLock(initialState: MutableState())
 
     public init(id: DebugSessionID = DebugSessionID(), breakpoints: Set<Int> = []) {
         self.id = id
@@ -61,9 +76,7 @@ public final class DebugSession: @unchecked Sendable {
 
     /// Arm a pause request, to be honored at the VM's next safe checkpoint.
     public func requestPause() {
-        lock.lock()
-        pauseRequested = true
-        lock.unlock()
+        state.withLock { $0.pauseRequested = true }
     }
 
     /// Arm a globals-capture request and wake the parked VM thread to service it
@@ -76,11 +89,11 @@ public final class DebugSession: @unchecked Sendable {
 
     /// Read-and-clear the pause-request latch. Returns whether a pause was armed.
     public func consumePauseRequested() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        let was = pauseRequested
-        pauseRequested = false
-        return was
+        state.withLock {
+            let was = $0.pauseRequested
+            $0.pauseRequested = false
+            return was
+        }
     }
 
     /// Non-blocking read of the globals latch.
@@ -90,15 +103,11 @@ public final class DebugSession: @unchecked Sendable {
 
     /// The latest published snapshot, or `nil` before the first pause.
     public var snapshot: DebugSnapshot? {
-        lock.lock()
-        defer { lock.unlock() }
-        return currentSnapshot
+        state.withLock { $0.currentSnapshot }
     }
 
     /// Record a newly published snapshot.
     public func setSnapshot(_ snapshot: DebugSnapshot) {
-        lock.lock()
-        currentSnapshot = snapshot
-        lock.unlock()
+        state.withLock { $0.currentSnapshot = snapshot }
     }
 }

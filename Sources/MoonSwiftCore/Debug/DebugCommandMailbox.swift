@@ -56,7 +56,8 @@ public final class DebugCommandMailbox: @unchecked Sendable {
 
     /// SEC-01 watchdog ceiling: a pause that is never resumed within this window
     /// auto-resolves to `.command(.stop)` so a wedged session cannot park the VM
-    /// thread forever.
+    /// thread forever. This is the production default; a session uses its
+    /// instance `timeout` (see `init(timeout:)`).
     public static let takeTimeout: Duration = .seconds(300)
 
     /// Guards `slot` and `globalsRequested`. Also the park/wake primitive.
@@ -65,8 +66,15 @@ public final class DebugCommandMailbox: @unchecked Sendable {
     private var slot: LuaDebugCommand?
     /// The pending globals-capture latch (the DebugSession "globalsRequested").
     private var globalsRequested = false
+    /// The SEC-01 ceiling for THIS mailbox. Production uses `takeTimeout`; a
+    /// short value is injectable for the watchdog test (CR-015).
+    private let timeout: Duration
 
-    public init() {}
+    public init() { self.timeout = Self.takeTimeout }
+
+    /// Test hook (CR-015): inject a short watchdog ceiling so the SEC-01 timeout
+    /// path is reachable without a 300 s wait. NOT for production use.
+    init(timeout: Duration) { self.timeout = timeout }
 
     // MARK: - Producer side (AppDriver thread)
 
@@ -102,21 +110,31 @@ public final class DebugCommandMailbox: @unchecked Sendable {
 
     // MARK: - Consumer side (VM thread)
 
+    /// The absolute SEC-01 deadline for a pause cycle that starts now.
+    ///
+    /// The VM-side park loop computes this ONCE per pause and passes it to every
+    /// `take(until:)`. Computing it per `take()` call instead would reset the
+    /// ceiling on each globals-servicing hop, so a flood of `g` requests
+    /// (faster than once per `timeout`) could keep a wedged session parked
+    /// forever — the bug CR-008 fixes. The deadline must be derived outside the
+    /// re-park loop precisely so it bounds the WHOLE pause, not each hop.
+    func pauseDeadline() -> Date {
+        let seconds =
+            Double(timeout.components.seconds)
+            + Double(timeout.components.attoseconds) / 1e18
+        return Date(timeIntervalSinceNow: seconds)
+    }
+
     /// Park the VM thread until a command arrives, a globals request arrives, or
-    /// the watchdog ceiling elapses.
+    /// the supplied absolute `deadline` elapses.
     ///
     /// Two-predicate wake (command slot first, then globals latch). On timeout
     /// returns `.command(.stop)` so the VM tears the session down rather than
-    /// parking indefinitely (SEC-01).
-    public func take() -> Wake {
+    /// parking indefinitely (SEC-01). The caller supplies one per-pause deadline
+    /// so repeated globals-servicing wakes share a single ceiling (CR-008).
+    public func take(until deadline: Date) -> Wake {
         condition.lock()
         defer { condition.unlock() }
-        // NSCondition takes an absolute Date deadline, not a Duration — convert
-        // the ceiling once (same Date(timeIntervalSinceNow:) idiom as
-        // TickSource). Recomputed per call, not per re-wait: the ceiling bounds
-        // the whole pause, not each individual servicing hop.
-        let timeoutSeconds = Double(Self.takeTimeout.components.seconds)
-        let deadline = Date(timeIntervalSinceNow: timeoutSeconds)
         while true {
             if let command = slot {
                 slot = nil
@@ -132,4 +150,9 @@ public final class DebugCommandMailbox: @unchecked Sendable {
             }
         }
     }
+
+    /// Convenience single-park `take` with a fresh SEC-01 deadline. A multi-hop
+    /// park loop (the VM-side adapter) MUST instead call `take(until:)` with a
+    /// per-pause deadline so globals hops cannot reset the ceiling (CR-008).
+    public func take() -> Wake { take(until: pauseDeadline()) }
 }

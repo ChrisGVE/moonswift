@@ -98,7 +98,8 @@ extension MockFunctionDef {
     /// - Parameter engine: The just-created `LuaEngine` for the session.
     /// - Returns: The synthesized callback closure.
     public func makeMaterializedCallback(
-        engine: LuaEngine
+        engine: LuaEngine,
+        onError: (String) -> Void = { _ in }
     ) -> ([LuaValue]) throws -> LuaValue {
         switch behavior {
 
@@ -110,15 +111,21 @@ extension MockFunctionDef {
 
         case .fixedReturn:
             // Materialize the return_value expression once, at session start,
-            // before any host Lua runs. Failures fall back to .nil — the value
-            // has already been syntax-validated by F5.5 syntaxPrePass, so a
-            // runtime failure here indicates a sandbox restriction (e.g.
-            // os.execute under sandboxed mode), not a syntax error.
+            // before any host Lua runs. The value has already been
+            // syntax-validated by F5.5 syntaxPrePass, so a runtime failure here
+            // is almost always a sandbox restriction (e.g. os.execute under
+            // sandboxed mode) rather than a syntax error. We still fall back to
+            // .nil so a single bad mock cannot abort session setup — but the
+            // error is reported through `onError` (CR-033) so an unexpected,
+            // non-sandbox failure is never swallowed silently.
             let expression = returnValue ?? "nil"
             let materialized: LuaValue
             do {
                 materialized = try engine.evaluate("return \(expression)")
             } catch {
+                onError(
+                    "mock function \"\(name)\" return value failed to materialize: "
+                        + "\(error.localizedDescription); using nil")
                 materialized = .nil
             }
             return { _ in materialized }
