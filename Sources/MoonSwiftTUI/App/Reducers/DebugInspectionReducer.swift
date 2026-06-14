@@ -9,11 +9,11 @@
 //       All functions are pure: they emit `Effect.requestGlobals` for the one
 //       side-effecting action (the in-place globals capture, serviced by the
 //       core mailbox) and otherwise only transition `AppState`. The row layout
-//       they navigate comes from `buildDebugRows` (DebugTabView.swift), the same
+//       they navigate comes from `buildDebugRows` (App/RowModels/DebugRowModel.swift), the same
 //       function the renderer uses, so the cursor walks exactly the rows shown.
 //
 // Upstream: AppState, DebugSnapshot (MoonSwiftCore), Effect.requestGlobals,
-//           buildDebugRows (DebugTabView.swift)
+//           buildDebugRows (App/RowModels/DebugRowModel.swift)
 // Downstream: DebugReducer.swift (reduceDebugPaused → applyPauseInspection;
 //             reduceDebugFinished / reduceDebugStop → clearDebugInspectionState),
 //             Reducer.swift (reduceBottomPaneKey dispatch for g / Enter / j / k)

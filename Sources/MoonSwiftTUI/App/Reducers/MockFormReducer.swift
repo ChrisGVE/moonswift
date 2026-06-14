@@ -8,7 +8,7 @@
 //       is an Effect; the reducer only transitions AppState.
 //
 // Upstream: AppState, MockFormState, MockStore, MockValueDef, MockFunctionDef,
-//           mockSelectableRows (MockNavigatorView.swift), Effect.saveMockStore
+//           mockSelectableRows (App/RowModels/MockNavRowModel.swift), Effect.saveMockStore
 // Downstream: Reducer.swift (a/e/d dispatch in reduceNavigatorKey; .mockForm
 //             focus dispatch in reduceKey)
 

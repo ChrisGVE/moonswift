@@ -423,3 +423,44 @@ struct SessionEngineIntegrationTracebackTests {
         await engine.endSession()
     }
 }
+
+// MARK: - Invoke not-callable error shape (CR-022 / NEW-R2-01)
+
+@Suite("SessionEngineIntegration — invoke not-callable error shape")
+struct SessionEngineIntegrationNotCallableTests {
+
+    /// CR-022 / NEW-R2-01: the AppDriver maps an invoke failure to the
+    /// `<name> is not a function.` transient by matching the not-callable marker
+    /// against the STRUCTURED `LuaError` raw message (`luaErrorRawMessage`). The
+    /// wiring test exercises the mapping logic with the `.runtimeError` fallback
+    /// variant, but `LuaRuntimeFailure` cannot be constructed outside LuaSwift, so
+    /// this real-engine test locks in the PRODUCTION contract the mapping depends
+    /// on: invoking a nil global throws a `LuaError` whose raw message carries the
+    /// `attempt to call a nil value` marker (regardless of which `LuaError` variant
+    /// the engine produces). If a LuaSwift upgrade changed that raw text or routed
+    /// it through an unhandled variant, the TUI mapping would silently break — this
+    /// test catches that at the source-of-truth layer.
+    @Test("invokeLuaCall on a nil global throws a LuaError carrying the not-callable marker")
+    func notCallableRawMessageContract() async throws {
+        let engine = intEngine()
+        try await engine.startSession(config: RunConfig(), mocks: .empty)
+        do {
+            _ = try await engine.invokeLuaCall("definitely_missing_global_fn()")
+            Issue.record("expected invokeLuaCall on a nil global to throw")
+        } catch let luaError as LuaError {
+            let raw: String
+            switch luaError {
+            case .runtimeFailure(let failure): raw = failure.rawMessage
+            case .runtimeError(let message): raw = message
+            default: raw = "\(luaError)"
+            }
+            #expect(
+                raw.contains("attempt to call a nil value"),
+                "production LuaError must carry the not-callable marker the CR-022 mapping relies on; got: \(raw)"
+            )
+        } catch {
+            Issue.record("expected a LuaError, got \(error)")
+        }
+        await engine.endSession()
+    }
+}

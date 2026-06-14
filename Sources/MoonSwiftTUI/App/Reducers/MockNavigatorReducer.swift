@@ -10,7 +10,7 @@
 //       so `j`/`k` "traverse both sections skipping the divider" (PRD F5.4).
 //
 // Upstream: AppState, NavigatorState, filteredIDs/filteredPosition/fullOrderIndex
-//           (Reducer.swift), mockSelectableRows (MockNavigatorView.swift)
+//           (Reducer.swift), mockSelectableRows (App/RowModels/MockNavRowModel.swift)
 // Downstream: Reducer.swift reduceNavigatorKey (j / k dispatch)
 
 import Foundation

@@ -14,7 +14,7 @@
 //       open with the inline `error` set and the typed `expression` preserved.
 //
 // Upstream: AppState, InvokeFormState, selectedLiveFunctionName
-//           (MockNavigatorView.swift), Effect.invokeLuaCall
+//           (App/RowModels/MockNavRowModel.swift), Effect.invokeLuaCall
 // Downstream: Reducer.swift (.invokeForm focus dispatch; invocation events;
 //             selectNavigatorEntry open path)
 

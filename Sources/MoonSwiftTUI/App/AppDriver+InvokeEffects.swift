@@ -47,6 +47,12 @@ extension AppDriver {
     ///
     /// All three controls run on a background `Task` (CR-024): control 1 spins a
     /// throwaway lint engine, so running it on the UI thread stalled a frame.
+    ///
+    /// Note (CR-024 synchrony change): the no-session / no-engine transient is
+    /// now posted from inside the `Task` rather than synchronously on the calling
+    /// thread. In production `sessionEngine` is fixed at init so this is
+    /// unobservable, but a test that calls this with a `nil` engine must poll the
+    /// channel (e.g. `collectEvents`) rather than assume a synchronous post.
     func executeInvokeLuaCall(_ expression: String) {
         Task { [channel, lintService, sessionEngine] in
             // Control 1 — lint gate. Skipped only in the skeleton/no-lint config
