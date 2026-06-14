@@ -42,6 +42,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no engine re-entry) or expands a table value inline. Press `g` to capture a
   bounded, filtered globals slice; a capped slice shows `(… N more globals)`.
   Cyclic / depth-limited values render `(cycle)` / `(…)`.
+- Structured runtime errors and tracebacks (F6.4): a Lua error renders its
+  message plus a full traceback in the Output tab, with faithful frame names —
+  embedded fragments show `<filename>:<jsonpath>` rather than a synthetic chunk
+  name (via LuaSwift `chunkName`). Replaces the heuristic line parser.
 
 #### Layout
 
@@ -129,6 +133,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - LuaSwift bumped to 1.12.4; `cooperativeCancellation` performance fix
   included in that release resolves a long-tail latency regression in the
   instruction-limit hook path.
+- Code-pane `b` is now "toggle breakpoint"; the previous `b` (scroll up one full
+  page) moves to `<C-b>` (UX-01).
+
+### Removed
+
+- `LuaErrorLineParser` (and its tests): structured `LuaRuntimeFailure` frames
+  from LuaSwift #19 carry faithful line numbers, so the heuristic regex parser
+  is gone (F6.4).
 
 ### Fixed
 
@@ -186,7 +198,9 @@ standalone `.lua` files.
 - `LintService`: two-layer lint (syntax pre-pass + embedded luacheck) backed by
   a `LuaModuleCatalog` (base / conditional / opt-in / compile-flag-gated module
   availability).
-- Diagnostics: `LuaError`→`Diagnostic` mapping with a line parser.
+- Diagnostics: `LuaError`→`Diagnostic` mapping with a line parser (the line
+  parser was later removed in F6.4 once structured `LuaRuntimeFailure` frames
+  shipped — see [Unreleased]).
 - Background timing primitives: `TickSource` (arm/disarm timer) and `EventPump`
   with a park/unpark handshake for editor suspension.
 

@@ -66,27 +66,65 @@ extension ProjectValidation {
     ) {
         let symbols = catalogSymbols()
 
-        validateMockValues(store.values, lintService: lintService, into: &diagnostics)
-        validateMockFunctions(store.functions, symbols: symbols, lintService: lintService, into: &diagnostics)
+        // PERF-14: ONE syntax-validation budget shared across BOTH mock values and
+        // fixed-return function literals (CR-003 — previously the cap lived only in
+        // validateMockValues, so a function-heavy project could run unbounded
+        // syntaxPrePass calls at load). Each pre-pass decrements the shared counter.
+        var syntaxBudget = 64
+        validateMockValues(
+            store.values, symbols: symbols, lintService: lintService,
+            budget: &syntaxBudget, into: &diagnostics)
+        validateMockFunctions(
+            store.functions, symbols: symbols, lintService: lintService,
+            budget: &syntaxBudget, into: &diagnostics)
+
+        // Combined PERF-14 soft-cap warning over the whole literal set.
+        if lintService != nil {
+            let totalLiterals =
+                store.values.count + store.functions.filter { $0.behavior == .fixedReturn }.count
+            if totalLiterals > 64 {
+                diagnostics.append(
+                    .projectWarning(
+                        "\(totalLiterals) mock literals exceed the 64-literal validation "
+                            + "budget — validating the first 64; re-validate the rest on edit."
+                    )
+                )
+            }
+        }
     }
 
     // MARK: - [[mock.value]] rules
 
     private static func validateMockValues(
         _ values: [MockValueDef],
+        symbols: Set<String>,
         lintService: (any LintServiceProtocol)?,
+        budget syntaxBudget: inout Int,
         into diagnostics: inout [Diagnostic]
     ) {
         // Duplicate (namespace, path) detection — DATA-03.
         var seenKeys = Set<String>()
-        // Syntax pre-pass budget — PERF-14: cap at 64 literals.
-        var syntaxBudget = 64
-        var budgetExceeded = false
+        // Namespace collisions are checked once per distinct namespace.
+        var checkedNamespaces = Set<String>()
 
         for def in values {
             // Rule: namespace must not be empty.
             if def.namespace.isEmpty {
                 diagnostics.append(.projectError("mock namespace must not be empty"))
+            } else if checkedNamespaces.insert(def.namespace).inserted {
+                // Rule (CR-019): namespace must not shadow a catalog symbol or use
+                // the reserved prefix — same guarantee MockValueDef documents and
+                // that mock-function names already enforce.
+                if symbols.contains(def.namespace) {
+                    diagnostics.append(
+                        .projectError(
+                            "mock namespace \"\(def.namespace)\" collides with catalog symbol"))
+                }
+                if def.namespace.hasPrefix("__moonswift_") {
+                    diagnostics.append(
+                        .projectError(
+                            "mock namespace \"\(def.namespace)\" uses reserved prefix __moonswift_"))
+                }
             }
 
             // Rule: path must not be empty (path serves as the key within namespace).
@@ -110,30 +148,17 @@ extension ProjectValidation {
             // the field is already typed — no additional check needed unless
             // a future raw-value path is added.
 
-            // Rule: syntax-check value expression (IMPL-01, RQ1).
-            if let service = lintService {
-                if syntaxBudget > 0 {
-                    syntaxBudget -= 1
-                    if let diag = service.syntaxPrePass("return \(def.value)") {
-                        diagnostics.append(
-                            .projectError("unparseable mock value: \(diag.message)")
-                        )
-                    }
-                } else if !budgetExceeded {
-                    budgetExceeded = true
+            // Rule: syntax-check value expression (IMPL-01, RQ1). Draws from the
+            // shared PERF-14 budget; the combined over-budget warning is emitted
+            // once in `validateMocks`.
+            if let service = lintService, syntaxBudget > 0 {
+                syntaxBudget -= 1
+                if let diag = service.syntaxPrePass("return \(def.value)") {
+                    diagnostics.append(
+                        .projectError("unparseable mock value: \(diag.message)")
+                    )
                 }
             }
-        }
-
-        if budgetExceeded {
-            let total = values.count + 64 - syntaxBudget  // approximation for message
-            _ = total  // total is implicit from the 64-cap warning
-            diagnostics.append(
-                .projectWarning(
-                    "\(values.count) mock literals exceed the 64-literal validation "
-                        + "budget — validating the first 64; re-validate the rest on edit."
-                )
-            )
         }
     }
 
@@ -143,6 +168,7 @@ extension ProjectValidation {
         _ functions: [MockFunctionDef],
         symbols: Set<String>,
         lintService: (any LintServiceProtocol)?,
+        budget syntaxBudget: inout Int,
         into diagnostics: inout [Diagnostic]
     ) {
         var seenNames = Set<String>()
@@ -194,7 +220,12 @@ extension ProjectValidation {
             validateIrrelevantFields(def, into: &diagnostics)
 
             // Rule: syntax-check return_value for fixed-return (IMPL-01, RQ1).
-            if def.behavior == .fixedReturn, let rv = def.returnValue, let service = lintService {
+            // Draws from the SHARED PERF-14 budget (CR-003) so a function-heavy
+            // project cannot run unbounded syntaxPrePass calls at load.
+            if def.behavior == .fixedReturn, let rv = def.returnValue, let service = lintService,
+                syntaxBudget > 0
+            {
+                syntaxBudget -= 1
                 if let diag = service.syntaxPrePass("return \(rv)") {
                     diagnostics.append(
                         .projectError("unparseable mock value: \(diag.message)")

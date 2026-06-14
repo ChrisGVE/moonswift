@@ -128,6 +128,13 @@ public final class SessionEngine: SessionEngineProtocol {
     private let registryLock = NSLock()
     nonisolated(unsafe) private var sessions: [DebugSessionID: DebugSession] = [:]
 
+    /// Instruction ceiling applied ONLY while materializing mock literals at
+    /// `startSession` when the project sets no instruction limit (CR-006). Far
+    /// above any legitimate literal (which compiles to a handful of instructions),
+    /// but bounded so an infinite-loop literal aborts in ~a second instead of
+    /// wedging the serial queue forever.
+    private static let mockMaterializationInstructionCap = 50_000_000
+
     // MARK: - Init
 
     /// Creates a `SessionEngine`.
@@ -176,6 +183,18 @@ public final class SessionEngine: SessionEngineProtocol {
                     newEngine.setInstructionLimit(config.instructionLimit)
                 }
 
+                // CR-006: bound mock materialization. The mock-value/fixed-return
+                // loops below run user Lua literals via `evaluate`; an infinite-loop
+                // literal (e.g. `(function() while true do end end)()`, valid syntax)
+                // would spin THIS serial queue forever when the user set no
+                // instruction limit — and #22 cooperative cancellation is flag-gated
+                // off, so the instruction hook is the only available bound. Arm a
+                // materialization-only cap, disarmed again before the user's run.
+                let capMaterializationOnly = config.instructionLimit == 0
+                if capMaterializationOnly {
+                    newEngine.setInstructionLimit(Self.mockMaterializationInstructionCap)
+                }
+
                 // Print capture: installed once on the long-lived engine, so
                 // both sessionRun and invokeLuaCall route print() to onOutput.
                 self.installPrintCapture(engine: newEngine)
@@ -195,6 +214,12 @@ public final class SessionEngine: SessionEngineProtocol {
                 for def in mocks.functions {
                     let callback = def.makeMaterializedCallback(engine: newEngine)
                     newEngine.registerFunction(name: def.name, callback: callback)
+                }
+
+                // CR-006: disarm the materialization cap so the user's configured
+                // (unlimited) runs are unaffected. `setInstructionLimit(0)` disarms.
+                if capMaterializationOnly {
+                    newEngine.setInstructionLimit(0)
                 }
 
                 self.engine = newEngine
