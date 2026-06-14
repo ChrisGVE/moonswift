@@ -223,18 +223,10 @@ public struct LuaModuleCatalog: Sendable {
     // method lives in CatalogConsumers+Completion.swift (F7a.1, CONS-R2-01).
     // There is no one-parameter overload — callers always pass the live-mock slice.
 
-    // MARK: - LuaLS meta files (P3b stub)
+    // MARK: - LuaLS meta files (F7b)
 
-    /// Returns generated LuaLS meta files describing the luaswift namespace.
-    ///
-    /// P1 stub — returns an empty array. P3b replaces this body with real
-    /// `.luarc/meta/` file generation from the catalog data.
-    ///
-    /// - Returns: An empty array in P1. P3b populates this with `GeneratedFile` values.
-    public func luaLSMetaFiles() -> [GeneratedFile] {
-        // P3b integration point: generate LuaLS-compatible meta stubs.
-        return []
-    }
+    // The `luaLSMetaFiles() -> [GeneratedFile]` consumer lives in
+    // CatalogConsumers+Meta.swift (F7b), delegating to the pure MetaFileGenerator.
 
     // MARK: - Private helpers
 
