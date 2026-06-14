@@ -943,6 +943,28 @@ thread-class partition detail).
 
 ### 5.3 LuaSwift consumed surface (verified against the tag)
 
+**P2 update (2026-06-14) — gate cleared, pinned `1.12.4`.** Every API that
+§5.3 originally listed as a *gate* (a release MoonSwift was waiting on) has
+shipped and is now consumed. LuaSwift is pinned to the **1.12 minor**
+(`.upToNextMinor(from: "1.12.0")`, `Package.swift`; `Package.resolved` →
+`1.12.4`). The minor-lock (not `.upToNextMajor`) is deliberate: LuaSwift does
+not follow strict semver — `v1.12.0` introduced a BREAKING `CoroutineResult`
+change in a *minor* bump — so `.upToNextMinor` accepts hardening patches inside
+`1.12.x` but stops before `1.13.0`. The P2 surface now consumed:
+
+| P2 API (was a gate) | Issue | Where consumed |
+|---|---|---|
+| `LuaEngine.evaluate(_:chunkName:)` / `run(_:chunkName:)` | #23 chunk-name control | `SessionEngine.swift` (invoke + run paths) — faithful in-engine frame names for tracebacks |
+| `LuaEngine.runDebug(_:chunkName:)` + `setDebugHandler(_:)` | #20 debug hooks | `SessionEngine.swift`, `DebugHookAdapter.swift` — LINE/CALL/RET-masked debug run |
+| `LuaInspector` — `.callStack`, `.locals(frameLevel:)`, `.upvalues(frameLevel:)`, `.globals()` | #21 introspection | `DebugHookAdapter.swift` — eager all-frame snapshot inside the paused handler |
+| `LuaRuntimeFailure { message, line, traceback, frames }` + `LuaError.runtimeFailure` | #19 structured errors | `LuaErrorDiagnostics.swift`, `SessionEngine.swift` — replaces the deleted `LuaErrorLineParser` |
+| `LuaEngine.requestCancellation()` / `resetCancellation()` / `LuaError.cancelled` | #22 cooperative cancellation | `RunService.swift`, `SessionEngine.swift` — `x` stop + watchdog force-unwind |
+
+With #23 released, **`LuaErrorLineParser` is deleted** (F6.4 / task #13;
+structured `frames` carry faithful names, so the heuristic line-parser is gone).
+The P1-era verification narrative below is retained as the historical record of
+the P1 gate decision.
+
 Verified 2026-06-07 against the latest **tagged release `v1.9.1`**
 (`git -C …/LuaSwift show v1.9.1:…`) plus the working-tree
 `CHANGELOG.md [Unreleased]` section — *not* the working tree's code state.
@@ -2302,3 +2324,128 @@ Each increment is independently testable, committable, TDD-first. Ordering respe
 - **OQ-nvim-1:** `BufWriteCmd` + `rpcnotify` ordering — confirm the autocmd fires synchronously before the write completes on nvim 0.9, 0.10, and 0.11-nightly. If async on any version, fall back to polling `b:changedtick`. Inc-7 acceptance criterion includes a version-matrix test. — applied (Inc-12)
 
 - **OQ-nvim-2:** `ext_linegrid` grid-1 assumption — confirm `nvim_ui_attach` with `ext_linegrid:true` and no splits delivers all output on grid 1. If nvim allocates extra grids (floating windows, completion popups), the `NvimRedrawHandler` must suppress or composite them. Tracked as an Inc-4 acceptance criterion. — applied (Inc-12)
+
+---
+
+## 11. Mocking + debugger subsystem (P2 — sharing-area mocks, in-engine debugger)
+
+> As-built record of the P2 features (F5 mocking, F6 debugger). The deep
+> reference lives in `docs/internals/session-engine.md` (lifecycle, executor
+> confinement) and `docs/internals/debugger.md` (hook adapter, pause model,
+> mailbox). This section is the subsystem-level map; it does not restate those.
+
+### 11.1 Overview
+
+P2 adds two capabilities on a shared foundation: **mocks** (Lua reads
+Swift-served values and calls Swift-backed functions, and Swift invokes
+script-defined Lua functions) and an **in-engine debugger** (breakpoints,
+stepping, variable/call-stack inspection, structured tracebacks). Both need a
+Lua engine that **survives across calls** — to serve live mock state, to be
+re-entered for invocation, and to park on a debug pause. That foundation is the
+new **`SessionEngine`** (F5.0): a long-lived, serial-executor engine distinct
+from the P1 `RunService` run-and-discard model (it follows the `LintService`
+long-lived pattern, ARCH A2). The session is created on a mock-aware or debug
+run and ended on stop / new run / reload (RQ3 implicit lifecycle).
+
+**OQ2 (debugger pause concurrency) is resolved here.** The VM thread runs the
+synchronous LuaSwift debug handler; on each event the adapter eagerly snapshots
+all-frame locals/upvalues + call stack into `Sendable` value models, posts
+`AppEvent.debugPaused`, then BLOCKS the VM thread on a single-slot `NSCondition`
+mailbox awaiting the user's command. The reducer never blocks; the UI thread
+stays responsive. Full spec: PRD §F6.0 / OQ2; `docs/internals/debugger.md`.
+
+### 11.2 Component map
+
+**MoonSwiftCore — engine side (no TUI deps):**
+
+| File | Role |
+|---|---|
+| `Run/SessionEngine.swift` + `SessionEngineProtocol.swift` | Long-lived serial-executor engine; run/debug-run/invoke entry points; owns the live engine and the active `DebugSession`. Foundation for F5 + F6. |
+| `Mock/MockValue.swift`, `MockFunction.swift` | Decoded mock definitions (value + function). |
+| `Mock/MockStore.swift` | In-memory store of mock definitions handed to a session. |
+| `Mock/MockValueServer.swift` | `LuaValueServer` implementation per mock namespace (F5.1) — Lua reads a Swift-served value. |
+| `Mock/MockLiveState.swift` | Post-run introspection snapshot of the live engine; backs the navigator live-state (`(run to populate live state)` until populated, DATA-09). |
+| `Debug/DebugHookAdapter.swift` | Bridges the LuaSwift synchronous debug handler to the mailbox; eager all-frame inspector snapshot; in-place `g` globals capture. |
+| `Debug/DebugCommandMailbox.swift` | The one blocking primitive: single-slot `NSCondition` mailbox; two-predicate wake (command, then globals latch); SEC-01 watchdog ceiling. |
+| `Debug/DebugSession.swift` | One live debug session, owned by `SessionEngine` (not `AppState`, IMPL-02); holds the mailbox and the last published snapshot. |
+| `Debug/DebugSnapshot.swift` | The `Sendable` value models crossing the service→loop boundary (snapshot, frames, variables). |
+| `Project/ProjectFileCodec+Mock.swift`, `ProjectValidation+Mock.swift` | `[[mock.*]]` decode (F5.5) + validation diagnostics (ux-spec §6.9). |
+
+**MoonSwiftTUI — Elm side (depends on Core + RatatuiKit):**
+
+| File | Role |
+|---|---|
+| `App/Reducers/MockNavigatorReducer.swift` | Navigator mock section: `a` add / `e` edit / `d` delete; `<Enter>` on a live function row opens invoke. |
+| `App/MockFormState.swift`, `App/Reducers/MockFormReducer.swift`, `Render/MockFormView.swift` | The add/edit mock form (`Add mock — Value / Function / Namespace`). |
+| `App/InvokeFormState.swift`, `App/Reducers/InvokeFormReducer.swift`, `Render/InvokeFormView.swift`, `App/AppDriver+InvokeEffects.swift` | F5.3 invoke: single call-expression line; the three side-effecting controls (lint → no-dots target → `evaluate("return …")`) run in the AppDriver. |
+| `App/Reducers/DebugReducer.swift`, `DebugInspectionReducer.swift`, `App/AppDriver+DebugEffects.swift` | Debug-run start (`<C-g>`), breakpoint toggle (`b`), stepping (`s`/`i`/`o`/`c`), stop (`x`), globals request (`g`), frame selection / table expansion. |
+| `Render/DebugTabView.swift` | The `[ Debug ]` tab: Locals/Upvalues/Globals/Call-Stack sections, the §6.9 VM-running states, the `(no globals defined)`/`(… N more globals)`/`(cycle)`/`(…)` markers. |
+| `Render/MockNavigatorView.swift` | Sectioned navigator with the `─── Mock Environment ───` divider + live-state rows. |
+
+Per §4.7 / R6, **no feature logic lands in `Reducer.swift` or `Renderer.swift`** —
+both carry only minimal exhaustive-switch dispatch lines into the files above.
+
+### 11.3 Mocking data flow
+
+1. **Load:** `ProjectFileCodec+Mock` decodes `[[mock.value]]` / `[[mock.function]]`
+   from `moonswift.toml`; `ProjectValidation+Mock` validates (duplicate keys,
+   unknown types/behaviors, reserved prefixes, literal syntax via
+   `syntaxPrePass`) emitting the ux-spec §6.9 diagnostics. Valid mocks land in a
+   `MockStore`.
+2. **Run:** on a mock-aware run, `SessionEngine` registers one `MockValueServer`
+   per namespace and the mock functions, then runs the fragment under the
+   project's `RunConfigMode` (sandbox default). Mock value literals are
+   MATERIALIZED via `evaluate` (RQ1 — any Lua value expression, incl. function
+   literals), so a sandbox-stripped call inside a literal fails at runtime, not
+   at validation.
+3. **Live state:** post-run, `MockLiveState` introspects the surviving engine
+   (LuaSwift #21) so the navigator shows actual written values rather than
+   `(run to populate live state)`.
+4. **Invoke (F5.3):** `<Enter>` on a live function row opens the invoke form;
+   `Effect.invokeLuaCall` carries the raw call-expression string; the AppDriver
+   runs lint → no-dots target check → `evaluate("return <expr>")`; the first
+   return value renders `→ <display>` in the Output tab.
+
+### 11.4 Debugger pause concurrency model (OQ2 resolution, summarised)
+
+The VM thread runs `engine.runDebug(_:chunkName:)` synchronously. On each
+LINE/CALL/RET event the `DebugHookAdapter`:
+
+1. checks breakpoints / stepping depth (call-stack depth, not call/ret counting —
+   R4) to decide whether this event is a pause;
+2. on a pause, EAGERLY snapshots all-frame locals/upvalues + call stack into
+   `Sendable` models (R3 — no post-callback inspector access), posts
+   `AppEvent.debugPaused(DebugSnapshot)`;
+3. BLOCKS on `DebugCommandMailbox.take()` (bounded wait, SEC-01) until a
+   `LuaDebugCommand` arrives. Command delivery is `nonisolated`/direct-to-mailbox
+   (NOT an executor hop — avoids the serial-executor deadlock, PERF-11).
+
+**Globals** are an explicit `g` action, captured EAGERLY IN-PLACE via
+`inspector.globals()` at the current pause in the SAME handler invocation —
+no re-pause, no internal step. `requestGlobals` sets a latch and signals the
+mailbox condition; the two-predicate wake returns the `serviceGlobals` sentinel
+so the handler captures and re-parks without consuming a command. The single
+empty state at any pause is `(no globals defined)` (DOM-10); `(globals pending…)`
+is the in-flight feedback. `debugResumed` (posted on an actual step/continue)
+drives the §6.9 Case-2 "VM running… (showing last pause)" retained-dimmed render.
+**`stop` (`x`)** delivers `.stop` AND `requestCancellation()` so a parked VM is
+force-unwound; the watchdog timeout reuses the same `.stop` path (surfacing the
+neutral `Session stopped.`).
+
+### 11.5 Session lifecycle + RunState gate
+
+`SessionEngine` is created on a mock-aware/debug run and is the single owner of
+the live engine and the `DebugSession`. It is ended — and the engine discarded
+(R10 leak guard) — on stop, a new run, or reload (RQ3 implicit end-session: no
+`<C-x>` key). The P1 `RunState` gate still serialises runs; a debug run takes the
+same gate, so `<C-g>` while a run is in progress is declined with
+`A run is already in progress.` (ux-spec §6.5 `<C-g>` precondition transients).
+
+### 11.6 Structured errors + tracebacks (F6.4)
+
+With LuaSwift #19 (`LuaRuntimeFailure { message, line, traceback, frames }`) and
+#23 (`chunkName`), runs and debug runs pass the fragment's
+`FragmentProvenance.displayName` as `chunkName`, so engine-reported frame names
+are faithful. The heuristic `LuaErrorLineParser` is DELETED (§5.3). Error mapping
+lives in `MoonSwiftCore/Diagnostics/LuaErrorDiagnostics.swift`; traceback render
+is `MoonSwiftTUI/Render` (TracebackRenderTests gate the exact output).

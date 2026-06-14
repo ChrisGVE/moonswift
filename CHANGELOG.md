@@ -11,6 +11,27 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+#### Mocking (P2 F5)
+
+- Sharing-area mocks: define Swift-served values (`[[mock.value]]`) and
+  Swift-backed functions (`[[mock.function]]`, behaviors `echo-args` /
+  `fixed-return` / `raise-error`) in `moonswift.toml`. Lua reads mock values and
+  calls mock functions during a run. Value/return literals accept any Lua value
+  expression (scalars, tables, function literals), syntax-checked at load and
+  materialized under the project's run mode (sandbox by default).
+- Mock Environment navigator section (below a `─── Mock Environment ───`
+  divider) with add (`a`), edit (`e`), and delete (`d`, confirmed with
+  `Delete this mock? [y/N]`). Post-run it shows live values via introspection;
+  before the first run it shows `(run to populate live state)`.
+- Lua invocation (F5.3): `<Enter>` on a live function row opens a single
+  call-expression input (e.g. `on_event("tick", 42)`); the expression is
+  syntax-linted, its target enforced to a bare top-level identifier, and
+  evaluated as `return <expr>` under the run mode. The first return value renders
+  `→ <value>` in the Output tab. A successful invoke closes the form; a failed
+  control keeps it open with the typed text retained.
+- A mock session ends implicitly on a new run, a reload, or `<C-r>` (no
+  end-session key is introduced).
+
 #### Debugging (P2 F6)
 
 - Debug run (`<C-g>`), line breakpoints (`b`), and stepping (`s`/`i`/`o`/`c`,

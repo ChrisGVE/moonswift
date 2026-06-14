@@ -95,7 +95,7 @@ Modal states (overlay the pane system, capture all input):
 
 The `<Tab>` context-sensitivity is the **only** context-sensitive key in P1. The help overlay **must** document this explicitly. [PRD §6.2, §6.7]
 
-### 2.3 Complete P1 keybinding table
+### 2.3 Complete keybinding table (P1 + P2)
 
 **Global keys** (active in all panes unless a modal is open):
 
@@ -127,8 +127,12 @@ The `<Tab>` context-sensitivity is the **only** context-sensitive key in P1. The
 | `<Space>` | Same as `<Enter>` |
 | `/` | Filter navigator entries (inline search; `<Esc>` clears) |
 | `m` | Open structured-file picker for the selected entry (only for structured-file entries; no-op otherwise) [PRD §6.7, F1.3] |
+| `a` | Add a mock — opens the `Add mock — Value / Function / Namespace` form (P2 F5.4; allowed whenever a project is loaded so the first mock can be created) |
+| `e` | Edit the selected mock entry (P2 F5.4; only on a mock in the Mock Environment section) |
+| `d` | Delete the selected mock entry, confirmed with `Delete this mock? [y/N]` (P2 F5.4; only in the Mock Environment section) |
+| `<Enter>` | On a script-defined live function row, open the Lua invocation form (P2 F5.3 — see §7.5) |
 
-[PRD §6.2]
+[PRD §6.2, §6.5]
 
 **Code pane keys** (focus = codePane):
 
@@ -159,11 +163,24 @@ The `<Tab>` context-sensitivity is the **only** context-sensitive key in P1. The
 | `y` | Yank (copy to pbcopy) the focused line |
 | `1` | Quick-jump to Output tab [PRD §6.7] |
 | `2` | Quick-jump to Diagnostics tab [PRD §6.7] |
-| `3` | Quick-jump to Debug tab (P2 F6.1) |
+| `3` | Quick-jump to Debug tab — `Debug tab not active.` transient if no debug session (P2 F6.1, UX-R2-N03) |
 | `<Tab>` | Cycle to next tab (context-sensitive behavior) [PRD §6.2] |
 | `<C-l>` | Clear output buffer [PRD §6.2] |
 
 [PRD §6.2]
+
+**Paused debug-mode keys** (active while a debug session is paused; full spec in §7.2):
+
+| Key | Action |
+|-----|--------|
+| `s` | Step over (P2 F6.2) |
+| `i` | Step into (P2 F6.2) |
+| `o` | Step out (P2 F6.2) |
+| `c` | Continue (P2 F6.2) |
+| `x` | Stop the debug session (overrides global cancel-run while a session is active; neutral `Session stopped.`, P2 F6.2) |
+| `g` | Capture the bounded/filtered globals slice (Debug tab focus; P2 F6.3) |
+
+A paused-mode key pressed in the navigator surfaces `Stepping is in the Debug tab — press 3.`; pressed while the VM is running between pauses it surfaces `VM running…` (§7.2). [PRD §6.5, §7.2]
 
 **Picker modal keys** (when picker is open — see §3.6):
 
@@ -187,8 +204,8 @@ Any action that cannot execute (precondition not met) consumes the key, displays
 The `?` help overlay is a centered modal (max 60 columns × 20 rows), rendered using ratatui's `Clear` widget behind the content box. It must include:
 
 1. All global keybindings.
-2. Per-pane keybindings (navigator, code pane, bottom pane).
-3. An explicit note: **"`<Tab>`: cycles panes globally; cycles tabs when the bottom pane is focused."** [PRD §6.2]
+2. Per-pane keybindings grouped by context: navigator (incl. the mock `a`/`e`/`d` keys), code pane, bottom pane, and the paused debug-mode keys (`s`/`i`/`o`/`c`/`x`, `g`).
+3. An explicit note: **"`<Tab>`: cycles panes globally; cycles tabs when the bottom pane is focused."** The bottom-pane tab cycle includes the `[ Debug ]` tab **only while a debug session is active** (UX-16) — Output → Diagnostics → Debug (if active) → Output. [PRD §6.2, §6.11]
 
 `<Esc>` or `?` dismisses the overlay. [PRD §6.2]
 
@@ -605,7 +622,7 @@ F5.5 acceptance criteria, CONS-02]
 - Lower section: mock environment tree (namespaces → values, mock functions).
 
 **Add mock** (`a` key in navigator, focus on Mock Environment section):
-- Code pane area becomes an inline form: popup selects type (Value / Function / Namespace).
+- Code pane area becomes an inline form whose first stage is the type-select popup titled `Add mock — Value / Function / Namespace` (binding string).
 - **Value form fields**: Namespace, Key path, Type (`string`/`number`/`boolean`/`table`/`expr`), Value (Lua value expression — RQ1: a scalar/table literal, or any value expression incl. a function literal when type is `expr`), Writable (toggle). [PRD §F5.1]
 - **Function form fields**: Function name, Behavior (`echo-args` / `fixed-return` / `raise-error`), Return value (Lua value expression, shown only for `fixed-return`), Error message (shown only for `raise-error`). [PRD §F5.2]
 - **Namespace form fields**: Namespace name only.
@@ -615,7 +632,7 @@ F5.5 acceptance criteria, CONS-02]
 
 **Delete mock** (`d` key): confirms with `Delete this mock? [y/N]`.
 
-**Live state**: post-run, mock values that were written by the script reflect the actual engine state (via LuaSwift#21 introspection). [PRD F5]
+**Live state**: post-run, mock values that were written by the script reflect the actual engine state (via LuaSwift#21 introspection). Before the first run of the session (the no-cache window, DATA-09) the section shows the binding empty-state `(run to populate live state)`. [PRD F5]
 
 ### 7.2 P2 — Debugger keys and variable pane placement
 
@@ -635,13 +652,22 @@ F5.5 acceptance criteria, CONS-02]
 
 [PRD F6]
 
-**Variable / Debug tab placement**: the bottom pane gains a `[ Debug ]` tab (auto-shown when `<C-g>` starts). Tab content:
-- **Locals** section: `local <name> = <value>` per local in the current frame.
-- **Upvalues** section: `upvalue <name> = <value>`.
-- **Globals** section: on-demand; press `g` while paused to capture.
-- **Call stack** section: one line per frame, `<Enter>` on a frame retargets the code pane to that frame's source line.
+**Variable / Debug tab placement**: the bottom pane gains a `[ Debug ]` tab (auto-shown when `<C-g>` starts). Each section is delimited by an exact, non-selectable `dim` header string (binding): `── Locals ──`, `── Upvalues ──`, `── Globals ──`, `── Call Stack ──`. Section content:
+- **`── Locals ──`**: `<name> = <value>` per local in the current frame; `(no locals)` (binding empty-state) when the frame has none.
+- **`── Upvalues ──`**: `<name> = <value>` per upvalue; `(no upvalues)` (binding empty-state) when there are none.
+- **`── Globals ──`**: on-demand; press `g` while paused to capture (binding strings table below).
+- **`── Call Stack ──`**: one line per frame, `<Enter>` on a frame retargets the code pane to that frame's source line.
 
-Table values support inline expansion with `<Enter>` on the value line. [PRD F6]
+Table values support inline expansion with `<Enter>` on the value line; a depth-capped value renders `(…)` and a cyclic value renders `(cycle)` (binding markers). [PRD F6, §6.5]
+
+**§6.9 "VM running between pauses" states** (binding — a debug session is active but NOT paused):
+
+| Case | When | Header line | Section bodies |
+|------|------|------------|----------------|
+| Case 1 — fresh open, before any pause | between `<C-g>` and the first breakpoint hit | `VM running…` (`dim`) | each section shows `(VM running — no snapshot yet)` |
+| Case 2 — running after a pause | after `c` continue or a resuming step (`debugResumed`) | `VM running… (showing last pause)` | the last pause's locals/upvalues/globals/call-stack, retained and rendered `dim` to signal staleness |
+
+[PRD §6.9, UX-06, UX-R2-03]
 
 **Globals section binding strings** (F6.0 / PRD §F6.0 §2, DOM-10 / UX-R3-02):
 
@@ -663,8 +689,17 @@ Status bar while globals capture is in flight: append `[globals pending…]` aft
 | s/i/o/c pressed while VM is running between pauses | `VM running…` |
 | s/i/o/c pressed in navigator while session is paused | `Stepping is in the Debug tab — press 3.` |
 | x stop delivered to active debug session (DOM-N01) | `Session stopped.` |
+| `3` pressed with no active debug session (UX-R2-N03) | `Debug tab not active.` |
 
 `x` stop never surfaces `LuaError.cancelled` as a `.cancelled` error diagnostic (DOM-N01). The neutral `"Session stopped."` string is shown instead.
+
+**SEC-01 watchdog (as-built).** A pause that is never resumed within the
+`DebugCommandMailbox` ceiling is torn down via the same `.stop` path — the
+mailbox `take()` returns `.command(.stop)` on timeout, so the user sees the
+neutral `Session stopped.` rather than a distinct timeout message. (The PRD §6.5
+enumerated a separate `Debug session timed out waiting for a command — session
+ended.` string; the implementation reuses the stop path instead. Flagged for the
+P2 audit, #16.)
 
 ### 7.3 P4a — Suspend-to-`$EDITOR` round trip
 

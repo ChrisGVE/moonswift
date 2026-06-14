@@ -362,3 +362,14 @@ Without a run you get the transient `Invoke a Lua function: run the source first
 
 See [running.md](running.md) for how mock setup integrates with the run
 lifecycle.
+
+## Mock sessions
+
+A mock session is the live engine behind a run — it holds the materialized mock
+values, the installed mock functions, and (after a run) the introspected live
+state shown in the navigator. The session is **implicit**: it starts on a run
+and **ends automatically** when you start a new run, reload the project, or press
+`<C-r>`. There is no dedicated "end session" key. Because writes do not persist
+across sessions, each run begins from the mock definitions in `moonswift.toml`,
+and the live state resets to `(run to populate live state)` until the next run
+populates it.
