@@ -158,6 +158,18 @@ let package = Package(
             from: "0.10.0"
         ),
 
+        // LanguageClient: stdio LSP client for the OPTIONAL lua-language-server
+        // integration (F7b, PRD §F7b — IMPL-01/SEC-04). BSD-3-Clause. Same
+        // ChimeHQ org as SwiftTreeSitter; transitively vendors
+        // LanguageServerProtocol + JSONRPC. Linked into MoonSwiftTUI only
+        // (ARCH-01 — the client is TUI-side). `.upToNextMinor` matches the
+        // project's pinning discipline. Supply-chain set + OSV audit recorded in
+        // docs/internals/luals.md.
+        .package(
+            url: "https://github.com/ChimeHQ/LanguageClient.git",
+            .upToNextMinor(from: "0.8.2")
+        ),
+
         // tree-sitter-lua: Lua grammar for highlighting and span location.
         // Azganoth's fork carries a Package.swift; pinned to tagged release.
         .package(
@@ -300,6 +312,8 @@ let package = Package(
                 .product(name: "TreeSitterJSON", package: "tree-sitter-json"),
                 "CTreeSitterTOML",
                 .product(name: "TreeSitterYAML", package: "tree-sitter-yaml"),
+                // Optional lua-language-server stdio LSP client (F7b, ARCH-01).
+                .product(name: "LanguageClient", package: "LanguageClient"),
             ],
             path: "Sources/MoonSwiftTUI",
             swiftSettings: swiftTargetSettings
