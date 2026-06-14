@@ -640,39 +640,15 @@ private func render(_ value: LuaValue?) -> String {
     return luaValueToString(value)
 }
 
-/// Converts a `LuaValue` to a Lua-print-compatible display string (matches
-/// `RunService`'s renderer; replicated here to avoid widening RunService's API).
+/// Converts a `LuaValue` to a Lua-print-compatible display string. Delegates to
+/// the shared public ``renderLuaValue(_:)`` (Run/LuaValueDisplay.swift) so the
+/// engine and the TUI invoke path share ONE renderer.
 private func luaValueToString(_ value: LuaValue) -> String {
-    switch value {
-    case .string(let s):
-        return s
-    case .number(let n):
-        if n == n.rounded() && !n.isInfinite && abs(n) < 1e15 {
-            return String(Int64(n))
-        }
-        return String(n)
-    case .bool(let b):
-        return b ? "true" : "false"
-    case .nil:
-        return "nil"
-    case .table, .array:
-        return "table"
-    case .complex(let re, let im):
-        return "\(re)+\(im)i"
-    case .luaFunction:
-        return "function"
-    case .opaqueReference(let kind):
-        switch kind {
-        case .function: return "function"
-        case .table: return "table"
-        case .userdata: return "userdata"
-        case .thread: return "thread"
-        }
-    }
+    renderLuaValue(value)
 }
 
 /// Converts an `evaluate` return value to a display string, `nil` for Lua nil.
+/// Delegates to the shared public ``luaValueDisplayOrNil(_:)``.
 private func luaValueDisplayString(_ value: LuaValue) -> String? {
-    if case .nil = value { return nil }
-    return luaValueToString(value)
+    luaValueDisplayOrNil(value)
 }

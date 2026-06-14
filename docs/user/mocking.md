@@ -317,6 +317,47 @@ Every add, edit, or delete is saved to `moonswift.toml` immediately.
 - **Function form**: Function name, Behavior, then Return value (for
   `fixed-return`) or Error message (for `raise-error`).
 
+## Invoking Lua functions
+
+After a run, the Mock Environment lists the script-defined functions discovered
+in the live session (e.g. `on_event = function`). Put the cursor on one and press
+`<Enter>` to open the **invocation form** — a single input line pre-filled with
+the function name and an opening `(`.
+
+Type a **full Lua call expression** with arbitrarily rich arguments — scalars,
+nested tables, metatable-based OOP, even inline function literals — for example:
+
+```
+on_event("tick", 42)
+myCallback({a = 2, nested = {3, 4}}, function() return 5 end)
+```
+
+Press `<Enter>` to evaluate, or `<Esc>` to cancel. The arguments are evaluated
+**natively by Lua** under the project's run mode (sandboxed by default), so the
+tables, closures, and OOP values are built exactly as a real caller would.
+
+Three checks run, in order, before anything is evaluated:
+
+1. **Syntax check.** A malformed expression (e.g. `on_event(1,`) is rejected
+   inline with `Invalid call expression: <detail>` — nothing is evaluated.
+2. **Target must be a bare top-level name.** The function being called must be a
+   plain identifier (`on_event`, `myCallback`). A dotted, indexed, or method
+   target (`os.execute(...)`, `a.b()`, `a[c]()`, `obj:m()`) is rejected with
+   `Invalid function name.` before any code runs. (Only the call **target** is
+   restricted — the **arguments** may use dotted access and anything else valid
+   Lua, e.g. `myfunc(os.time())`.)
+3. **Evaluate.** The call runs against the live session. If the name does not
+   resolve to a callable global you get `<name> is not a function.`
+
+On success the form closes and the result appears in the Output tab as
+`→ <value>`. **Only the first return value is shown** — multi-return functions
+are truncated to the first (`function f() return 1, 2, 3 end` invoked as `f()`
+shows `→ 1`). On any failure the form stays open with your text preserved so you
+can correct it in place.
+
+Invoking requires an active session — run the source at least once first.
+Without a run you get the transient `Invoke a Lua function: run the source first.`
+
 ## Running against mocks
 
 See [running.md](running.md) for how mock setup integrates with the run

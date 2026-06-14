@@ -181,7 +181,7 @@ struct ConflictDetectedDoubleModalTests {
         // and that focus can be matched without an exhaustive-switch compiler error.
         switch next.focus {
         case .conflictModal, .pane, .nvimSpawning, .nvimPane, .diffView,
-            .helpOverlay, .pickerModal, .initForm, .mockForm:
+            .helpOverlay, .pickerModal, .initForm, .mockForm, .invokeForm:
             break  // all valid — exhaustive, no default: arm
         }
     }

@@ -253,6 +253,21 @@ public enum Effect: Sendable {
     /// stepping UI (distinct from `.stopDebug` which was F6.1's teardown-only path).
     case sendDebugCommand(DebugSessionID, LuaDebugCommand)
 
+    /// Invoke a Lua function via a FULL call expression (F5.3, RQ2).
+    ///
+    /// Carries the RAW typed call expression (e.g. `on_event("tick", 42)`); the
+    /// reducer NEVER runs the controls (ARCH-R7-01 — they are side-effectful). The
+    /// AppDriver runs the three ordered controls (`AppDriver+InvokeEffects`):
+    ///   1. lint gate — `LintServiceProtocol.syntaxPrePass("return <expr>")`; a
+    ///      syntax error posts `.luaInvocationLintFailed(detail)`, stops.
+    ///   2. target no-dots check — `extractCallTarget(expr)`; a dotted/indexed/
+    ///      method target posts `.luaInvocationTargetInvalid`, stops.
+    ///   3. evaluate — `SessionEngineProtocol.invokeLuaCall(expr)`; success posts
+    ///      `.luaInvocationResult(display)`, a not-a-function / no-session failure
+    ///      posts a `.transient`, any other runtime error posts
+    ///      `.luaInvocationFailed(message)`.
+    case invokeLuaCall(String)
+
     /// Persist the mock definitions to `[[mock.*]]` in moonswift.toml after an
     /// add/edit/delete (F5.4). AppDriver decode-modifies-encodes the project file
     /// (preserving all other keys) with the new `MockStore` and writes it back;

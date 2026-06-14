@@ -75,8 +75,11 @@ struct MockNavRowModelTests {
         #expect(spans.first?.style.fg == tokenStyle(.dim, theme: theme).fg)
     }
 
-    @Test("only value and function rows are selectable")
+    @Test("with no run yet, only declared value and function rows are selectable")
     func selectableRows() {
+        // No live state → no live function rows; only the declared value +
+        // function are selectable. Live-function selectability (F5.3 invoke
+        // targets) is covered in InvokeFormTests.
         let s = loadedStateWithMocks()
         let selectable = mockSelectableRows(s)
         #expect(selectable.count == 2)  // 1 value + 1 function

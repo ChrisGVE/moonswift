@@ -56,6 +56,9 @@ public enum FocusState: Sendable, Equatable {
     /// The Mock Environment add/edit form is open (F5.4); state in
     /// `AppState.mockFormState`.
     case mockForm
+    /// The Lua-invocation form is open (F5.3); state in
+    /// `AppState.invokeFormState`.
+    case invokeForm
 
     // MARK: P4 nvim focus cases (ARCHITECTURE.md §10.4.3)
 
@@ -661,6 +664,11 @@ public struct AppState: Sendable {
     /// `true` while awaiting `Delete this mock? [y/N]` confirmation (F5.4).
     public var mockDeletePending: Bool
 
+    /// The Lua-invocation form, or `nil` when closed (F5.3). Non-nil iff
+    /// `focus == .invokeForm`. Opened by `<Enter>` on a live function row in the
+    /// Mock Environment section (ux-spec §7.5).
+    public var invokeFormState: InvokeFormState?
+
     // MARK: Sources
 
     /// Per-source loading and content state, keyed by `SourceID`.
@@ -867,6 +875,7 @@ public struct AppState: Sendable {
         mockLiveState: MockLiveState? = nil,
         mockFormState: MockFormState? = nil,
         mockDeletePending: Bool = false,
+        invokeFormState: InvokeFormState? = nil,
         sources: [SourceID: SourceState] = [:],
         navigatorOrder: [SourceID] = [],
         selection: SourceID? = nil,
@@ -907,6 +916,7 @@ public struct AppState: Sendable {
         self.mockLiveState = mockLiveState
         self.mockFormState = mockFormState
         self.mockDeletePending = mockDeletePending
+        self.invokeFormState = invokeFormState
         self.sources = sources
         self.navigatorOrder = navigatorOrder
         self.selection = selection

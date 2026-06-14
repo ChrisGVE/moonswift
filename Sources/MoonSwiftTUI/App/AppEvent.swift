@@ -321,6 +321,33 @@ public enum AppEvent: Sendable {
     /// shows the live values instead of `(run to populate live state)`.
     case mockLiveStateReady(MockLiveState)
 
+    // MARK: Lua invocation (P2 F5.3, ARCH-R7-01)
+
+    /// The F5.3 invoke succeeded: the FIRST return value rendered to a display
+    /// string (ux-spec §6.3/§7.5). Posted by `AppDriver+InvokeEffects` after
+    /// `SessionEngineProtocol.invokeLuaCall` returns. The reducer appends
+    /// `→ <display>` to the Output tab, closes the invoke form, and returns focus
+    /// to the navigator (the invoke is a one-shot action, §6.6 lifecycle).
+    case luaInvocationResult(String)
+
+    /// The F5.3 lint gate (control 1) rejected the call expression. Carries the
+    /// raw syntax-error detail; the reducer shows `Invalid call expression:
+    /// <detail>` inline in the invoke form and keeps the form open with the typed
+    /// text preserved (§6.5/§6.6).
+    case luaInvocationLintFailed(String)
+
+    /// The F5.3 target no-dots check (control 2) rejected the call target (a
+    /// dotted / indexed / method head). The reducer shows `Invalid function name.`
+    /// inline and keeps the form open (§6.5/§6.6).
+    case luaInvocationTargetInvalid
+
+    /// The F5.3 evaluate step (control 3) raised a runtime error that is NOT the
+    /// not-a-function case (e.g. a sandbox-blocked argument or an error thrown by
+    /// the function body). Carries the error message; the reducer shows it inline
+    /// and keeps the form open for correction (§6.6 lifecycle). The not-a-function
+    /// and no-session cases surface as `.transient` instead.
+    case luaInvocationFailed(String)
+
     /// A debug-restart was confirmed by the user (`y` in the confirmation prompt).
     ///
     /// Posted internally by the reducer when the restart-confirmation gate

@@ -285,3 +285,86 @@ struct SessionEngineIntegrationLiveStateDeterminismTests {
         await engine.endSession()
     }
 }
+
+// MARK: - F5.3 Lua invocation (Swift → Lua, RQ2)
+
+@Suite("SessionEngineIntegration — F5.3 invokeLuaCall (task #29)")
+struct SessionEngineIntegrationInvokeTests {
+
+    /// A script defines a global function; after the run, invoking it via a full
+    /// call expression returns its FIRST return value, evaluated natively by Lua.
+    @Test("invoke a defined global returns its first return value")
+    func invokeReturnsFirstValue() async throws {
+        let engine = intEngine()
+        try await engine.startSession(config: RunConfig(), mocks: .empty)
+        _ = await engine.sessionRun(intFrag("function on_event(name, payload) return payload end"))
+
+        let value = try await engine.invokeLuaCall("on_event(\"tick\", 42)")
+        guard case .number(let n) = value else {
+            Issue.record("expected .number(42), got \(value)")
+            await engine.endSession()
+            return
+        }
+        #expect(n == 42)
+        await engine.endSession()
+    }
+
+    /// RQ2: a call with a nested table and an inline function-literal argument is
+    /// evaluated natively by Lua (the table is constructed, the closure built and
+    /// called) — proving pure-Swift argument parsing is no longer on the path.
+    @Test("rich-argument invocation evaluates nested table + inline closure natively")
+    func invokeRichArguments() async throws {
+        let engine = intEngine()
+        try await engine.startSession(config: RunConfig(), mocks: .empty)
+        _ = await engine.sessionRun(
+            intFrag("function myCallback(t, f) return t.a + t.nested[1] + f() end"))
+
+        let value = try await engine.invokeLuaCall(
+            "myCallback({a = 2, nested = {3, 4}}, function() return 5 end)")
+        guard case .number(let n) = value else {
+            Issue.record("expected .number(10), got \(value)")
+            await engine.endSession()
+            return
+        }
+        #expect(n == 10)  // 2 + 3 + 5
+        await engine.endSession()
+    }
+
+    /// A target that does not resolve to a callable global raises the Lua
+    /// "attempt to call a nil value" runtime error (the AppDriver maps this to the
+    /// `<name> is not a function.` transient; here we assert the engine raises it).
+    @Test("invoking an undefined target raises attempt-to-call-a-nil-value")
+    func invokeNotAFunction() async throws {
+        let engine = intEngine()
+        try await engine.startSession(config: RunConfig(), mocks: .empty)
+        _ = await engine.sessionRun(intFrag("x = 1"))
+
+        do {
+            _ = try await engine.invokeLuaCall("nope(1)")
+            Issue.record("expected a runtime error for an undefined call target")
+        } catch {
+            #expect(
+                error.localizedDescription.contains("attempt to call a nil value"),
+                "expected attempt-to-call-a-nil-value, got: \(error.localizedDescription)")
+        }
+        await engine.endSession()
+    }
+
+    /// Only the FIRST return value is observed (evaluate uses nresults=1, DOM-N04):
+    /// a multi-return function invoked as `f()` yields just its first value.
+    @Test("only the first return value is returned (multi-return truncated)")
+    func invokeFirstReturnOnly() async throws {
+        let engine = intEngine()
+        try await engine.startSession(config: RunConfig(), mocks: .empty)
+        _ = await engine.sessionRun(intFrag("function multi() return 1, 2, 3 end"))
+
+        let value = try await engine.invokeLuaCall("multi()")
+        guard case .number(let n) = value else {
+            Issue.record("expected .number(1), got \(value)")
+            await engine.endSession()
+            return
+        }
+        #expect(n == 1)
+        await engine.endSession()
+    }
+}

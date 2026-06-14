@@ -420,6 +420,12 @@ public final class AppDriver: @unchecked Sendable {
 
         case .requestGlobals(let sessionID):
             executeRequestGlobals(sessionID)
+
+        // MARK: Lua invocation effect (P2 F5.3, ARCH-R7-01)
+        // Body extracted to AppDriver+InvokeEffects.swift.
+
+        case .invokeLuaCall(let expression):
+            executeInvokeLuaCall(expression)
         }
     }
 

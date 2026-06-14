@@ -296,6 +296,20 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // Internal event: the reducer posted this to itself after confirmation.
         // Nothing to do here — the actual relaunch is in reduceDebugRestartKey.
         return (s, [])
+
+    // MARK: Lua invocation (F5.3 — handlers in InvokeFormReducer.swift)
+
+    case .luaInvocationResult(let display):
+        return reduceLuaInvocationResult(s, display: display)
+
+    case .luaInvocationLintFailed(let detail):
+        return reduceLuaInvocationLintFailed(s, detail: detail)
+
+    case .luaInvocationTargetInvalid:
+        return reduceLuaInvocationTargetInvalid(s)
+
+    case .luaInvocationFailed(let message):
+        return reduceLuaInvocationFailed(s, message: message)
     }
 }
 
@@ -847,6 +861,8 @@ private func reduceKey(
         return reduceInitFormKey(s, code: code, modifiers: modifiers)
     case .mockForm:
         return reduceMockFormKey(s, code: code, modifiers: modifiers)
+    case .invokeForm:
+        return reduceInvokeFormKey(s, code: code, modifiers: modifiers)
     case .nvimPane:
         return reduceNvimPaneKey(s, code: code, modifiers: modifiers)
     case .nvimSpawning:
@@ -2097,9 +2113,12 @@ private func extractExtraModules(from project: ProjectState) -> [String] {
 /// diagnostic index all start fresh for the newly selected source.
 private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
-    // F5.4: in the Mock Environment section, Enter does not load a source. Mock
-    // add/edit/delete are the `a`/`e`/`d` keys (F5.4 forms); a no-op here.
-    if s.navigator.inMockSection { return (s, []) }
+    // F5.4/F5.3: in the Mock Environment section, Enter does not load a source.
+    // On a live function row it opens the F5.3 invoke form (ux-spec §7.5); on a
+    // declared mock row it is a no-op (add/edit/delete are the `a`/`e`/`d` keys).
+    if s.navigator.inMockSection {
+        return reduceOpenInvokeForm(s)
+    }
     guard s.navigator.selectedIndex < s.navigatorOrder.count else {
         return (s, [])
     }
