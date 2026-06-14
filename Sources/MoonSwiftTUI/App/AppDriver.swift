@@ -426,6 +426,15 @@ public final class AppDriver: @unchecked Sendable {
 
         case .invokeLuaCall(let expression):
             executeInvokeLuaCall(expression)
+
+        // MARK: Completion/hover effects (P3 F7a.2)
+        // Bodies extracted to AppDriver+CompletionEffects.swift.
+
+        case .queryCompletions(let prefix, let liveMocks, let tomlProbed):
+            executeQueryCompletions(prefix: prefix, liveMocks: liveMocks, tomlProbed: tomlProbed)
+
+        case .queryHover(let symbolName, let liveMocks, let tomlProbed):
+            executeQueryHover(symbolName: symbolName, liveMocks: liveMocks, tomlProbed: tomlProbed)
         }
     }
 

@@ -83,6 +83,71 @@ public enum FocusState: Sendable, Equatable {
     /// Key handling (scroll, `[c]ancel`) is wired in Inc-9
     /// (ARCHITECTURE.md §10.8 Inc-9).
     case diffView(DiffViewPhase)
+
+    // MARK: P3 completion focus cases (F7a.2, ARCHITECTURE.md §4.7)
+
+    /// The completion popup is open over the code pane (F7a.2, ux-spec §7.6).
+    ///
+    /// State is carried inline — items, selection, and scroll offset are small
+    /// and only meaningful while the popup is open, the same rationale as
+    /// `.nvimPane(NvimPaneState)`. Keeping it in the case (rather than a
+    /// top-level optional on `AppState`) preserves the "state implies focus"
+    /// invariant the modal switch relies on.
+    case completionPopup(CompletionPopupState)
+
+    /// The hover overlay is open (F7a.2, ux-spec §7.6).
+    ///
+    /// `HoverOverlayState.item` is `nil` for the no-doc case (UX-R3-01): the
+    /// overlay STILL opens and renders the symbol name above
+    /// `(no documentation available)` — `K` is never a silent no-op.
+    case hoverOverlay(HoverOverlayState)
+}
+
+// MARK: - CompletionPopupState
+
+/// State of the open completion popup (F7a.2, ux-spec §7.6).
+///
+/// `items` is the full list returned by the completion query (already capped by
+/// the catalog); the renderer shows a scrolling window of at most
+/// `completionPopupMaxVisible` rows around `selectedIndex`. Lives inline in
+/// `FocusState.completionPopup`.
+public struct CompletionPopupState: Sendable, Equatable {
+    /// All items offered by the query, in catalog-then-live-mock order.
+    public var items: [CompletionItem]
+    /// The highlighted item (0-based index into `items`).
+    public var selectedIndex: Int
+    /// First visible item index — the renderer's scroll window starts here.
+    public var scrollOffset: Int
+
+    public init(items: [CompletionItem], selectedIndex: Int = 0, scrollOffset: Int = 0) {
+        self.items = items
+        self.selectedIndex = selectedIndex
+        self.scrollOffset = scrollOffset
+    }
+}
+
+// MARK: - HoverOverlayState
+
+/// State of the open hover overlay (F7a.2, ux-spec §7.6).
+///
+/// `item` is `nil` when the symbol under the cursor resolves to no catalog
+/// entry (UX-R3-01) — the overlay still opens and renders `symbolName` above the
+/// dimmed `(no documentation available)` line. Lives inline in
+/// `FocusState.hoverOverlay`.
+public struct HoverOverlayState: Sendable, Equatable {
+    /// The resolved completion item, or `nil` for the no-doc case (UX-R3-01).
+    public var item: CompletionItem?
+    /// The symbol name shown as the overlay title — used as the heading in the
+    /// no-doc case, where `item` carries no label.
+    public var symbolName: String
+    /// Scroll offset (content lines) for doc strings that overflow the box.
+    public var scrollOffset: Int
+
+    public init(item: CompletionItem?, symbolName: String, scrollOffset: Int = 0) {
+        self.item = item
+        self.symbolName = symbolName
+        self.scrollOffset = scrollOffset
+    }
 }
 
 // MARK: - LaunchMode
@@ -724,6 +789,12 @@ public struct AppState: Sendable {
     /// Reset to 0 each time the overlay opens; clamped to the valid range by the
     /// reducer (see `helpOverlayMaxScrollOffset`).
     public var helpScrollOffset: Int
+
+    /// Symbol name of the in-flight `K`-hover query (F7a.2). Set when the code
+    /// pane emits `Effect.queryHover`; read by `reduceHoverReady` to title the
+    /// no-doc overlay (UX-R3-01) when the resolved `CompletionItem?` is `nil`.
+    /// Empty between queries. Defaulted inline so the explicit init is untouched.
+    public var hoverPendingSymbol: String = ""
 
     // MARK: Theme
 

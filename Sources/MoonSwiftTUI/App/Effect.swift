@@ -291,6 +291,29 @@ public enum Effect: Sendable {
     /// silent no-op (ARCH-06).
     case requestGlobals(DebugSessionID)
 
+    // MARK: Completions & hover (P3 F7a.2, ARCHITECTURE.md §4.7)
+
+    /// Query completion items for `prefix` and post `.completionsReady`.
+    ///
+    /// AppDriver calls `LuaModuleCatalog.v0.completionItems(prefix:liveMocks:
+    /// tomlProbed:)` on a background Task and posts the result. `liveMocks` is
+    /// snapshotted from the cached `AppState.mockLiveState` at reducer time
+    /// (PERF-03 — never a fresh per-keystroke introspection); `tomlProbed` is
+    /// the `AppState.tomlModuleAvailable` probe result. The catalog returns `[]`
+    /// for any prefix other than `luaswift.` / `luaswift.X.`, so an off-prefix
+    /// `<C-space>` is a harmless empty query.
+    case queryCompletions(prefix: String, liveMocks: [CompletionItem], tomlProbed: Bool)
+
+    /// Resolve the catalog/live-mock entry for `symbolName` and post
+    /// `.hoverReady(CompletionItem?)` (F7a.2).
+    ///
+    /// AppDriver resolves a dotted symbol (`luaswift.stringx.split`) to its
+    /// module-level item, or a bare name to a live-mock item, on a background
+    /// Task. Posts `.hoverReady(nil)` when nothing matches — the reducer opens
+    /// the overlay regardless (UX-R3-01). `liveMocks`/`tomlProbed` are
+    /// snapshotted at reducer time, as for `.queryCompletions`.
+    case queryHover(symbolName: String, liveMocks: [CompletionItem], tomlProbed: Bool)
+
     // MARK: Process lifecycle
 
     /// Break the AppDriver loop, run teardown, and `exit(exitCode)`.

@@ -47,6 +47,18 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   embedded fragments show `<filename>:<jsonpath>` rather than a synthetic chunk
   name (via LuaSwift `chunkName`). Replaces the heuristic line parser.
 
+#### Completions & hover (P3 F7)
+
+- Completion popup (`<C-space>` in the code pane): a scrollable list (`j`/`k`,
+  up to 10 visible) of `luaswift.*` catalog items plus post-run live-mock names,
+  each with a short signature. `<Enter>` opens the selected item's hover overlay
+  (the code pane is read-only — no insertion); `<Esc>` dismisses.
+- Hover overlay (`K`, or `<Enter>` from the popup): a centered box showing a
+  symbol's name, full signature, and documentation, scrolling when the content
+  overflows. A symbol with no documentation — or a `K` that lands on no known
+  symbol — still opens the overlay, showing `(no documentation available)`; `K`
+  is never a silent no-op.
+
 #### Layout
 
 - Pane split ratios persist to `[settings]` (`navigator_split` / `bottom_split`):

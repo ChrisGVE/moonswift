@@ -805,6 +805,10 @@ P2 audit, #16.)
 **Hover overlay** (`K` in code pane, or `<Enter>` in the completion popup) [PRD F7a]:
 - Centered modal, max 60 columns × 20 rows. [PRD §6.7 UX-14]
 - Content: function/module name, full signature, doc string.
+- When the symbol has no signature/doc, or `K` resolves to no known symbol, the
+  overlay STILL opens and renders the symbol name (when one is resolvable) above
+  the single dimmed line `(no documentation available)`. `K` is never a silent
+  no-op (UX-R3-01). [PRD §6.5, F7a.2]
 - `<Esc>` or `K` dismisses.
 
 ---

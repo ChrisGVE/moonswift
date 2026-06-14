@@ -310,6 +310,14 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
 
     case .luaInvocationFailed(let message):
         return reduceLuaInvocationFailed(s, message: message)
+
+    // MARK: Completions & hover (F7a.2 — handlers in CompletionReducer.swift)
+
+    case .completionsReady(let items):
+        return reduceCompletionsReady(s, items: items)
+
+    case .hoverReady(let item):
+        return reduceHoverReady(s, item: item)
     }
 }
 
@@ -854,6 +862,10 @@ private func reduceKey(
         return reduceConflictModalKey(s, code: code, modifiers: modifiers)
     case .diffView:
         return reduceDiffViewKey(s, code: code, modifiers: modifiers)
+    case .completionPopup:
+        return reduceCompletionPopupKey(s, code: code, modifiers: modifiers)
+    case .hoverOverlay:
+        return reduceHoverOverlayKey(s, code: code, modifiers: modifiers)
     case .pane:
         break
     }
@@ -1312,6 +1324,14 @@ private func reduceCodePaneKey(
         return reduceDebugStepKey(s, command: .stepOut)
     case (.char("c"), []):
         return reduceDebugStepKey(s, command: .continueRun)
+
+    // <C-space> — open the completion popup (F7a.2, ux-spec §7.6).
+    case (.char(" "), .ctrl):
+        return reduceCodePaneOpenCompletion(s)
+
+    // K — open the hover overlay for the symbol under the cursor (F7a.2).
+    case (.char("K"), []):
+        return reduceCodePaneOpenHover(s)
 
     default:
         return (s, [])

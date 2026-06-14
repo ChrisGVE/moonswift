@@ -60,6 +60,26 @@ distinct visual marker (kind: mock). Three categories contribute:
 Live-mock items disappear if you reload without running again, because the
 snapshot is cleared when a new session starts.
 
+## Completion popup & hover
+
+Completions and documentation are reached with two keys in the code pane:
+
+- **`<C-space>`** opens the completion popup at the cursor. It shows up to 10
+  items at a time; scroll the list with `j`/`k`. Each row is the name plus a
+  short signature when one is available.
+- **`<Enter>`** on the selected popup item opens its hover overlay. The code
+  pane is read-only, so nothing is inserted — `<Enter>` is a "show me the docs"
+  gesture, not an accept.
+- **`K`** on a symbol opens the hover overlay directly, without going through the
+  popup. The hover overlay is a centered box showing the symbol name, its full
+  signature, and its documentation, scrolling when the text overflows.
+- **`<Esc>`** dismisses the popup or the overlay; **`K`** also closes the hover
+  overlay (press it again to toggle off).
+
+If the symbol under the cursor has no documentation — or `K` does not land on a
+known symbol — the overlay still opens and shows `(no documentation available)`
+under the symbol name. `K` never silently does nothing.
+
 ## When completions do not appear
 
 The popup activates only on an explicit dot after a known prefix

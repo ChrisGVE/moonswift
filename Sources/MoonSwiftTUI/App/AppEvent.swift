@@ -347,6 +347,23 @@ public enum AppEvent: Sendable {
     /// and keeps the form open for correction (§6.6 lifecycle). The not-a-function
     /// and no-session cases surface as `.transient` instead.
     case luaInvocationFailed(String)
+
+    // MARK: Completions & hover (P3 F7a.2, ARCHITECTURE.md §4.7)
+
+    /// Completion items are ready for the popup (F7a.2). Posted by
+    /// `AppDriver+CompletionEffects` after `Effect.queryCompletions` reads
+    /// `LuaModuleCatalog.completionItems(prefix:liveMocks:tomlProbed:)`. The
+    /// reducer opens the popup when the list is non-empty; an empty list is a
+    /// no-op (nothing to complete at the cursor prefix — ux-spec §7.6).
+    case completionsReady([CompletionItem])
+
+    /// Hover data is ready for the overlay (F7a.2). Posted by
+    /// `AppDriver+CompletionEffects` after `Effect.queryHover` resolves the
+    /// symbol under the cursor. The payload is `nil` when the symbol has no
+    /// catalog entry; the reducer opens the overlay REGARDLESS, titled by
+    /// `AppState.hoverPendingSymbol` over `(no documentation available)`
+    /// (UX-R3-01 — `K` is never a silent no-op).
+    case hoverReady(CompletionItem?)
 }
 
 // MARK: - HighlightSpan

@@ -65,6 +65,22 @@ public func render(_ state: AppState, size: TerminalSize) -> [RenderCommand] {
         commands += renderHelpOverlay(size: size, theme: theme, scrollOffset: state.helpScrollOffset)
     }
 
+    // F7a.2 completion popup + hover overlay (ux-spec §7.6). Both float over the
+    // full terminal (not the code-pane inner rect), so they render here.
+    if case .completionPopup(let popup) = state.focus {
+        commands += renderCompletionPopup(
+            state: popup,
+            codePaneRect: layout.codePane,
+            cursorLine: state.codePane.cursorLine,
+            codeScroll: state.codePane.scrollOffset,
+            terminalSize: size,
+            theme: theme
+        )
+    }
+    if case .hoverOverlay(let hover) = state.focus {
+        commands += renderHoverOverlay(state: hover, size: size, theme: theme)
+    }
+
     // P4 nvim overlay: conflict modal and diff view cover the code-pane area.
     // Guard: only when we have a valid inner rect (same guard as renderCodePane).
     // Exhaustive on purpose (no default:) — a future FocusState case must
@@ -76,7 +92,7 @@ public func render(_ state: AppState, size: TerminalSize) -> [RenderCommand] {
         case .diffView(let phase):
             commands += renderDiffView(phase: phase, rect: codeInner, theme: theme)
         case .pane, .helpOverlay, .pickerModal, .initForm, .mockForm, .invokeForm,
-            .nvimPane, .nvimSpawning:
+            .nvimPane, .nvimSpawning, .completionPopup, .hoverOverlay:
             break
         }
     }
