@@ -30,13 +30,15 @@ import MoonSwiftCore
 /// inspection cursor — but ONLY for a fresh pause. A globals-republish (the `g`
 /// path captures in-place and re-publishes at the SAME line WITHOUT resuming the
 /// VM, §F6.0 §2 / DOM-08) must preserve the user's frame selection / expansion /
-/// cursor. We tell the two apart because a fresh pause is always preceded by a
-/// resume that nils `currentDebugSnapshot`: a snapshot already present at the
-/// same session + line means this is the in-place globals refresh.
+/// cursor. We tell the two apart by `pauseSequence` (CR-023): a republish carries
+/// the SAME sequence as the pause it refreshes, whereas a genuinely new pause —
+/// even one that re-hits the same `fragmentLine`, e.g. a breakpoint in a loop
+/// body — carries a new sequence. Keying on `(sessionID, fragmentLine)` alone
+/// misclassified that loop re-hit as a republish and left a stale cursor.
 func applyPauseInspection(_ s: inout AppState, snapshot: DebugSnapshot) {
     let isGlobalsRepublish =
         s.currentDebugSnapshot.map {
-            $0.sessionID == snapshot.sessionID && $0.fragmentLine == snapshot.fragmentLine
+            $0.sessionID == snapshot.sessionID && $0.pauseSequence == snapshot.pauseSequence
         } ?? false
 
     s.currentDebugSnapshot = snapshot

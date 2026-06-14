@@ -313,24 +313,6 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     }
 }
 
-// MARK: - Debug resumed handler
-
-/// Handle `AppEvent.debugResumed` — VM resumed after a step or continue command.
-///
-/// Enters §6.9 Case-2 "VM running between pauses" state: clears the current
-/// snapshot so the Debug-tab renderer switches from the paused view to the
-/// "VM running…" between-pauses header. The session ID is still live; the
-/// next `debugPaused` will restore a new snapshot. Stale ID = silent no-op.
-private func reduceDebugResumed(_ s: AppState, sessionID: DebugSessionID) -> (AppState, [Effect]) {
-    var s = s
-    guard s.activeDebugSessionID == sessionID else { return (s, []) }
-    s.currentDebugSnapshot = nil
-    // A latched-but-unresolved `g` is discarded on resume (§6.9): Case-2 shows the
-    // last RESOLVED globals from `lastPauseSnapshot`, never `(globals pending…)`.
-    s.debugGlobalsRequested = false
-    return (s, [])
-}
-
 // MARK: - Nvim redraw handler
 
 /// Apply a complete nvim redraw batch to the grid state.
@@ -1506,60 +1488,6 @@ private func reduceBottomPaneKey(
     }
 }
 
-// MARK: - Modal key handlers (stubs for P1)
-
-private func reduceHelpOverlayKey(
-    _ s: AppState,
-    code: KeyCode,
-    modifiers: KeyModifiers
-) -> (AppState, [Effect]) {
-    var s = s
-
-    // The keybinding list overflows the 60×20 overlay, so it scrolls
-    // (ux-spec §2.5). The viewport reserves the last overlay row for the scroll
-    // footer; `helpOverlayMaxScrollOffset` mirrors the renderer's window maths so
-    // the clamp is exact. Keymap (vim/neovim, with keyboard-nav shadows):
-    //   ↑ / ↓                line up / down
-    //   <C-u> / <C-d>        half page up / down (no arrow equivalent)
-    //   <C-b> / <C-f>        full page up / down  (PgUp / PgDn shadow)
-    //   g / G                top / bottom         (Home / End shadow)
-    let overlayH = Int(min(20, s.terminalSize.rows))
-    let contentViewport = max(1, overlayH - 1)  // -1 reserves the footer row
-    let maxOffset = helpOverlayMaxScrollOffset(terminalRows: s.terminalSize.rows)
-    let half = max(1, contentViewport / 2)
-    let full = max(1, contentViewport)
-    func clamp(_ v: Int) -> Int { min(max(0, v), maxOffset) }
-
-    switch (code, modifiers) {
-    case (.escape, []), (.char("?"), []):
-        s.focus = .pane(.navigator)
-        s.helpScrollOffset = 0
-    case (.char("q"), []):
-        // `q` quits from the help overlay (ux-spec §2.5 — overlay must not
-        // trap the global quit shortcut).
-        return (s, [.quit(exitCode: 0)])
-    case (.down, []):
-        s.helpScrollOffset = clamp(s.helpScrollOffset + 1)
-    case (.up, []):
-        s.helpScrollOffset = clamp(s.helpScrollOffset - 1)
-    case (.char("d"), .ctrl):
-        s.helpScrollOffset = clamp(s.helpScrollOffset + half)
-    case (.char("u"), .ctrl):
-        s.helpScrollOffset = clamp(s.helpScrollOffset - half)
-    case (.char("f"), .ctrl), (.pageDown, []):
-        s.helpScrollOffset = clamp(s.helpScrollOffset + full)
-    case (.char("b"), .ctrl), (.pageUp, []):
-        s.helpScrollOffset = clamp(s.helpScrollOffset - full)
-    case (.char("g"), []), (.home, []):
-        s.helpScrollOffset = 0
-    case (.char("G"), []), (.end, []):
-        s.helpScrollOffset = maxOffset
-    default:
-        break
-    }
-    return (s, [])
-}
-
 // MARK: - Picker key dispatch (ux-spec §3.6, §2.3 picker table)
 
 /// Handles all keyboard input while the structured-file picker modal is open.
@@ -2126,7 +2054,10 @@ private func tickEffectsAfterRunEnds(_ s: AppState) -> [Effect] {
 }
 
 /// Build gutter marks from a diagnostic array.
-private func gutterMarks(from diagnostics: [Diagnostic]) -> [Int: GutterMark] {
+///
+/// Module-internal (CR-042) so `DebugReducer` recomputes the merged mark set
+/// through this one definition rather than a duplicate.
+func gutterMarks(from diagnostics: [Diagnostic]) -> [Int: GutterMark] {
     var marks: [Int: GutterMark] = [:]
     for d in diagnostics {
         let line = max(0, d.line - 1)  // convert 1-based to 0-based

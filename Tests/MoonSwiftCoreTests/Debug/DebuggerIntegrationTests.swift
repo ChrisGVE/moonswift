@@ -205,7 +205,7 @@ struct DbgIntSteppingSequenceTests {
                 onPause: { snap in
                     stream.record(snap)
                 },
-                onResumed: {
+                onResumed: { _ in
                     resumedCount.increment()
                 })
         }

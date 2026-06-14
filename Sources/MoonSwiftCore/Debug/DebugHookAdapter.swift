@@ -91,7 +91,7 @@ public func makeDebugHookHandler(
     baselineStdlibNames: Set<String>,
     setRunState: @escaping @Sendable (DebugHookRunState) -> Void,
     onPause: @escaping @Sendable (DebugSnapshot) -> Void,
-    onResumed: @escaping @Sendable () -> Void
+    onResumed: @escaping @Sendable (DebugSessionID) -> Void
 ) -> LuaDebugHandler {
     let lineOffset = fragment.provenance.lineOffset
     // `breakpoints` is `Set<Int>`, value type, Sendable.
@@ -106,6 +106,11 @@ public func makeDebugHookHandler(
     // `nonisolated(unsafe)`: accessed only from the VM thread (the serial executor
     // on which `engine.runDebug` runs synchronously). No concurrent access.
     nonisolated(unsafe) var steppingMode = false
+    // Per-pause monotonic sequence (CR-023). Incremented for each fresh pause so
+    // the inspection reducer can distinguish a new pause that re-hit the same
+    // line (a loop body) from an in-place globals republish. Same justification
+    // for `nonisolated(unsafe)` as `steppingMode`: VM-thread-only access.
+    nonisolated(unsafe) var pauseSequence = 0
 
     return { (event: LuaDebugEvent, inspector: LuaDebugInspector) -> LuaDebugCommand in
 
@@ -150,11 +155,15 @@ public func makeDebugHookHandler(
         // The inspector is valid ONLY during this handler call. Capture all
         // frames' locals and upvalues now so the TUI can navigate the call
         // stack (F6.3) without any re-entry into the engine.
+        // Fresh pause: advance the per-pause sequence (CR-023). The globals
+        // republish below reuses this same value, so a republish is detectable.
+        pauseSequence += 1
         let snapshot = buildPauseSnapshot(
             sessionID: sessionID,
             event: eventKind,
             pauseLine: pauseLine,
-            inspector: inspector
+            inspector: inspector,
+            pauseSequence: pauseSequence
         )
 
         // ── Step 3: publish + set paused state ──
@@ -192,7 +201,10 @@ public func makeDebugHookHandler(
                     callStack: snapshot.callStack,
                     frameVars: snapshot.frameVars,
                     globals: captured.slice,
-                    globalsElided: captured.elided
+                    globalsElided: captured.elided,
+                    // Reuse the pause's sequence: this is an in-place refresh of
+                    // the SAME pause, not a new one (CR-023).
+                    pauseSequence: snapshot.pauseSequence
                 )
                 session.setSnapshot(withGlobals)
                 onPause(withGlobals)
@@ -214,7 +226,7 @@ public func makeDebugHookHandler(
                 // .stop ends the session — debugFinished follows from the outer
                 // SessionEngine; we must NOT post debugResumed for it.
                 if cmd != .stop {
-                    onResumed()
+                    onResumed(sessionID)
                 }
                 return cmd
             }
@@ -232,7 +244,8 @@ private func buildPauseSnapshot(
     sessionID: DebugSessionID,
     event: DebugEventKind,
     pauseLine: Int,
-    inspector: LuaDebugInspector
+    inspector: LuaDebugInspector,
+    pauseSequence: Int
 ) -> DebugSnapshot {
     let rawStack = inspector.callStack
 
@@ -265,7 +278,8 @@ private func buildPauseSnapshot(
         fragmentLine: pauseLine,
         callStack: callStack,
         frameVars: frameVars,
-        globals: nil
+        globals: nil,
+        pauseSequence: pauseSequence
     )
 }
 

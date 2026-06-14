@@ -54,30 +54,19 @@ extension AppDriver {
             return
         }
 
-        // A SessionIDBox lets the `onResumed` closure capture the session ID
-        // before `runForDebug` returns it. The box is written once (from the
-        // engine's queue, before any resume fires) and read many times (each
-        // .stepOver/.continueRun). Class semantics make the capture safe across
-        // the async boundary; the write happens-before the first read because the
-        // DebugSession is registered before the VM thread starts.
-        let sessionIDBox = SessionIDBox()
-
         Task { [channel] in
             let (sessionID, outcome) = await engine.runForDebug(
                 fragment,
                 breakpoints: breakpoints,
                 onPause: { snapshot in
-                    // First-pause: seed the box so onResumed can post correctly.
-                    sessionIDBox.id = snapshot.sessionID
                     channel.post(.debugPaused(snapshot))
                 },
-                onResumed: {
-                    // Posted once per advancing step/continue (ARCH-07).
-                    // `onPause` is always called before `onResumed` for a given
-                    // pause cycle, so `sessionIDBox.id` is always set here.
-                    if let id = sessionIDBox.id {
-                        channel.post(.debugResumed(id))
-                    }
+                onResumed: { id in
+                    // Posted once per advancing step/continue (ARCH-07). The
+                    // session id arrives directly (CR-009) — no shared box bridges
+                    // it from `onPause`, so an `onResumed` without a prior
+                    // `onPause` can no longer silently drop `.debugResumed`.
+                    channel.post(.debugResumed(id))
                 }
             )
             channel.post(.debugFinished(sessionID, outcome))
@@ -122,22 +111,4 @@ extension AppDriver {
     func executeRequestGlobals(_ sessionID: DebugSessionID) {
         sessionEngine?.requestGlobals(sessionID)
     }
-}
-
-// MARK: - SessionIDBox (internal to this file)
-
-/// A reference-typed wrapper for a `DebugSessionID` that is populated before
-/// the first resume fires and remains stable for the run's lifetime.
-///
-/// Used by `executeDebugRun` to bridge the session ID from the `onPause`
-/// callback (which has it first, from the snapshot) into the `onResumed`
-/// callback (which needs it to post `AppEvent.debugResumed`). The class wrapper
-/// is necessary because both closures are `@Sendable` — a shared reference is
-/// the only way to write once and read from another `@Sendable` closure.
-///
-/// Thread safety: `id` is written from the VM thread inside `onPause`, and
-/// read from the VM thread inside `onResumed`. Both callbacks fire on the same
-/// VM thread (the serial queue that runs `runForDebug`), so no lock is needed.
-final class SessionIDBox: @unchecked Sendable {
-    var id: DebugSessionID?
 }

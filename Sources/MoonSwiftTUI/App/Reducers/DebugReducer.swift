@@ -82,7 +82,7 @@ func reduceBreakpointToggle(_ s: AppState) -> (AppState, [Effect]) {
 
     // Recompute gutter marks so `○`/`●` render immediately (no separate event).
     s.codePane.gutterMarks = debugGutterMarks(
-        diagnosticMarks: diagnosticGutterMarks(s),
+        diagnosticMarks: gutterMarks(from: s.bottomPane.diagnostics),
         breakpoints: bps,
         pausedLine: s.currentDebugSnapshot?.fragmentLine
     )
@@ -198,7 +198,7 @@ func reduceDebugPaused(_ s: AppState, snapshot: DebugSnapshot) -> (AppState, [Ef
     if let sid = s.selection {
         let bps = s.breakpoints[sid] ?? []
         s.codePane.gutterMarks = debugGutterMarks(
-            diagnosticMarks: diagnosticGutterMarks(s),
+            diagnosticMarks: gutterMarks(from: s.bottomPane.diagnostics),
             breakpoints: bps,
             pausedLine: snapshot.fragmentLine
         )
@@ -243,7 +243,7 @@ func reduceDebugFinished(
     if let sid = s.selection {
         let bps = s.breakpoints[sid] ?? []
         s.codePane.gutterMarks = debugGutterMarks(
-            diagnosticMarks: diagnosticGutterMarks(s),
+            diagnosticMarks: gutterMarks(from: s.bottomPane.diagnostics),
             breakpoints: bps,
             pausedLine: nil
         )
@@ -260,6 +260,25 @@ func reduceDebugFinished(
     }
 
     return (s, [armDebugTickIfNeeded(s)].compactMap { $0 })
+}
+
+/// Handle `AppEvent.debugResumed` — VM resumed after a step or continue command.
+///
+/// Enters §6.9 Case-2 "VM running between pauses" state: clears the current
+/// snapshot so the Debug-tab renderer switches from the paused view to the
+/// "VM running…" between-pauses header. The session ID is still live; the next
+/// `debugPaused` will restore a new snapshot. Stale ID = silent no-op.
+///
+/// Moved here from `Reducer.swift` (CR-010): per §4.7, feature logic lives in
+/// the per-feature reducer file, not the top-level dispatch.
+func reduceDebugResumed(_ s: AppState, sessionID: DebugSessionID) -> (AppState, [Effect]) {
+    var s = s
+    guard s.activeDebugSessionID == sessionID else { return (s, []) }
+    s.currentDebugSnapshot = nil
+    // A latched-but-unresolved `g` is discarded on resume (§6.9): Case-2 shows the
+    // last RESOLVED globals from `lastPauseSnapshot`, never `(globals pending…)`.
+    s.debugGlobalsRequested = false
+    return (s, [])
 }
 
 // MARK: - Gutter mark helpers
@@ -326,43 +345,24 @@ private func launchDebugRun(
 
     let effects: [Effect] = [
         .debugRun(fragment, breakpoints: bps),
-        armDebugTickIfNeeded(s) ?? .startTick(interval: TickInterval.transientExpiry),
+        // Launch in flight: poll on the debug cadence until the first pause.
+        armDebugTickIfNeeded(s) ?? .startTick(interval: TickInterval.debugPoll),
     ]
     return (s, effects)
 }
 
 /// Returns a tick effect if needed, accounting for debug-session activity.
 private func armDebugTickIfNeeded(_ s: AppState) -> Effect? {
-    // A transient is showing.
+    // A transient is showing → its own expiry cadence.
     if s.transient != nil {
         return .startTick(interval: TickInterval.transientExpiry)
     }
-    // A debug session is active — keep the tick alive for UI updates.
+    // A debug session is active — keep the tick alive for UI updates on the
+    // dedicated debug-poll cadence (CR-041), not the transient-expiry one.
     if s.activeDebugSessionID != nil {
-        return .startTick(interval: TickInterval.transientExpiry)
+        return .startTick(interval: TickInterval.debugPoll)
     }
     return nil
-}
-
-/// Build diagnostic-only gutter marks from the current bottom pane state.
-///
-/// Produces `error`/`warning` keyed by 0-based fragment-relative line.
-/// Mirror of `gutterMarks(from:)` in Reducer.swift — kept here so DebugReducer
-/// can recompute the merged mark set without a cross-file call.
-private func diagnosticGutterMarks(_ s: AppState) -> [Int: GutterMark] {
-    var marks: [Int: GutterMark] = [:]
-    for d in s.bottomPane.diagnostics {
-        let line = max(0, d.line - 1)
-        switch d.severity {
-        case .error:
-            marks[line] = .error
-        case .warning:
-            if marks[line] == nil {
-                marks[line] = .warning
-            }
-        }
-    }
-    return marks
 }
 
 /// Return a disabled-action transient with the standard 1.5 s duration (ux-spec §2.4).
@@ -402,7 +402,7 @@ func reduceDebugStepKey(
     if let sid = s.selection {
         let bps = s.breakpoints[sid] ?? []
         s.codePane.gutterMarks = debugGutterMarks(
-            diagnosticMarks: diagnosticGutterMarks(s),
+            diagnosticMarks: gutterMarks(from: s.bottomPane.diagnostics),
             breakpoints: bps,
             pausedLine: nil
         )
@@ -427,7 +427,7 @@ func reduceDebugStop(_ s: AppState, sessionID: DebugSessionID) -> (AppState, [Ef
     if let sid = s.selection {
         let bps = s.breakpoints[sid] ?? []
         s.codePane.gutterMarks = debugGutterMarks(
-            diagnosticMarks: diagnosticGutterMarks(s),
+            diagnosticMarks: gutterMarks(from: s.bottomPane.diagnostics),
             breakpoints: bps,
             pausedLine: nil
         )

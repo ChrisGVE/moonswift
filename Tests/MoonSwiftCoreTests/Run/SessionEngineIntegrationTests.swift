@@ -411,7 +411,7 @@ struct SessionEngineIntegrationTracebackTests {
             intFrag("local function inner() error('kaboom') end\ninner()"),
             breakpoints: [],
             onPause: { _ in },
-            onResumed: {})
+            onResumed: { _ in })
         guard case .error(let diag, let traceback) = outcome else {
             Issue.record("expected .error, got \(outcome)")
             await engine.endSession()

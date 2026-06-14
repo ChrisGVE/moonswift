@@ -92,13 +92,14 @@ public protocol SessionEngineProtocol: Sendable {
     ///
     /// `onResumed` is called once per advancing command (`.stepOver`, `.stepInto`,
     /// `.stepOut`, `.continueRun`) — never for `.stop` or globals-only wakes
-    /// (ARCH-07 / F6.2). The AppDriver uses it to post `AppEvent.debugResumed`
-    /// so the reducer can enter §6.9 Case-2 "VM running after a pause" state.
+    /// (ARCH-07 / F6.2). It receives the resuming session's `DebugSessionID`
+    /// directly (CR-009) so the AppDriver can post `AppEvent.debugResumed(id)`
+    /// without bridging the id through a shared mutable box from `onPause`.
     func runForDebug(
         _ fragment: LuaSourceFragment,
         breakpoints: Set<Int>,
         onPause: @escaping @Sendable (DebugSnapshot) -> Void,
-        onResumed: @escaping @Sendable () -> Void
+        onResumed: @escaping @Sendable (DebugSessionID) -> Void
     ) async -> (DebugSessionID, CoreRunOutcome)
 
     /// Deliver a debug command to the live session addressed by `id`. Stale id

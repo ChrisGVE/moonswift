@@ -58,11 +58,13 @@ private func snapshot(
     callStack: [DebugFrame] = [DebugFrame(level: 0, name: "main", source: "test.lua", line: 2)],
     frameVars: [Int: ([DebugVariable], [DebugVariable])] = [:],
     globals: [DebugVariable]? = nil,
-    globalsElided: Int = 0
+    globalsElided: Int = 0,
+    pauseSequence: Int = 0
 ) -> DebugSnapshot {
     DebugSnapshot(
         sessionID: sessionID, event: .breakpoint, fragmentLine: fragmentLine,
-        callStack: callStack, frameVars: frameVars, globals: globals, globalsElided: globalsElided
+        callStack: callStack, frameVars: frameVars, globals: globals,
+        globalsElided: globalsElided, pauseSequence: pauseSequence
     )
 }
 
@@ -185,23 +187,57 @@ func debugTab_globalsRepublishPreservesNav() {
                         children: [DebugVariable(name: "a", displayValue: "1")])
                 ], []
             )
-        ]
+        ],
+        pauseSequence: 1
     )
     var state = pausedState(snapshot: fresh)
     // User expands `t`, then presses g.
     state.debugExpandedPaths = ["local:t"]
     state = reduce(state, .key(.char("g"), modifiers: [])).0
     #expect(state.debugGlobalsRequested)
-    // Adapter republishes the SAME line with globals populated.
+    // Adapter republishes the SAME pause (same sequence) with globals populated.
     let republished = snapshot(
         sessionID: sid, fragmentLine: 2,
         frameVars: fresh.frameVars,
-        globals: [DebugVariable(name: "G", displayValue: "9")]
+        globals: [DebugVariable(name: "G", displayValue: "9")],
+        pauseSequence: 1
     )
     let after = reduce(state, .debugPaused(republished)).0
     #expect(!after.debugGlobalsRequested)  // resolved
     #expect(after.debugExpandedPaths == ["local:t"])  // expansion preserved
     #expect(variableNames(buildDebugRows(after)).contains("G"))  // globals now shown
+}
+
+@Test("A new pause re-hitting the same line resets the cursor (CR-023)")
+func debugTab_loopRehitResetsNav() {
+    // Two consecutive NEW pauses on the SAME fragment line (a breakpoint inside
+    // a loop body). They differ only by pauseSequence — keying on
+    // (sessionID, fragmentLine) alone would misclassify the second as an
+    // in-place globals republish and leave a stale expansion/cursor.
+    let sid = DebugSessionID()
+    let frameVars: [Int: ([DebugVariable], [DebugVariable])] = [
+        0: (
+            [
+                DebugVariable(
+                    name: "t", displayValue: "{table}",
+                    children: [DebugVariable(name: "a", displayValue: "1")])
+            ], []
+        )
+    ]
+    let first = snapshot(
+        sessionID: sid, fragmentLine: 2, frameVars: frameVars, pauseSequence: 1)
+    var state = pausedState(snapshot: first)  // currentDebugSnapshot is non-nil
+    state.debugExpandedPaths = ["local:t"]
+    state.debugSelectedRow = 1
+    // A NEW pause on the SAME line while the prior snapshot is still live (no
+    // intervening resume nilled it). Old (sessionID, fragmentLine) keying would
+    // misclassify this as a globals republish and keep the stale cursor; the
+    // differing pauseSequence makes it correctly a fresh pause that resets.
+    let second = snapshot(
+        sessionID: sid, fragmentLine: 2, frameVars: frameVars, pauseSequence: 2)
+    let after = reduce(state, .debugPaused(second)).0
+    #expect(after.debugExpandedPaths.isEmpty)  // expansion reset for the new pause
+    #expect(after.debugSelectedRow == 0)  // cursor reset
 }
 
 // MARK: - Inline table expansion

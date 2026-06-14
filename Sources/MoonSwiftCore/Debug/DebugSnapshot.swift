@@ -155,6 +155,16 @@ public struct DebugSnapshot: Sendable {
     /// pre-existing construction site (and the no-globals path) compiles and
     /// behaves unchanged.
     public let globalsElided: Int
+    /// A per-pause monotonic sequence number, unique within a session (CR-023).
+    ///
+    /// Each fresh pause carries a new value; the in-place globals republish
+    /// (DOM-08) carries the SAME value as the pause it refreshes. The inspection
+    /// reducer uses it to tell a republish (preserve frame/expansion/cursor)
+    /// from a genuinely new pause that merely landed on the same `fragmentLine`
+    /// (a loop body re-hit) — which `(sessionID, fragmentLine)` alone could not
+    /// distinguish. `0` is the safe default so every pre-existing construction
+    /// site compiles; only the F6.0 adapter assigns real, incrementing values.
+    public let pauseSequence: Int
 
     public init(
         sessionID: DebugSessionID,
@@ -163,7 +173,8 @@ public struct DebugSnapshot: Sendable {
         callStack: [DebugFrame],
         frameVars: [Int: ([DebugVariable], [DebugVariable])],
         globals: [DebugVariable]?,
-        globalsElided: Int = 0
+        globalsElided: Int = 0,
+        pauseSequence: Int = 0
     ) {
         self.sessionID = sessionID
         self.event = event
@@ -172,5 +183,6 @@ public struct DebugSnapshot: Sendable {
         self.frameVars = frameVars
         self.globals = globals
         self.globalsElided = globalsElided
+        self.pauseSequence = pauseSequence
     }
 }

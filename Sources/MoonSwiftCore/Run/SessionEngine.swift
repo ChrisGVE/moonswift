@@ -262,7 +262,7 @@ public final class SessionEngine: SessionEngineProtocol {
         // resume seam (the adapter/engine suites that predate F6.2) compile
         // unchanged. The protocol requirement is NOT defaulted — production
         // callers (AppDriver+DebugEffects) must supply it explicitly (ARCH-07).
-        onResumed: @escaping @Sendable () -> Void = {}
+        onResumed: @escaping @Sendable (DebugSessionID) -> Void = { _ in }
     ) async -> (DebugSessionID, CoreRunOutcome) {
         // The DebugSession (mailbox owner) is created up front so its id can be
         // returned and command delivery can address it before the VM thread starts.
@@ -429,7 +429,7 @@ public final class SessionEngine: SessionEngineProtocol {
         session: DebugSession,
         baselineStdlibNames: Set<String>,
         onPause: @escaping @Sendable (DebugSnapshot) -> Void,
-        onResumed: @escaping @Sendable () -> Void
+        onResumed: @escaping @Sendable (DebugSessionID) -> Void
     ) -> CoreRunOutcome {
         dispatchPrecondition(condition: .onQueue(queue))
         guard let engine, let config else {

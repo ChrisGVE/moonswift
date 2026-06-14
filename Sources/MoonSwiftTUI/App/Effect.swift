@@ -317,6 +317,14 @@ public enum TickInterval {
     /// the reducer cancels the transient after 1.5 s (ARCHITECTURE.md §3b).
     public static let transientExpiry: Duration = .milliseconds(1_500)
 
+    /// Debug-session UI poll interval — armed while a debug session is active (or
+    /// launching) to keep the loop ticking for elapsed-time / state updates
+    /// between pauses (CR-041). A dedicated constant rather than reusing
+    /// `transientExpiry`: the two are semantically unrelated (one bounds a
+    /// status-message lifetime, this paces debug-UI refresh), so retuning one must
+    /// not silently move the other. They currently share the 1.5 s value.
+    public static let debugPoll: Duration = .milliseconds(1_500)
+
     /// Debounce window for nvim resize events (Inc-8, ARCHITECTURE.md §10.8).
     ///
     /// When a terminal resize arrives while the nvim pane is active the reducer

@@ -638,7 +638,19 @@ F5.5 acceptance criteria, CONS-02]
 
 **Debug run**: `<C-g>` starts a debug run (distinct from `r` plain run). [PRD F6]
 
-**Breakpoints**: `b` in the code pane toggles a breakpoint on the cursor line. Gutter marks: `●` (breakpoint set); a line with no breakpoint shows a blank gutter (there is no hollow-circle glyph). [PRD F6]
+**`<C-g>` preconditions** (binding transients — checked in order; the first that fails consumes the key):
+
+| # | Precondition fails when | Transient / prompt |
+|---|------------------------|--------------------|
+| a | no source loaded | `No source to debug.` |
+| b | a plain run is in progress | `A run is already in progress.` |
+| b′ | a debug run is launched but not yet paused (CR-002) | `A debug run is already starting.` |
+| c | a debug session is already active | confirmation prompt `Restart debug session? [y/N]` |
+| d | the project's Lua version is unsupported | `Debugging unavailable for this Lua version.` |
+
+A plain `r` run pressed while a debug session is active or launching is likewise refused with `Debug session active — press x to stop first.` (CR-001 — debug runs do not set `runState`, so this explicit guard prevents a deadlock). [PRD F6]
+
+**Breakpoints**: `b` in the code pane toggles a breakpoint on the cursor line. Gutter marks: `●` (breakpoint set); a line with no breakpoint shows a blank gutter (there is no hollow-circle glyph). When `b`'s context preconditions fail it consumes the key with a disabled-action transient (binding): `Breakpoints only available in the code pane` (code pane not focused), `No source loaded` (no selected/loaded fragment), or `Cursor is not on a code line` (cursor outside the fragment). [PRD F6]
 
 **While paused** (debug session active, execution stopped at a line):
 
@@ -656,7 +668,9 @@ F5.5 acceptance criteria, CONS-02]
 - **`── Locals ──`**: `<name> = <value>` per local in the current frame; `(no locals)` (binding empty-state) when the frame has none.
 - **`── Upvalues ──`**: `<name> = <value>` per upvalue; `(no upvalues)` (binding empty-state) when there are none.
 - **`── Globals ──`**: on-demand; press `g` while paused to capture (binding strings table below).
-- **`── Call Stack ──`**: one line per frame, `<Enter>` on a frame retargets the code pane to that frame's source line.
+- **`── Call Stack ──`**: one line per frame, `<Enter>` on a frame retargets the code pane to that frame's source line; `(no frames)` (binding empty-state) when the snapshot's call stack is empty.
+
+If the Debug tab is shown with neither a current snapshot nor an active session (defensive — the tab is normally only visible during a session), it renders the centered `No debug session.` (binding) placeholder.
 
 Table values support inline expansion with `<Enter>` on the value line; a depth-capped value renders `(…)` and a cyclic value renders `(cycle)` (binding markers). [PRD F6, §6.5]
 
@@ -775,6 +789,10 @@ P2 audit, #16.)
    return value only** (multi-return functions are truncated to the first). [PRD §6.3, §F5.3]
 6. If no session engine is alive (no run yet this session), the action posts the
    transient `Invoke a Lua function: run the source first.` [PRD §F5.3]
+7. If the engine is busy (a plain run or a debug session is active, so
+   introspection is not between-runs), the action posts the transient
+   `Invoke unavailable while a run or debug session is active.` rather than
+   leaking the internal engine-busy description inline (CR-021). [PRD §F5.3]
 
 ### 7.6 P3 — Completion popup and hover overlay
 
