@@ -62,7 +62,7 @@ public func render(_ state: AppState, size: TerminalSize) -> [RenderCommand] {
 
     // Modal overlays (rendered on top of everything else)
     if state.focus == .helpOverlay {
-        commands += renderHelpOverlay(size: size, theme: theme)
+        commands += renderHelpOverlay(size: size, theme: theme, scrollOffset: state.helpScrollOffset)
     }
 
     // P4 nvim overlay: conflict modal and diff view cover the code-pane area.
@@ -1783,7 +1783,11 @@ private func buildStatusBarLine(left: String, right: String, width: Int) -> Stri
 ///   - Section headers: `dim` color (secondary labels).
 ///   - Key names: `keyword` color (matches Lua keyword pink — reused for UI keys).
 ///   - Descriptions: `identifier` color (Dracula foreground — readable body text).
-private func renderHelpOverlay(size: TerminalSize, theme: ThemeState) -> [RenderCommand] {
+private func renderHelpOverlay(
+    size: TerminalSize,
+    theme: ThemeState,
+    scrollOffset: Int
+) -> [RenderCommand] {
     // Centered modal, max 60 × 20 (ux-spec §2.5).
     let overlayW: UInt16 = min(60, size.cols)
     let overlayH: UInt16 = min(20, size.rows)
@@ -1796,37 +1800,30 @@ private func renderHelpOverlay(size: TerminalSize, theme: ThemeState) -> [Render
     let descStyle = tokenStyle(.identifier, theme: theme)
     let noteStyle = dimStyle(theme)
 
-    var lines: [[Span]] = []
+    // The full content (single source of truth, shared with the reducer's scroll
+    // clamp via helpOverlayLineSpecs().count). It overflows the box, so the last
+    // overlay row is reserved for a static scroll footer and the content scrolls
+    // in the rows above it (ux-spec §2.5).
+    let specs = helpOverlayLineSpecs()
+    let contentViewport = max(1, Int(overlayH) - 1)  // -1 reserves the footer row
+    let maxOffset = max(0, specs.count - contentViewport)
+    let offset = min(max(0, scrollOffset), maxOffset)
+    let endIdx = min(offset + contentViewport, specs.count)
 
-    // Each keybinding section: header, then one line per binding.
-    // A binding row is two spans: key name (keyword color) + description (identifier color).
-    lines.append([Span("Global", style: headerStyle)])
-    for (key, action) in helpGlobalKeys {
-        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
+    func styled(_ spec: HelpLine) -> [Span] {
+        switch spec {
+        case .header(let title): return [Span(title, style: headerStyle)]
+        case .blank: return [Span("", style: headerStyle)]
+        case .row(let key, let action):
+            return helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle)
+        case .note(let text): return [Span(text, style: noteStyle)]
+        }
     }
 
-    lines.append([Span("", style: headerStyle)])
-    lines.append([Span("Navigator", style: headerStyle)])
-    for (key, action) in helpNavigatorKeys {
-        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
-    }
-
-    lines.append([Span("", style: headerStyle)])
-    lines.append([Span("Code pane", style: headerStyle)])
-    for (key, action) in helpCodePaneKeys {
-        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
-    }
-
-    lines.append([Span("", style: headerStyle)])
-    lines.append([Span("Bottom pane", style: headerStyle)])
-    for (key, action) in helpBottomPaneKeys {
-        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
-    }
-
-    // Explicit Tab note — exact string required by ux-spec §2.5, §2.2.
-    lines.append([Span("", style: noteStyle)])
-    lines.append(
-        [Span("<Tab>: cycles panes globally; cycles tabs when the bottom pane is focused.", style: noteStyle)]
+    var lines: [[Span]] = specs[offset..<endIdx].map(styled)
+    // Pad so the footer always lands on the last overlay row.
+    while lines.count < contentViewport { lines.append([Span("", style: noteStyle)]) }
+    lines.append([Span(helpOverlayFooter(canScrollUp: offset > 0, canScrollDown: offset < maxOffset), style: noteStyle)]
     )
 
     return [
@@ -1850,10 +1847,11 @@ private func helpRow(key: String, action: String, keyStyle: CellStyle, descStyle
 /// Global keybinding rows for the help overlay (ux-spec §2.3 global table).
 private let helpGlobalKeys: [(String, String)] = [
     ("r",       "Run selected source"),
-    ("x",       "Cancel run"),
+    ("x",       "Cancel run / stop debug session"),
     ("l",       "Lint selected source"),
     ("q",       "Quit"),
     ("?",       "Open/close this help"),
+    ("<C-g>",   "Start / restart a debug run"),
     ("<C-p>",   "Open project file in $EDITOR"),
     ("<C-r>",   "Reload project file"),
     ("<Tab>",   "Cycle panes / cycle bottom-pane tabs"),
@@ -1869,11 +1867,14 @@ private let helpNavigatorKeys: [(String, String)] = [
     ("j/k",     "Move selection down/up"),
     ("g",       "Jump to first entry"),
     ("G",       "Jump to last entry"),
-    ("<Enter>", "Load selected source"),
+    ("<Enter>", "Load source / invoke a live function"),
     ("o",       "Load selected source (alias)"),
     ("<Space>", "Load selected source (alias)"),
     ("/",       "Filter entries"),
     ("m",       "Open structured-file picker"),
+    ("a",       "Add a mock (Value / Function / Namespace)"),
+    ("e",       "Edit the selected mock"),
+    ("d",       "Delete the selected mock"),
 ]
 
 // swift-format-ignore
@@ -1881,7 +1882,9 @@ private let helpNavigatorKeys: [(String, String)] = [
 private let helpCodePaneKeys: [(String, String)] = [
     ("j/k",     "Scroll down/up one line"),
     ("d/u",     "Scroll down/up half-page"),
-    ("f/b",     "Scroll down/up full page"),
+    ("f",       "Scroll down full page"),
+    ("<C-b>",   "Scroll up full page"),
+    ("b",       "Toggle breakpoint on cursor line"),
     ("g/G",     "Jump to top/bottom"),
     (":N",      "Jump to line N"),
     ("n/N",     "Jump to next/previous diagnostic"),
@@ -1895,9 +1898,75 @@ private let helpBottomPaneKeys: [(String, String)] = [
     ("j/k",     "Scroll down/up"),
     ("<Enter>", "Jump code pane to error line"),
     ("y",       "Yank focused line to clipboard"),
-    ("1/2",     "Quick-jump to Output/Diagnostics tab"),
+    ("1/2/3",   "Quick-jump to Output/Diagnostics/Debug tab"),
     ("<C-l>",   "Clear output buffer"),
 ]
+
+// swift-format-ignore
+/// Paused-debug keybinding rows for the help overlay (ux-spec §2.3 paused table).
+/// Active only while a debug session is paused; the Debug tab is then in the cycle.
+private let helpPausedKeys: [(String, String)] = [
+    ("s",       "Step over"),
+    ("i",       "Step into"),
+    ("o",       "Step out"),
+    ("c",       "Continue"),
+    ("x",       "Stop the debug session"),
+    ("g",       "Capture globals (Debug tab)"),
+]
+
+/// One ordered line of the help overlay. The spec list returned by
+/// `helpOverlayLineSpecs()` is the single source of truth for the overlay's
+/// content AND its length: the renderer maps each spec to styled spans, and the
+/// reducer reads `.count` (via `helpOverlayMaxScrollOffset`) to clamp the scroll
+/// offset — so the two can never disagree on how far the overlay scrolls.
+enum HelpLine {
+    case header(String)
+    case blank
+    case row(key: String, action: String)
+    case note(String)
+}
+
+/// The full ordered content of the help overlay (ux-spec §2.3, §2.5), grouped by
+/// context. The `<Tab>` note flags the conditional `[ Debug ]` tab (UX-16).
+func helpOverlayLineSpecs() -> [HelpLine] {
+    var lines: [HelpLine] = []
+    func section(_ title: String, _ keys: [(String, String)]) {
+        if !lines.isEmpty { lines.append(.blank) }
+        lines.append(.header(title))
+        for (key, action) in keys { lines.append(.row(key: key, action: action)) }
+    }
+    section("Global", helpGlobalKeys)
+    section("Navigator", helpNavigatorKeys)
+    section("Code pane", helpCodePaneKeys)
+    section("Bottom pane", helpBottomPaneKeys)
+    section("Paused (debug session)", helpPausedKeys)
+    lines.append(.blank)
+    lines.append(.note("<Tab>: cycles panes globally; cycles tabs when the bottom pane is focused."))
+    lines.append(.note("The [ Debug ] tab is in the bottom-pane cycle only while a debug session is active."))
+    return lines
+}
+
+/// The largest valid `helpScrollOffset` for a terminal of `terminalRows` rows.
+/// Mirrors `renderHelpOverlay`'s window maths (overlay height capped at 20, last
+/// row reserved for the scroll footer) so the reducer's clamp is exact.
+func helpOverlayMaxScrollOffset(terminalRows: UInt16) -> Int {
+    let overlayH = Int(min(20, terminalRows))
+    let contentViewport = max(1, overlayH - 1)  // -1 reserves the footer row
+    return max(0, helpOverlayLineSpecs().count - contentViewport)
+}
+
+/// The static footer row: the scroll keymap plus a more-content indicator.
+private func helpOverlayFooter(canScrollUp: Bool, canScrollDown: Bool) -> String {
+    let more: String
+    switch (canScrollUp, canScrollDown) {
+    case (true, true): more = "↑↓ more"
+    case (false, true): more = "↓ more"
+    case (true, false): more = "↑ more"
+    case (false, false): more = ""
+    }
+    let keys = "↑/↓  C-d/C-u  C-f/C-b  g/G  ·  Esc close"
+    return more.isEmpty ? keys : "\(more)  ·  \(keys)"
+}
 
 // MARK: - Style helpers
 

@@ -1000,9 +1000,10 @@ private func reduceGlobalKey(
     case (.char("q"), []):
         return (s, [.cancelRun, .quit(exitCode: 0)])
 
-    // ? — open help overlay
+    // ? — open help overlay (always from the top — ux-spec §2.5)
     case (.char("?"), []):
         s.focus = .helpOverlay
+        s.helpScrollOffset = 0
         return (s, [])
 
     // <C-p> — open project file in $EDITOR
@@ -1518,13 +1519,46 @@ private func reduceHelpOverlayKey(
     modifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
     var s = s
+
+    // The keybinding list overflows the 60×20 overlay, so it scrolls
+    // (ux-spec §2.5). The viewport reserves the last overlay row for the scroll
+    // footer; `helpOverlayMaxScrollOffset` mirrors the renderer's window maths so
+    // the clamp is exact. Keymap (vim/neovim, with keyboard-nav shadows):
+    //   ↑ / ↓                line up / down
+    //   <C-u> / <C-d>        half page up / down (no arrow equivalent)
+    //   <C-b> / <C-f>        full page up / down  (PgUp / PgDn shadow)
+    //   g / G                top / bottom         (Home / End shadow)
+    let overlayH = Int(min(20, s.terminalSize.rows))
+    let contentViewport = max(1, overlayH - 1)  // -1 reserves the footer row
+    let maxOffset = helpOverlayMaxScrollOffset(terminalRows: s.terminalSize.rows)
+    let half = max(1, contentViewport / 2)
+    let full = max(1, contentViewport)
+    func clamp(_ v: Int) -> Int { min(max(0, v), maxOffset) }
+
     switch (code, modifiers) {
     case (.escape, []), (.char("?"), []):
         s.focus = .pane(.navigator)
+        s.helpScrollOffset = 0
     case (.char("q"), []):
         // `q` quits from the help overlay (ux-spec §2.5 — overlay must not
         // trap the global quit shortcut).
         return (s, [.quit(exitCode: 0)])
+    case (.down, []):
+        s.helpScrollOffset = clamp(s.helpScrollOffset + 1)
+    case (.up, []):
+        s.helpScrollOffset = clamp(s.helpScrollOffset - 1)
+    case (.char("d"), .ctrl):
+        s.helpScrollOffset = clamp(s.helpScrollOffset + half)
+    case (.char("u"), .ctrl):
+        s.helpScrollOffset = clamp(s.helpScrollOffset - half)
+    case (.char("f"), .ctrl), (.pageDown, []):
+        s.helpScrollOffset = clamp(s.helpScrollOffset + full)
+    case (.char("b"), .ctrl), (.pageUp, []):
+        s.helpScrollOffset = clamp(s.helpScrollOffset - full)
+    case (.char("g"), []), (.home, []):
+        s.helpScrollOffset = 0
+    case (.char("G"), []), (.end, []):
+        s.helpScrollOffset = maxOffset
     default:
         break
     }

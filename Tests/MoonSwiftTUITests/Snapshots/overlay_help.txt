@@ -10,10 +10,11 @@ moonswift
 |                ||                                                                                |
 |                || Global                                                                         |
 |                ||   r           Run selected source                                              |
-|                ||   x           Cancel run                                                       |
+|                ||   x           Cancel run / stop debug session                                  |
 |                ||   l           Lint selected source                                             |
 |                ||   q           Quit                                                             |
 |                ||   ?           Open/close this help                                             |
+|                ||   <C-g>       Start / restart a debug run                                      |
 |                ||   <C-p>       Open project file in $EDITOR                                     |
 |                ||   <C-r>       Reload project file                                              |
 |                ||   <Tab>       Cycle panes / cycle bottom-pane tabs                             |
@@ -22,12 +23,11 @@ moonswift
 |                ||   <C-l>       Jump focus to code pane                                          |
 |                ||   <C-j>       Jump focus to bottom pane                                        |
 |                ||                                                                                |
-|                || Navigator                                                                      |
-+----------------++-  j/k         Move selection down/up                        -------------------+
-+-------------------  g           Jump to first entry                           -------------------+
-|[ Output ] [ Diagno  G           Jump to last entry                                               |
-|                     <Enter>     Load selected source                                             |
-|                     o           Load selected source (alias)                                     |
++----------------++-Navigator                                                   -------------------+
++-------------------  j/k         Move selection down/up                        -------------------+
+|[ Output ] [ Diagno  g           Jump to first entry                                              |
+|                     G           Jump to last entry                                               |
+|                   ↓ more  ·  ↑/↓  C-d/C-u  C-f/C-b  g/G  ·  Esc close                            |
 |                                                                                                  |
 |                                                                                                  |
 |                                                                                                  |
@@ -449,6 +449,27 @@ moonswift
 12,41 fg=F8F8F2 bg=default mods=0
 12,42 fg=F8F8F2 bg=default mods=0
 12,43 fg=F8F8F2 bg=default mods=0
+12,44 fg=F8F8F2 bg=default mods=0
+12,45 fg=F8F8F2 bg=default mods=0
+12,46 fg=F8F8F2 bg=default mods=0
+12,47 fg=F8F8F2 bg=default mods=0
+12,48 fg=F8F8F2 bg=default mods=0
+12,49 fg=F8F8F2 bg=default mods=0
+12,50 fg=F8F8F2 bg=default mods=0
+12,51 fg=F8F8F2 bg=default mods=0
+12,52 fg=F8F8F2 bg=default mods=0
+12,53 fg=F8F8F2 bg=default mods=0
+12,54 fg=F8F8F2 bg=default mods=0
+12,55 fg=F8F8F2 bg=default mods=0
+12,56 fg=F8F8F2 bg=default mods=0
+12,57 fg=F8F8F2 bg=default mods=0
+12,58 fg=F8F8F2 bg=default mods=0
+12,59 fg=F8F8F2 bg=default mods=0
+12,60 fg=F8F8F2 bg=default mods=0
+12,61 fg=F8F8F2 bg=default mods=0
+12,62 fg=F8F8F2 bg=default mods=0
+12,63 fg=F8F8F2 bg=default mods=0
+12,64 fg=F8F8F2 bg=default mods=0
 12,99 fg=6272A4 bg=default mods=0
 13,0 fg=6272A4 bg=default mods=0
 13,17 fg=6272A4 bg=default mods=0
@@ -592,7 +613,6 @@ moonswift
 16,58 fg=F8F8F2 bg=default mods=0
 16,59 fg=F8F8F2 bg=default mods=0
 16,60 fg=F8F8F2 bg=default mods=0
-16,61 fg=F8F8F2 bg=default mods=0
 16,99 fg=6272A4 bg=default mods=0
 17,0 fg=6272A4 bg=default mods=0
 17,17 fg=6272A4 bg=default mods=0
@@ -630,6 +650,15 @@ moonswift
 17,50 fg=F8F8F2 bg=default mods=0
 17,51 fg=F8F8F2 bg=default mods=0
 17,52 fg=F8F8F2 bg=default mods=0
+17,53 fg=F8F8F2 bg=default mods=0
+17,54 fg=F8F8F2 bg=default mods=0
+17,55 fg=F8F8F2 bg=default mods=0
+17,56 fg=F8F8F2 bg=default mods=0
+17,57 fg=F8F8F2 bg=default mods=0
+17,58 fg=F8F8F2 bg=default mods=0
+17,59 fg=F8F8F2 bg=default mods=0
+17,60 fg=F8F8F2 bg=default mods=0
+17,61 fg=F8F8F2 bg=default mods=0
 17,99 fg=6272A4 bg=default mods=0
 18,0 fg=6272A4 bg=default mods=0
 18,17 fg=6272A4 bg=default mods=0
@@ -667,23 +696,6 @@ moonswift
 18,50 fg=F8F8F2 bg=default mods=0
 18,51 fg=F8F8F2 bg=default mods=0
 18,52 fg=F8F8F2 bg=default mods=0
-18,53 fg=F8F8F2 bg=default mods=0
-18,54 fg=F8F8F2 bg=default mods=0
-18,55 fg=F8F8F2 bg=default mods=0
-18,56 fg=F8F8F2 bg=default mods=0
-18,57 fg=F8F8F2 bg=default mods=0
-18,58 fg=F8F8F2 bg=default mods=0
-18,59 fg=F8F8F2 bg=default mods=0
-18,60 fg=F8F8F2 bg=default mods=0
-18,61 fg=F8F8F2 bg=default mods=0
-18,62 fg=F8F8F2 bg=default mods=0
-18,63 fg=F8F8F2 bg=default mods=0
-18,64 fg=F8F8F2 bg=default mods=0
-18,65 fg=F8F8F2 bg=default mods=0
-18,66 fg=F8F8F2 bg=default mods=0
-18,67 fg=F8F8F2 bg=default mods=0
-18,68 fg=F8F8F2 bg=default mods=0
-18,69 fg=F8F8F2 bg=default mods=0
 18,99 fg=6272A4 bg=default mods=0
 19,0 fg=6272A4 bg=default mods=0
 19,17 fg=6272A4 bg=default mods=0
@@ -721,6 +733,23 @@ moonswift
 19,50 fg=F8F8F2 bg=default mods=0
 19,51 fg=F8F8F2 bg=default mods=0
 19,52 fg=F8F8F2 bg=default mods=0
+19,53 fg=F8F8F2 bg=default mods=0
+19,54 fg=F8F8F2 bg=default mods=0
+19,55 fg=F8F8F2 bg=default mods=0
+19,56 fg=F8F8F2 bg=default mods=0
+19,57 fg=F8F8F2 bg=default mods=0
+19,58 fg=F8F8F2 bg=default mods=0
+19,59 fg=F8F8F2 bg=default mods=0
+19,60 fg=F8F8F2 bg=default mods=0
+19,61 fg=F8F8F2 bg=default mods=0
+19,62 fg=F8F8F2 bg=default mods=0
+19,63 fg=F8F8F2 bg=default mods=0
+19,64 fg=F8F8F2 bg=default mods=0
+19,65 fg=F8F8F2 bg=default mods=0
+19,66 fg=F8F8F2 bg=default mods=0
+19,67 fg=F8F8F2 bg=default mods=0
+19,68 fg=F8F8F2 bg=default mods=0
+19,69 fg=F8F8F2 bg=default mods=0
 19,99 fg=6272A4 bg=default mods=0
 20,0 fg=6272A4 bg=default mods=0
 20,17 fg=6272A4 bg=default mods=0
@@ -758,10 +787,6 @@ moonswift
 20,50 fg=F8F8F2 bg=default mods=0
 20,51 fg=F8F8F2 bg=default mods=0
 20,52 fg=F8F8F2 bg=default mods=0
-20,53 fg=F8F8F2 bg=default mods=0
-20,54 fg=F8F8F2 bg=default mods=0
-20,55 fg=F8F8F2 bg=default mods=0
-20,56 fg=F8F8F2 bg=default mods=0
 20,99 fg=6272A4 bg=default mods=0
 21,0 fg=6272A4 bg=default mods=0
 21,17 fg=6272A4 bg=default mods=0
@@ -844,25 +869,53 @@ moonswift
 22,54 fg=F8F8F2 bg=default mods=0
 22,55 fg=F8F8F2 bg=default mods=0
 22,56 fg=F8F8F2 bg=default mods=0
-22,57 fg=F8F8F2 bg=default mods=0
-22,58 fg=F8F8F2 bg=default mods=0
 22,99 fg=6272A4 bg=default mods=0
 23,0 fg=6272A4 bg=default mods=0
 23,17 fg=6272A4 bg=default mods=0
 23,18 fg=6272A4 bg=default mods=0
+23,20 fg=FF79C6 bg=default mods=0
+23,21 fg=FF79C6 bg=default mods=0
+23,22 fg=FF79C6 bg=default mods=0
+23,23 fg=FF79C6 bg=default mods=0
+23,24 fg=FF79C6 bg=default mods=0
+23,25 fg=FF79C6 bg=default mods=0
+23,26 fg=FF79C6 bg=default mods=0
+23,27 fg=FF79C6 bg=default mods=0
+23,28 fg=FF79C6 bg=default mods=0
+23,29 fg=FF79C6 bg=default mods=0
+23,30 fg=FF79C6 bg=default mods=0
+23,31 fg=FF79C6 bg=default mods=0
+23,32 fg=F8F8F2 bg=default mods=0
+23,33 fg=F8F8F2 bg=default mods=0
+23,34 fg=F8F8F2 bg=default mods=0
+23,35 fg=F8F8F2 bg=default mods=0
+23,36 fg=F8F8F2 bg=default mods=0
+23,37 fg=F8F8F2 bg=default mods=0
+23,38 fg=F8F8F2 bg=default mods=0
+23,39 fg=F8F8F2 bg=default mods=0
+23,40 fg=F8F8F2 bg=default mods=0
+23,41 fg=F8F8F2 bg=default mods=0
+23,42 fg=F8F8F2 bg=default mods=0
+23,43 fg=F8F8F2 bg=default mods=0
+23,44 fg=F8F8F2 bg=default mods=0
+23,45 fg=F8F8F2 bg=default mods=0
+23,46 fg=F8F8F2 bg=default mods=0
+23,47 fg=F8F8F2 bg=default mods=0
+23,48 fg=F8F8F2 bg=default mods=0
+23,49 fg=F8F8F2 bg=default mods=0
+23,50 fg=F8F8F2 bg=default mods=0
+23,51 fg=F8F8F2 bg=default mods=0
+23,52 fg=F8F8F2 bg=default mods=0
+23,53 fg=F8F8F2 bg=default mods=0
+23,54 fg=F8F8F2 bg=default mods=0
+23,55 fg=F8F8F2 bg=default mods=0
+23,56 fg=F8F8F2 bg=default mods=0
+23,57 fg=F8F8F2 bg=default mods=0
+23,58 fg=F8F8F2 bg=default mods=0
 23,99 fg=6272A4 bg=default mods=0
 24,0 fg=6272A4 bg=default mods=0
 24,17 fg=6272A4 bg=default mods=0
 24,18 fg=6272A4 bg=default mods=0
-24,20 fg=6272A4 bg=default mods=0
-24,21 fg=6272A4 bg=default mods=0
-24,22 fg=6272A4 bg=default mods=0
-24,23 fg=6272A4 bg=default mods=0
-24,24 fg=6272A4 bg=default mods=0
-24,25 fg=6272A4 bg=default mods=0
-24,26 fg=6272A4 bg=default mods=0
-24,27 fg=6272A4 bg=default mods=0
-24,28 fg=6272A4 bg=default mods=0
 24,99 fg=6272A4 bg=default mods=0
 25,0 fg=6272A4 bg=default mods=0
 25,1 fg=6272A4 bg=default mods=0
@@ -884,42 +937,15 @@ moonswift
 25,17 fg=6272A4 bg=default mods=0
 25,18 fg=6272A4 bg=default mods=0
 25,19 fg=6272A4 bg=default mods=0
-25,20 fg=FF79C6 bg=default mods=0
-25,21 fg=FF79C6 bg=default mods=0
-25,22 fg=FF79C6 bg=default mods=0
-25,23 fg=FF79C6 bg=default mods=0
-25,24 fg=FF79C6 bg=default mods=0
-25,25 fg=FF79C6 bg=default mods=0
-25,26 fg=FF79C6 bg=default mods=0
-25,27 fg=FF79C6 bg=default mods=0
-25,28 fg=FF79C6 bg=default mods=0
-25,29 fg=FF79C6 bg=default mods=0
-25,30 fg=FF79C6 bg=default mods=0
-25,31 fg=FF79C6 bg=default mods=0
-25,32 fg=F8F8F2 bg=default mods=0
-25,33 fg=F8F8F2 bg=default mods=0
-25,34 fg=F8F8F2 bg=default mods=0
-25,35 fg=F8F8F2 bg=default mods=0
-25,36 fg=F8F8F2 bg=default mods=0
-25,37 fg=F8F8F2 bg=default mods=0
-25,38 fg=F8F8F2 bg=default mods=0
-25,39 fg=F8F8F2 bg=default mods=0
-25,40 fg=F8F8F2 bg=default mods=0
-25,41 fg=F8F8F2 bg=default mods=0
-25,42 fg=F8F8F2 bg=default mods=0
-25,43 fg=F8F8F2 bg=default mods=0
-25,44 fg=F8F8F2 bg=default mods=0
-25,45 fg=F8F8F2 bg=default mods=0
-25,46 fg=F8F8F2 bg=default mods=0
-25,47 fg=F8F8F2 bg=default mods=0
-25,48 fg=F8F8F2 bg=default mods=0
-25,49 fg=F8F8F2 bg=default mods=0
-25,50 fg=F8F8F2 bg=default mods=0
-25,51 fg=F8F8F2 bg=default mods=0
-25,52 fg=F8F8F2 bg=default mods=0
-25,53 fg=F8F8F2 bg=default mods=0
-25,54 fg=F8F8F2 bg=default mods=0
-25,55 fg=F8F8F2 bg=default mods=0
+25,20 fg=6272A4 bg=default mods=0
+25,21 fg=6272A4 bg=default mods=0
+25,22 fg=6272A4 bg=default mods=0
+25,23 fg=6272A4 bg=default mods=0
+25,24 fg=6272A4 bg=default mods=0
+25,25 fg=6272A4 bg=default mods=0
+25,26 fg=6272A4 bg=default mods=0
+25,27 fg=6272A4 bg=default mods=0
+25,28 fg=6272A4 bg=default mods=0
 25,80 fg=6272A4 bg=default mods=0
 25,81 fg=6272A4 bg=default mods=0
 25,82 fg=6272A4 bg=default mods=0
@@ -993,6 +1019,9 @@ moonswift
 26,50 fg=F8F8F2 bg=default mods=0
 26,51 fg=F8F8F2 bg=default mods=0
 26,52 fg=F8F8F2 bg=default mods=0
+26,53 fg=F8F8F2 bg=default mods=0
+26,54 fg=F8F8F2 bg=default mods=0
+26,55 fg=F8F8F2 bg=default mods=0
 26,80 fg=6272A4 bg=default mods=0
 26,81 fg=6272A4 bg=default mods=0
 26,82 fg=6272A4 bg=default mods=0
@@ -1065,6 +1094,7 @@ moonswift
 27,49 fg=F8F8F2 bg=default mods=0
 27,50 fg=F8F8F2 bg=default mods=0
 27,51 fg=F8F8F2 bg=default mods=0
+27,52 fg=F8F8F2 bg=default mods=0
 27,80 fg=F8F8F2 bg=282A36 mods=0
 27,81 fg=F8F8F2 bg=282A36 mods=0
 27,82 fg=F8F8F2 bg=282A36 mods=0
@@ -1118,52 +1148,59 @@ moonswift
 28,49 fg=F8F8F2 bg=default mods=0
 28,50 fg=F8F8F2 bg=default mods=0
 28,51 fg=F8F8F2 bg=default mods=0
-28,52 fg=F8F8F2 bg=default mods=0
-28,53 fg=F8F8F2 bg=default mods=0
 28,99 fg=6272A4 bg=default mods=0
 29,0 fg=6272A4 bg=default mods=0
-29,20 fg=FF79C6 bg=default mods=0
-29,21 fg=FF79C6 bg=default mods=0
-29,22 fg=FF79C6 bg=default mods=0
-29,23 fg=FF79C6 bg=default mods=0
-29,24 fg=FF79C6 bg=default mods=0
-29,25 fg=FF79C6 bg=default mods=0
-29,26 fg=FF79C6 bg=default mods=0
-29,27 fg=FF79C6 bg=default mods=0
-29,28 fg=FF79C6 bg=default mods=0
-29,29 fg=FF79C6 bg=default mods=0
-29,30 fg=FF79C6 bg=default mods=0
-29,31 fg=FF79C6 bg=default mods=0
-29,32 fg=F8F8F2 bg=default mods=0
-29,33 fg=F8F8F2 bg=default mods=0
-29,34 fg=F8F8F2 bg=default mods=0
-29,35 fg=F8F8F2 bg=default mods=0
-29,36 fg=F8F8F2 bg=default mods=0
-29,37 fg=F8F8F2 bg=default mods=0
-29,38 fg=F8F8F2 bg=default mods=0
-29,39 fg=F8F8F2 bg=default mods=0
-29,40 fg=F8F8F2 bg=default mods=0
-29,41 fg=F8F8F2 bg=default mods=0
-29,42 fg=F8F8F2 bg=default mods=0
-29,43 fg=F8F8F2 bg=default mods=0
-29,44 fg=F8F8F2 bg=default mods=0
-29,45 fg=F8F8F2 bg=default mods=0
-29,46 fg=F8F8F2 bg=default mods=0
-29,47 fg=F8F8F2 bg=default mods=0
-29,48 fg=F8F8F2 bg=default mods=0
-29,49 fg=F8F8F2 bg=default mods=0
-29,50 fg=F8F8F2 bg=default mods=0
-29,51 fg=F8F8F2 bg=default mods=0
-29,52 fg=F8F8F2 bg=default mods=0
-29,53 fg=F8F8F2 bg=default mods=0
-29,54 fg=F8F8F2 bg=default mods=0
-29,55 fg=F8F8F2 bg=default mods=0
-29,56 fg=F8F8F2 bg=default mods=0
-29,57 fg=F8F8F2 bg=default mods=0
-29,58 fg=F8F8F2 bg=default mods=0
-29,59 fg=F8F8F2 bg=default mods=0
-29,60 fg=F8F8F2 bg=default mods=0
-29,61 fg=F8F8F2 bg=default mods=0
+29,20 fg=6272A4 bg=default mods=0
+29,21 fg=6272A4 bg=default mods=0
+29,22 fg=6272A4 bg=default mods=0
+29,23 fg=6272A4 bg=default mods=0
+29,24 fg=6272A4 bg=default mods=0
+29,25 fg=6272A4 bg=default mods=0
+29,26 fg=6272A4 bg=default mods=0
+29,27 fg=6272A4 bg=default mods=0
+29,28 fg=6272A4 bg=default mods=0
+29,29 fg=6272A4 bg=default mods=0
+29,30 fg=6272A4 bg=default mods=0
+29,31 fg=6272A4 bg=default mods=0
+29,32 fg=6272A4 bg=default mods=0
+29,33 fg=6272A4 bg=default mods=0
+29,34 fg=6272A4 bg=default mods=0
+29,35 fg=6272A4 bg=default mods=0
+29,36 fg=6272A4 bg=default mods=0
+29,37 fg=6272A4 bg=default mods=0
+29,38 fg=6272A4 bg=default mods=0
+29,39 fg=6272A4 bg=default mods=0
+29,40 fg=6272A4 bg=default mods=0
+29,41 fg=6272A4 bg=default mods=0
+29,42 fg=6272A4 bg=default mods=0
+29,43 fg=6272A4 bg=default mods=0
+29,44 fg=6272A4 bg=default mods=0
+29,45 fg=6272A4 bg=default mods=0
+29,46 fg=6272A4 bg=default mods=0
+29,47 fg=6272A4 bg=default mods=0
+29,48 fg=6272A4 bg=default mods=0
+29,49 fg=6272A4 bg=default mods=0
+29,50 fg=6272A4 bg=default mods=0
+29,51 fg=6272A4 bg=default mods=0
+29,52 fg=6272A4 bg=default mods=0
+29,53 fg=6272A4 bg=default mods=0
+29,54 fg=6272A4 bg=default mods=0
+29,55 fg=6272A4 bg=default mods=0
+29,56 fg=6272A4 bg=default mods=0
+29,57 fg=6272A4 bg=default mods=0
+29,58 fg=6272A4 bg=default mods=0
+29,59 fg=6272A4 bg=default mods=0
+29,60 fg=6272A4 bg=default mods=0
+29,61 fg=6272A4 bg=default mods=0
+29,62 fg=6272A4 bg=default mods=0
+29,63 fg=6272A4 bg=default mods=0
+29,64 fg=6272A4 bg=default mods=0
+29,65 fg=6272A4 bg=default mods=0
+29,66 fg=6272A4 bg=default mods=0
+29,67 fg=6272A4 bg=default mods=0
+29,68 fg=6272A4 bg=default mods=0
+29,69 fg=6272A4 bg=default mods=0
+29,70 fg=6272A4 bg=default mods=0
 29,99 fg=6272A4 bg=default mods=0
 30,0 fg=6272A4 bg=default mods=0
 30,99 fg=6272A4 bg=default mods=0

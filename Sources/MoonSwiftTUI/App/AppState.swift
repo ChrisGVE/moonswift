@@ -719,6 +719,12 @@ public struct AppState: Sendable {
     /// The current focus — which pane or modal receives keyboard input.
     public var focus: FocusState
 
+    /// Scroll offset (in content lines) of the `?` help overlay. The overlay's
+    /// keybinding list overflows its 60×20 box, so it scrolls (ux-spec §2.5).
+    /// Reset to 0 each time the overlay opens; clamped to the valid range by the
+    /// reducer (see `helpOverlayMaxScrollOffset`).
+    public var helpScrollOffset: Int
+
     // MARK: Theme
 
     /// Resolved theme token table and capability tier.
@@ -886,6 +892,7 @@ public struct AppState: Sendable {
         highlight: [SourceID: [HighlightSpan]] = [:],
         tomlModuleAvailable: Bool? = nil,
         focus: FocusState = .pane(.navigator),
+        helpScrollOffset: Int = 0,
         theme: ThemeState = ThemeState(),
         transient: TransientMessage? = nil,
         navigator: NavigatorState = NavigatorState(),
@@ -927,6 +934,7 @@ public struct AppState: Sendable {
         self.highlight = highlight
         self.tomlModuleAvailable = tomlModuleAvailable
         self.focus = focus
+        self.helpScrollOffset = helpScrollOffset
         self.theme = theme
         self.transient = transient
         self.navigator = navigator
