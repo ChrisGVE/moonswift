@@ -41,6 +41,13 @@ These modules must be declared in `lint.extra_modules` for the linter, but
 completions always include them — the popup shows what the engine *can* offer
 regardless of what lint has whitelisted.
 
+> **Note:** the optional `lua-language-server` integration (below) type-checks
+> against *all* catalog modules — including opt-in ones — regardless of your
+> `lint.extra_modules` declaration. So an opt-in symbol you use without declaring
+> it may draw an "undefined global" warning from luacheck while
+> lua-language-server stays quiet. Declare the module in `lint.extra_modules` to
+> bring the two layers into agreement.
+
 ## Live-mock items
 
 After a successful script run, MoonSwift captures a snapshot of the live engine
@@ -72,7 +79,8 @@ Completions and documentation are reached with two keys in the code pane:
   gesture, not an accept.
 - **`K`** on a symbol opens the hover overlay directly, without going through the
   popup. The hover overlay is a centered box showing the symbol name, its full
-  signature, and its documentation, scrolling when the text overflows.
+  signature, and its documentation. When the content overflows, scroll it with
+  `j`/`k` or `↑`/`↓` (the footer shows the scroll/close hint).
 - **`<Esc>`** dismisses the popup or the overlay; **`K`** also closes the hover
   overlay (press it again to toggle off).
 

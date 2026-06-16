@@ -809,6 +809,9 @@ P2 audit, #16.)
   overlay STILL opens and renders the symbol name (when one is resolvable) above
   the single dimmed line `(no documentation available)`. `K` is never a silent
   no-op (UX-R3-01). [PRD §6.5, F7a.2]
+- When the content overflows the box, scroll with `j`/`k` or `↑`/`↓`; the footer
+  row shows the dimmed scroll/close hint (`↑/↓` indicators appear only when more
+  content exists in that direction). [F7a.2]
 - `<Esc>` or `K` dismisses.
 
 ---

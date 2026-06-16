@@ -127,11 +127,25 @@ The server is spawned by `LuaLSProcess`
 `NvimProcessSupervisor` (ARCHITECTURE §7.3): a **direct exec** of an
 **absolute path** that is checked to be an **executable file**, an explicit
 argument vector (empty — LuaLS defaults to stdio LSP transport), and the cache
-directory as the working directory. `F_SETNOSIGPIPE` is set on the child's
-stdin so a write after the child dies surfaces as a thrown error rather than
-killing the host. Teardown is idempotent (a double-call guard prevents
-double-SIGTERM / double-close), and the child is SIGTERM'd on clean exit and on
-project reload so it never orphans.
+directory as the working directory. `F_SETNOSIGPIPE` is set on the **parent's
+write end** of the stdin pipe (the fd MoonSwift writes LSP frames to) so a write
+after the child dies surfaces as a thrown `EPIPE` rather than a `SIGPIPE` killing
+the host (macOS-only `fcntl` flag). Teardown is idempotent (a double-call guard
+prevents double-SIGTERM / double-close), and the child is SIGTERM'd on clean
+exit and on project reload so it never orphans. At app teardown the client
+terminates the child directly and does **not** await the LSP `shutdown`/`exit`
+handshake — the child is being killed regardless, and an unbounded handshake
+await under the UI-thread teardown semaphore could hang the quitting process if
+the child were wedged.
+
+> **Binary resolution threat model.** When no explicit path is configured,
+> `LuaLSClient.resolveExecutable()` walks the parent `PATH` for the first
+> executable `lua-language-server`. This trusts the developer's `PATH`: an
+> attacker who can write to a directory earlier on it (or trick the user into
+> prepending one) could substitute a binary, and there is an inherent
+> check-then-exec (TOCTOU) gap. This is the local threat model MoonSwift accepts
+> for a developer tool; the mitigation is to pass an explicit absolute path
+> (`LuaLSClient(executablePath:)`), which skips the `PATH` walk entirely.
 
 ### Curated environment (SEC-05, strict pass-list)
 
@@ -163,12 +177,31 @@ MoonSwift 1-based; severity `error` → `.error`, `warning`/`information`/`hint`
 `.warning`) into `.luals`-sourced `Diagnostic`s and merged into the Diagnostics
 tab beside the luacheck/pre-pass findings.
 
-**Degradation is silent.** When `lua-language-server` is absent from `PATH` (or
-the spawn fails), the client posts `AppEvent.lualsUnavailable` once, which shows
-the one-time status note `lua-language-server not found — using native catalog.`
-(ux-spec §5.3) and otherwise leaves the native F7a behaviour intact. If the
-child dies mid-session, document syncs degrade quietly to F7a (teardown is
-idempotent, so a racing termination is harmless).
+**Degradation is silent.** When `lua-language-server` is absent from `PATH`, the
+spawn fails, or the LSP initialize handshake fails, the client posts
+`AppEvent.lualsUnavailable` once, which shows the one-time status note
+`lua-language-server not found — using native catalog.` (ux-spec §5.3) and
+otherwise leaves the native F7a behaviour intact. The sole exception is a
+cache-write failure (e.g. disk full): it logs and stays inert **without** the
+status note, because it is a transient environment fault rather than a "not
+installed" condition — the next project load retries. If the child dies
+mid-session, document syncs degrade quietly to F7a (teardown is idempotent, so a
+racing termination is harmless).
+
+> **Effect-name divergence from the F7b PRD.** The PRD specified
+> `Effect.spawnLuaLS(projectRoot:)` and a separate `Effect.generateLuaLSMeta`.
+> The shipped code diverges (also recorded in ARCHITECTURE §12): `spawnLuaLS`
+> carries **no payload** — the reducer holds no project URL, so the driver
+> resolves it from `state.launch` at effect-execution time (mirroring
+> `.reloadProject`/`.loadSources`) — and meta generation **folds into spawn**
+> rather than a separate effect, because the no-stub rule forbids a case that
+> would always fire immediately before `spawnLuaLS`.
+
+> **Test-mode guard.** `LuaLSClient` is injected into `AppDriver` via the
+> `makeLuaLSClient: (() -> LuaLSClient)?` factory (wired in `Main.swift`). It is
+> `nil` in skeleton/test mode, which makes both `Effect.spawnLuaLS` and
+> `Effect.lualsSync` safe no-ops — tests that want LuaLS behaviour inject a
+> factory (and a real or deliberately-bogus binary path) explicitly.
 
 > **Scope note (F7b).** LuaLS document sync is wired at the `.lint` seam (each
 > `l` press feeds the current fragment), not on every keystroke — a deliberate
