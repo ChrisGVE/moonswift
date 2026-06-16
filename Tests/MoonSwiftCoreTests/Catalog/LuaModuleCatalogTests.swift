@@ -448,9 +448,21 @@ struct LuaModuleCatalogP3aTests {
         #expect(names.contains("decode"))
     }
 
-    @Test("luaLSMetaFiles returns empty array in P1")
-    func luaLSMetaFilesIsEmptyStub() {
+    @Test("luaLSMetaFiles emits one ---@meta per module plus .luarc.json (F7b)")
+    func luaLSMetaFilesGeneratesProjectFiles() {
         let files = catalog.luaLSMetaFiles()
-        #expect(files.isEmpty)
+        // F7b replaced the P1 stub: one meta file per module + a .luarc.json.
+        #expect(files.count == catalog.modules.count + 1)
+
+        // The root module's meta file is present and declares the luaswift table.
+        let root = files.first { $0.relativePath == "meta/luaswift.lua" }
+        #expect(root != nil)
+        #expect(root?.content.contains("---@meta") == true)
+
+        // The .luarc.json pins the active runtime and lists the meta library.
+        let luarc = files.first { $0.relativePath == ".luarc.json" }
+        #expect(luarc != nil)
+        #expect(luarc?.content.contains("\"runtime.version\": \"Lua 5.4\"") == true)
+        #expect(luarc?.content.contains("\"workspace.library\"") == true)
     }
 }

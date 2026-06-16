@@ -159,7 +159,10 @@ private func run(launchMode: LaunchMode) {
         runService: runService,
         lintService: lintService,
         sourceStore: sourceStore,
-        sessionEngine: sessionEngine
+        sessionEngine: sessionEngine,
+        // F7b: build a fresh lua-language-server client per project load. The
+        // client degrades silently when the binary is absent from PATH.
+        makeLuaLSClient: { LuaLSClient() }
     )
 
     // ── 6. Enter the loop ─────────────────────────────────────────────────────

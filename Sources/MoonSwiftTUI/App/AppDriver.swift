@@ -114,6 +114,18 @@ public final class AppDriver: @unchecked Sendable {
     /// single-threaded execution model does.
     var nvimSession: NvimSession?
 
+    // MARK: LuaLS client (P3 F7b, ARCHITECTURE.md §7.3)
+
+    /// Factory for the optional lua-language-server client. `nil` in skeleton /
+    /// test mode, so `.spawnLuaLS` / `.lualsSync` are no-ops; production
+    /// (Main.swift) injects `{ LuaLSClient() }`. A fresh client is built on each
+    /// project load (the prior one is torn down first).
+    let makeLuaLSClient: (@Sendable () -> LuaLSClient)?
+
+    /// The live lua-language-server client, or `nil` when none is running.
+    /// Read/written on the UI thread only (driver single-thread model).
+    var lualsClient: LuaLSClient?
+
     // MARK: Nvim cleanup Task handle (CR-003)
 
     /// Handle for the in-flight nvim cleanup Task.
@@ -183,8 +195,10 @@ public final class AppDriver: @unchecked Sendable {
         runService: (any RunServiceProtocol)? = nil,
         lintService: (any LintServiceProtocol)? = nil,
         sourceStore: SourceStore? = nil,
-        sessionEngine: (any SessionEngineProtocol)? = nil
+        sessionEngine: (any SessionEngineProtocol)? = nil,
+        makeLuaLSClient: (@Sendable () -> LuaLSClient)? = nil
     ) {
+        self.makeLuaLSClient = makeLuaLSClient
         self.channel = channel
         self.pump = pump
         self.tickSource = tickSource
@@ -435,6 +449,15 @@ public final class AppDriver: @unchecked Sendable {
 
         case .queryHover(let symbolName, let liveMocks, let tomlProbed):
             executeQueryHover(symbolName: symbolName, liveMocks: liveMocks, tomlProbed: tomlProbed)
+
+        // MARK: LuaLS effects (P3 F7b)
+        // Bodies extracted to AppDriver+LuaLSEffects.swift.
+
+        case .spawnLuaLS:
+            executeSpawnLuaLS()
+
+        case .lualsSync(let fragment):
+            executeLualsSync(fragment)
         }
     }
 
@@ -766,6 +789,18 @@ public final class AppDriver: @unchecked Sendable {
             }
             sema.wait()
             nvimCleanupTask = nil
+        }
+        // F7b: terminate the lua-language-server child so it never orphans. Block
+        // briefly on the async teardown — the child is SIGTERM'd synchronously
+        // inside it, mirroring the nvim cleanup await above.
+        if let client = lualsClient {
+            lualsClient = nil
+            let sema = DispatchSemaphore(value: 0)
+            Task {
+                await client.teardown()
+                sema.signal()
+            }
+            sema.wait()
         }
         pump.stop()
         tickSource.stop()

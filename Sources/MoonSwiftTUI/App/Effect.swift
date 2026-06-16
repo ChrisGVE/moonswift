@@ -314,6 +314,23 @@ public enum Effect: Sendable {
     /// snapshotted at reducer time, as for `.queryCompletions`.
     case queryHover(symbolName: String, liveMocks: [CompletionItem], tomlProbed: Bool)
 
+    // MARK: LuaLS (P3 F7b — optional lua-language-server, ARCHITECTURE.md §7.3)
+
+    /// Start (or restart) the lua-language-server child for the loaded project.
+    ///
+    /// AppDriver tears down any prior `LuaLSClient`, generates the catalog meta
+    /// files into the per-project cache, and spawns the server pointed at it. The
+    /// project root is resolved from current driver state (the loaded
+    /// `moonswift.toml` directory), so this case carries no payload — mirroring
+    /// `.reloadProject`/`.loadSources`. Absence degrades silently to F7a and
+    /// posts `.lualsUnavailable` once.
+    case spawnLuaLS
+
+    /// Push the current text of `fragment` to lua-language-server (full-document
+    /// sync). Emitted alongside `.lint` so a LuaLS pass accompanies each luacheck
+    /// pass. A no-op when the client is inert (binary absent / not yet spawned).
+    case lualsSync(LuaSourceFragment)
+
     // MARK: Process lifecycle
 
     /// Break the AppDriver loop, run teardown, and `exit(exitCode)`.

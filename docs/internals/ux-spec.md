@@ -452,7 +452,7 @@ Displayed as a space-separated sequence of bracketed labels. Multiple may coexis
 
 - Displayed in the left zone, replacing normal indicators for **1.5 s**. [PRD §6.5, §6.7]
 - Never stacked: a new transient replaces any active transient immediately. [PRD §6.5]
-- Examples: "Run disabled: no source selected.", "lint engine starting…", and the degraded-cancellation note `Cancellation requires a newer LuaSwift — run will finish naturally` (emitted by `RunService` only while `MOONSWIFT_LUASWIFT_22` is undefined — see ARCHITECTURE §5.3).
+- Examples: "Run disabled: no source selected.", "lint engine starting…", the degraded-cancellation note `Cancellation requires a newer LuaSwift — run will finish naturally` (emitted by `RunService` only while `MOONSWIFT_LUASWIFT_22` is undefined — see ARCHITECTURE §5.3), and the one-time LuaLS-absence note `lua-language-server not found — using native catalog.` (F7b — shown once per session on the first project load when `lua-language-server` is not on `PATH`; see `docs/internals/luals.md`).
 
 ### 5.4 Contextual hints per pane (right zone)
 
@@ -541,7 +541,7 @@ Tables rendered shallow with `{…}` beyond depth 2. `nil` and no-return both di
 ### 6.5 Diagnostics tab
 
 - **Syntax pre-pass section**: always shown, even if clean. Header: `── Syntax ──`. Content: one line per diagnostic, or `✔ No syntax errors.`. [PRD F4.1, §6.3]
-- **luacheck section**: header `── Lint ──`. Content: diagnostics sorted by line, severity prefix (`E`/`W`), or `✔ No issues found.`. [PRD §6.3]
+- **luacheck section**: header `── Lint ──`. Content: diagnostics sorted by line, severity prefix (`E`/`W`), or `✔ No issues found.`. [PRD §6.3] When the optional lua-language-server (F7b) is running, its `.luals`-sourced diagnostics are merged into this section alongside the luacheck findings (same line format and `E`/`W` prefixes; see `docs/internals/luals.md`).
 - Each diagnostic line format: `<E|W> <line>:<col> <message> [<code>]`
 - Empty overall Diagnostics tab (no pre-pass result yet, no lint run): shows `No diagnostics.` centered. [PRD §6.3]
 

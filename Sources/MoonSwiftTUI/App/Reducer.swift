@@ -101,8 +101,10 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         s.navigator.mockSelectedIndex = 0
         // F5.6: restore the saved navigator/bottom split ratios into the layout.
         applySplitRatios(&s, settings: file.settings)
-        // Re-load sources from the freshly loaded project.
-        return (s, [.loadSources])
+        // F7b: stale LuaLS diagnostics belong to the previous project file.
+        s.bottomPane.lualsDiagnostics = []
+        // Re-load sources and (re)start the optional lua-language-server.
+        return (s, [.loadSources, .spawnLuaLS])
 
     case .projectMalformed(let diag):
         s.project = .malformed(diag)
@@ -179,9 +181,11 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     case .prePassResult(let diag):
         s.bottomPane.prePassDiagnostic = diag
         if let diag {
-            // Propagate to diagnostics list and gutter marks.
-            s.bottomPane.diagnostics = [diag]
-            s.codePane.gutterMarks = gutterMarks(from: [diag])
+            // Propagate to diagnostics list and gutter marks, keeping any
+            // current LuaLS diagnostics alongside the syntax error (F7b).
+            let merged = [diag] + s.bottomPane.lualsDiagnostics
+            s.bottomPane.diagnostics = merged
+            s.codePane.gutterMarks = gutterMarks(from: merged)
         } else {
             // Clean pre-pass clears the syntax-error gutter marks while
             // preserving any luacheck diagnostics that may still be showing.
@@ -190,8 +194,33 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
 
     case .lintFinished(let diagnostics):
         s.lintState = .idle
-        s.bottomPane.diagnostics = diagnostics
-        s.codePane.gutterMarks = gutterMarks(from: diagnostics)
+        // Merge the fresh luacheck batch with the current LuaLS diagnostics so a
+        // lint pass does not drop LuaLS findings (F7b).
+        let merged = diagnostics + s.bottomPane.lualsDiagnostics
+        s.bottomPane.diagnostics = merged
+        s.codePane.gutterMarks = gutterMarks(from: merged)
+        return (s, [])
+
+    // MARK: LuaLS (F7b)
+
+    case .lualsDiagnostics(let lualsDiags):
+        // Replace the prior LuaLS batch, preserving the luacheck/pre-pass entries
+        // already in the tab, then recompute the merged list and gutter marks.
+        s.bottomPane.lualsDiagnostics = lualsDiags
+        let nonLuals = s.bottomPane.diagnostics.filter { $0.source != .luals }
+        let merged = nonLuals + lualsDiags
+        s.bottomPane.diagnostics = merged
+        s.codePane.gutterMarks = gutterMarks(from: merged)
+        return (s, [])
+
+    case .lualsUnavailable:
+        // One-time status-bar note; latch so a reload does not re-nag (F7b).
+        if !s.lualsUnavailableNoticeShown {
+            s.lualsUnavailableNoticeShown = true
+            s.transient = TransientMessage(
+                text: "lua-language-server not found — using native catalog.")
+            return (s, [armTickIfNeeded(s)].compactMap { $0 })
+        }
         return (s, [])
 
     // MARK: Highlight
@@ -1999,7 +2028,9 @@ private func tryLint(_ s: AppState) -> (AppState, [Effect]) {
     s.lintState = .running
     s.bottomPane.activeTab = .diagnostics
     let extraModules = extractExtraModules(from: s.project)
-    return (s, [.lint(fragment, extraModules: extraModules)])
+    // F7b: feed the same fragment to lua-language-server (no-op when absent), so
+    // a LuaLS pass accompanies each luacheck pass.
+    return (s, [.lint(fragment, extraModules: extraModules), .lualsSync(fragment)])
 }
 
 // MARK: - Helpers

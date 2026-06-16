@@ -182,6 +182,18 @@ public enum AppEvent: Sendable {
     /// A full luacheck pass completed with zero or more diagnostics.
     case lintFinished([Diagnostic])
 
+    // MARK: LuaLS (F7b — optional lua-language-server)
+
+    /// lua-language-server published a fresh diagnostics batch (already mapped to
+    /// `.luals`-sourced `Diagnostic`s). The reducer merges these into the
+    /// Diagnostics tab alongside the luacheck/pre-pass findings.
+    case lualsDiagnostics([Diagnostic])
+
+    /// lua-language-server is unavailable (absent from PATH, or the child failed
+    /// to spawn). The reducer shows a one-time status-bar note and otherwise
+    /// leaves the native F7a behaviour intact.
+    case lualsUnavailable
+
     // MARK: Highlighter (Highlighter callback)
 
     /// Tree-sitter highlight spans are ready for the given source. The reducer
