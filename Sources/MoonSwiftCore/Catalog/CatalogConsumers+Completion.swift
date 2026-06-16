@@ -251,7 +251,7 @@ extension MockLiveState {
 
         var items: [CompletionItem] = []
 
-        // Branch 1: mock VALUES — name + rendered value as detail.
+        // Pass 1: mock VALUES — name + rendered value as detail.
         for lv in mockValues {
             items.append(
                 CompletionItem(
@@ -264,7 +264,7 @@ extension MockLiveState {
             )
         }
 
-        // Branch 2: mock FUNCTION NAMES — name only, no value detail.
+        // Pass 2: mock FUNCTION NAMES — name only, no value detail.
         for fn in mockFunctionNames {
             items.append(
                 CompletionItem(
@@ -277,7 +277,7 @@ extension MockLiveState {
             )
         }
 
-        // Branch 1 continued: user-defined globals — same shape as mock values.
+        // Pass 3: user-defined globals — same item shape as the Pass 1 values.
         for lv in userGlobals {
             items.append(
                 CompletionItem(

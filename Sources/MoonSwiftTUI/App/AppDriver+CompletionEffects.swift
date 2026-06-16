@@ -44,10 +44,13 @@ extension AppDriver {
 
 /// Resolve a hover symbol to a `CompletionItem`, or `nil` when nothing matches.
 ///
-/// A dotted catalog symbol (`luaswift.stringx.split`) resolves to its
-/// module-level function item; a `luaswift.<table>` symbol to the namespace-level
-/// item; any other bare name falls back to the live-mock slice. Free function so
-/// it is unit-testable without the async driver.
+/// A dotted catalog symbol resolves to its module-level function item
+/// (`luaswift.stringx.split`, and also flat dotted names like
+/// `luaswift.iox.path.join` whose catalog label is `"path.join"` — CR-007); a
+/// `luaswift.<table>` symbol resolves to the namespace-level item; any other
+/// bare name falls back to the live-mock slice. Kept module-private so the
+/// Effect → driver → event pipeline stays the only catalog path (CR-018), while
+/// remaining unit-testable without the async driver.
 func resolveHoverItem(
     symbolName: String,
     liveMocks: [CompletionItem],
@@ -57,20 +60,22 @@ func resolveHoverItem(
     let catalog = LuaModuleCatalog.v0
 
     if symbolName.hasPrefix("luaswift.") {
-        let comps = symbolName.split(separator: ".").map(String.init)
-        // comps[0] == "luaswift"
-        if comps.count >= 3 {
-            let table = comps[1]
-            let function = comps[2]
+        // parts: ["luaswift", table, functionName...]. Functions may carry a
+        // dotted name (e.g. iox's "path.join"), so everything after the table is
+        // rejoined into the function label rather than taking only parts[2].
+        let parts = symbolName.split(separator: ".").map(String.init)
+        if parts.count >= 3 {
+            let table = parts[1]
+            let functionLabel = parts[2...].joined(separator: ".")
             let items = catalog.completionItems(
                 prefix: "luaswift.\(table).",
                 liveMocks: [],
                 tomlProbed: tomlProbed
             )
-            if let hit = items.first(where: { $0.label == function }) { return hit }
+            if let hit = items.first(where: { $0.label == functionLabel }) { return hit }
         }
-        if comps.count == 2 {
-            let table = comps[1]
+        if parts.count == 2 {
+            let table = parts[1]
             let items = catalog.completionItems(
                 prefix: "luaswift.",
                 liveMocks: [],

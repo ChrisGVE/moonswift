@@ -19,7 +19,10 @@ import Foundation
 
 // MARK: - CompletionKind
 
-/// How a completion item was sourced — drives glyph and color in the popup.
+/// How a completion item was sourced. Carried on every item and reserved to
+/// drive per-kind glyph/colour in the popup; the F7a renderer does not yet read
+/// it (all kinds render identically — CR-017), and no producer currently emits
+/// `.field`. Kept on the model so that differentiation is a render-only change.
 public enum CompletionKind: Sendable, Equatable, Hashable {
     /// A luaswift.* module table (e.g. `luaswift.json`).
     case module
