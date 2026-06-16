@@ -97,9 +97,10 @@ func renderHoverOverlay(
 
     var lines: [[Span]] = specs[offset..<endIdx].map(styled)
     while lines.count < contentViewport { lines.append([Span("", style: dimStyle)]) }
-    lines.append(
-        [Span(hoverFooter(canScrollUp: offset > 0, canScrollDown: offset < maxOffset), style: dimStyle)]
-    )
+    let canScrollUp = offset > 0
+    let canScrollDown = offset < maxOffset
+    let footer = hoverFooter(canScrollUp: canScrollUp, canScrollDown: canScrollDown)
+    lines.append([Span(footer, style: dimStyle)])
 
     return [
         .clear(rect: overlayRect),

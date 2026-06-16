@@ -33,7 +33,9 @@ enum LuaLSDiagnosticMapper {
     ///   leaves the mapping to implementation).
     /// - Position: LSP line/character are 0-based; MoonSwift line/column are
     ///   1-based, hence the `+ 1`.
-    static func map(lspDiagnostic d: LanguageServerProtocol.Diagnostic) -> MoonSwiftCore.Diagnostic {
+    static func map(lspDiagnostic d: LanguageServerProtocol.Diagnostic)
+        -> MoonSwiftCore.Diagnostic
+    {
         let severity: MoonSwiftCore.Diagnostic.Severity = (d.severity == .error) ? .error : .warning
         return MoonSwiftCore.Diagnostic(
             severity: severity,
@@ -48,6 +50,8 @@ enum LuaLSDiagnosticMapper {
     /// Render the LSP diagnostic code (an `Int`-or-`String` union) as a string,
     /// or `nil` when the server supplied no code.
     private static func codeString(_ code: DiagnosticCode?) -> String? {
+        // `DiagnosticCode` is the ChimeHQ LSP library's two-type union:
+        // `.optionA` = the integer code, `.optionB` = the string code.
         switch code {
         case .optionA(let intCode): return String(intCode)
         case .optionB(let stringCode): return stringCode

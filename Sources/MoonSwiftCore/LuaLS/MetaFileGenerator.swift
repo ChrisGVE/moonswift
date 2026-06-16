@@ -57,8 +57,8 @@ public enum MetaFileGenerator {
         }
         if !declaredSubtables.isEmpty { lines.append("") }
 
-        for function in module.functions {
-            lines.append(contentsOf: functionDeclaration(qualified: qualified, function: function))
+        for fn in module.functions {
+            lines.append(contentsOf: functionDeclaration(qualified: qualified, fn: fn))
             lines.append("")
         }
 
@@ -87,22 +87,22 @@ public enum MetaFileGenerator {
 
     /// The annotated declaration lines for one function: doc comment, `@param`
     /// per parameter, `@return`, and the stub `function … end`.
-    private static func functionDeclaration(qualified: String, function: CatalogFunction) -> [String] {
+    private static func functionDeclaration(qualified: String, fn: CatalogFunction) -> [String] {
         var lines: [String] = []
-        if let doc = function.doc, !doc.isEmpty {
+        if let doc = fn.doc, !doc.isEmpty {
             for docLine in doc.split(separator: "\n", omittingEmptySubsequences: false) {
                 lines.append("---\(docLine)")
             }
         }
-        for param in function.params {
+        for param in fn.params {
             let optional = param.isOptional ? "?" : ""
             lines.append("---@param \(param.name)\(optional) \(param.type ?? "any")")
         }
-        if let returns = function.returns, !returns.isEmpty {
+        if let returns = fn.returns, !returns.isEmpty {
             lines.append("---@return \(returns)")
         }
-        let signature = function.params.map { $0.name }.joined(separator: ", ")
-        lines.append("function \(qualified).\(function.name)(\(signature)) end")
+        let signature = fn.params.map { $0.name }.joined(separator: ", ")
+        lines.append("function \(qualified).\(fn.name)(\(signature)) end")
         return lines
     }
 }
