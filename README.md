@@ -16,6 +16,12 @@ A terminal (TUI) workbench for testing Lua code written against
   Output tab with return-value display and wall-clock timing
 - **Lint** — two-layer analysis with `l`: a fast syntax pre-pass on every load
   plus a full embedded luacheck pass on demand
+- **Completions & hover** — `<C-space>` opens a completion popup for the
+  `luaswift.*` namespace plus post-run live-mock names; `K` (or `<Enter>` from
+  the popup) shows a hover overlay with the symbol's signature and docs.
+  Optionally, when [`lua-language-server`][luals] is on `PATH`, its type-aware
+  diagnostics are merged into the Diagnostics tab (silent degrade to the native
+  catalog when absent)
 - **Mocking** — stub the sharing-area boundary in `moonswift.toml`: serve Swift
   values (`[[mock.value]]`) and Swift-backed functions (`[[mock.function]]`) to
   the script, edit them live in the navigator (`a`/`e`/`d`), and invoke a
@@ -149,9 +155,12 @@ Press `?` inside MoonSwift for the complete per-pane reference.
 - [Sources](docs/user/sources.md) — loading .lua files, field designations, JSONPath subset
 - [Running](docs/user/running.md) — execution, output capture, limits, sandbox
 - [Linting](docs/user/linting.md) — two-layer lint, catalog modules, extra_modules
+- [Completions](docs/user/completions.md) — completion popup, hover overlay, live-mock items, optional `lua-language-server`
 - [Mocking](docs/user/mocking.md) — mock values/functions, the navigator section, Lua invocation, mock sessions
 - [Debugging](docs/user/debugging.md) — debug run, breakpoints, stepping, variable inspection, tracebacks
 - [Editing and write-back](docs/user/editing-and-write-back.md) — embedded Neovim, `$EDITOR` fallback, write-back contract, conflict handling
+
+[luals]: https://github.com/LuaLS/lua-language-server
 
 ## Building from source
 

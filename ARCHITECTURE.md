@@ -1230,6 +1230,22 @@ on `exit(70)` paths.
   path containing spaces needs a wrapper script (documented). A failed
   exec restores the terminal and shows a graceful transient message —
   never a crash or a stranded screen.
+- **LuaLS spawn + environment (P3b F7b, SEC-05/SEC-06):** when
+  `lua-language-server` is on `PATH`, `LuaLSProcess` spawns it with the same
+  hardening as nvim — absolute-path + `isExecutableFile` checks, an explicit
+  (empty) argument vector, no shell — but with the **opposite environment
+  policy**. nvim inherits the full parent environment (it is trusted, vendored
+  config); LuaLS gets a **curated allow-list built from scratch**
+  (`LuaLSEnvironment`): only `PATH`, `HOME`, `TMPDIR`, `LANG`, and the `LC_*` /
+  `XDG_*` prefixes pass through. Because it is a **pass-list, not a deny-list**,
+  every credential a developer shell carries (`AWS_*`, `GITHUB_TOKEN`,
+  `*_TOKEN`, `*_API_KEY`, `*_SECRET*`, …) is dropped by default — including
+  newly-invented variables. The child's working directory is the per-project
+  cache (`~/Library/Caches/moonswift/luals/<sha256-of-realpath'd-toml>/`, mode
+  0700) holding generated `---@meta`/`.luarc.json`; orphaned caches are evicted
+  only when their source path no longer resolves AND the entry is >30 days old.
+  Teardown is idempotent and SIGTERMs the child on clean exit and reload, so it
+  never orphans. Full design: `docs/internals/luals.md`.
 - **nvim spawn (P4 F8b):** nvim is located via `NVIM_PATH` env override
   or `PATH` search. When `NVIM_PATH` is set it **must** satisfy
   `hasPrefix("/")` AND `isExecutableFile` — rejection is logged and
@@ -2460,3 +2476,62 @@ With LuaSwift #19 (`LuaRuntimeFailure { message, line, traceback, frames }`) and
 are faithful. The heuristic `LuaErrorLineParser` is DELETED (§5.3). Error mapping
 lives in `MoonSwiftCore/Diagnostics/LuaErrorDiagnostics.swift`; traceback render
 is `MoonSwiftTUI/Render` (TracebackRenderTests gate the exact output).
+
+## 12. Completions subsystem (P3 — catalog completions, hover, optional LuaLS)
+
+The completions subsystem is the third consumer of the single `LuaModuleCatalog`
+(after luacheck globals in P1 and meta-file generation in P3b). It has two
+layers: an always-present **native** layer (catalog + live mocks, F7a) and an
+**optional** type-aware layer backed by `lua-language-server` (F7b). Per §4.7,
+no feature logic lives in `Reducer.swift`/`Renderer.swift` — only minimal
+exhaustive-switch dispatch lines; the logic lives in dedicated extension/view
+files.
+
+### 12.1 Native completions and hover (F7a)
+
+- **Source of truth:** `LuaModuleCatalog.completionItems(prefix:liveMocks:tomlProbed:)`
+  (`Catalog/CatalogConsumers+Completion.swift`) merges static `luaswift.*`
+  catalog items with post-run live-mock names. The query is **pure** (no engine
+  call, PERF-03) — `liveMocks`/`tomlProbed` are snapshotted by the reducer.
+- **Flow:** the reducer emits `Effect.queryCompletions` / `Effect.queryHover`;
+  `AppDriver+CompletionEffects` runs the pure query on a background `Task` and
+  posts `AppEvent.completionsReady` / `.hoverReady`. `CompletionReducer` handles
+  popup navigation and the `FocusState` transitions (`.completionPopup`,
+  `.hoverOverlay`); `CompletionView`/`HoverView` render them. Trigger contract:
+  the popup activates only on an explicit dot after a known prefix
+  (`luaswift.`, `luaswift.json.`, …).
+
+### 12.2 Optional lua-language-server (F7b)
+
+When `lua-language-server` is on `PATH`, a long-lived `LuaLSClient` actor (owned
+by `AppDriver`) adds a type-aware diagnostics layer:
+
+- **Meta generation** is pure and Core-side: `MetaFileGenerator`
+  (`MoonSwiftCore/LuaLS/`) turns the catalog into one `---@meta` file per module
+  plus a `.luarc.json` (`runtime.version = Lua 5.4`, `workspace.library`,
+  `diagnostics.globals`). It is deterministic, so a hash of its output backs the
+  `meta-version` regeneration sentinel.
+- **Cache + spawn + transport** are TUI-side (`MoonSwiftTUI/LuaLS/`):
+  `LuaLSCache` owns the per-project 0700 cache (`<project-hash>` =
+  SHA-256 of the realpath'd `moonswift.toml`, SEC-06) and the 30-day AND-predicate
+  eviction (DATA-N02); `LuaLSProcess` is the hardened subprocess transport
+  (curated env per §7.3, idempotent SIGTERM teardown); `LuaLSDiagnosticMapper`
+  maps LSP diagnostics (0-based) to MoonSwift `Diagnostic`s (1-based, `.luals`
+  source).
+- **Wiring:** two effects (`Effect.spawnLuaLS` on project load — tears down any
+  prior client, prepares the cache, spawns; `Effect.lualsSync` alongside each
+  `.lint` — full-document sync of the current fragment) and two events
+  (`AppEvent.lualsDiagnostics` — merged into the Diagnostics tab beside luacheck,
+  kept in a separate `BottomPaneState.lualsDiagnostics` field so a lint pass
+  never drops them; `AppEvent.lualsUnavailable` — one-time status note). The
+  client is injected via a factory (`makeLuaLSClient`) that is `nil` in
+  skeleton/test mode, so the effects are no-ops there.
+- **Degradation:** absent binary or mid-session child death degrades silently to
+  the F7a native layer; teardown is idempotent so a racing termination is
+  harmless. Document sync is wired at the `.lint` seam (a deliberate minimal
+  coupling), not per-keystroke.
+
+Full design + supply-chain audit: `docs/internals/luals.md`. Effect names diverge
+from the F7b PRD's `spawnLuaLS(projectRoot:)`/`generateLuaLSMeta` — the reducer
+has no project URL (the driver resolves it from `state.launch`) and meta-gen folds
+into spawn rather than a separate effect (the no-stub rule forbids a dead case).

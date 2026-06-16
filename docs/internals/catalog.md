@@ -100,15 +100,24 @@ and are automatically nested one level deeper by `luacheckGlobals`.
 for `ProjectValidation.validate(_:extraModulesAllowList:)` and all
 `ProjectStore.load` variants. Tests that need isolation pass explicit closures.
 
-### completionItems (P3a stub)
+### completionItems (P3a)
 
-`LuaModuleCatalog.v0.completionItems(prefix:)` returns `[]` in P1. P3a replaces
-the body with filtered completion construction from the catalog data.
+`LuaModuleCatalog.v0.completionItems(prefix:liveMocks:tomlProbed:)`
+(`Catalog/CatalogConsumers+Completion.swift`) builds the completion list for a
+known prefix from the catalog data, merged with post-run live-mock names. The
+query is pure (no engine call, PERF-03). See `docs/user/completions.md` for the
+user-facing behaviour.
 
-### luaLSMetaFiles (P3b stub)
+### luaLSMetaFiles (P3b)
 
-`LuaModuleCatalog.v0.luaLSMetaFiles()` returns `[]` in P1. P3b generates
-`.luarc/meta/luaswift.*.lua` files from the catalog data.
+`LuaModuleCatalog.v0.luaLSMetaFiles()` (`Catalog/CatalogConsumers+Meta.swift`)
+delegates to the pure `MetaFileGenerator` (`MoonSwiftCore/LuaLS/`) to produce one
+`meta/<qualified>.lua` `---@meta` file per module plus a `.luarc.json`
+(`runtime.version`, `workspace.library`, `diagnostics.globals`). The output is
+deterministic, which lets a stable hash of it back the `meta-version` sentinel
+that triggers regeneration when the catalog changes. The TUI-side `LuaLSClient`
+writes these files into the per-project cache and points
+`lua-language-server` at them — see `docs/internals/luals.md`.
 
 ## Signature authoring (F7a.0, task #17)
 

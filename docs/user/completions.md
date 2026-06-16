@@ -86,3 +86,30 @@ The popup activates only on an explicit dot after a known prefix
 (`luaswift.`, `luaswift.json.`, etc.). Partial prefixes (`lua`, `luaswift`)
 do not trigger completions. This keeps the list focused and avoids spurious
 suggestions for non-luaswift identifiers.
+
+## Optional `lua-language-server`
+
+If [`lua-language-server`][luals] (LuaLS) is on your `PATH`, MoonSwift uses it as
+an **optional** type-aware analysis backend on top of the built-in completions.
+When you lint (`l`), MoonSwift feeds the current fragment to LuaLS along with
+generated type descriptions of the `luaswift.*` namespace, and merges any
+diagnostics it reports into the **Diagnostics** tab beside the luacheck findings
+(same `E`/`W` format).
+
+This is entirely additive and degrades silently:
+
+- **LuaLS installed** — you get extra type-aware diagnostics (undefined fields on
+  `luaswift.*` tables, undefined globals, type checks LuaLS surfaces by default)
+  in addition to the native catalog completions and luacheck.
+- **LuaLS absent** — completions and luacheck work exactly as documented above;
+  on the first project load you see a one-time status note
+  `lua-language-server not found — using native catalog.` and nothing else
+  changes.
+
+Install it with `brew install lua-language-server` (or any method that puts the
+binary on `PATH`). MoonSwift runs it with a curated, credential-free environment
+and generates its type files into a per-project cache under
+`~/Library/Caches/moonswift/luals/`. See
+[`docs/internals/luals.md`](../internals/luals.md) for the full design.
+
+[luals]: https://github.com/LuaLS/lua-language-server

@@ -58,6 +58,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   overflows. A symbol with no documentation — or a `K` that lands on no known
   symbol — still opens the overlay, showing `(no documentation available)`; `K`
   is never a silent no-op.
+- Optional `lua-language-server` integration (F7b): when the binary is on
+  `PATH`, MoonSwift spawns it as a stdio LSP child, feeds it generated `---@meta`
+  type files describing the `luaswift.*` namespace (cached per project under
+  `~/Library/Caches/moonswift/luals/`), and merges its type-aware diagnostics
+  into the Diagnostics tab. The child runs with a credential-free curated
+  environment. When the binary is absent, completions/luacheck are unchanged and
+  a one-time note `lua-language-server not found — using native catalog.` is
+  shown. See `docs/internals/luals.md`.
 
 #### Layout
 
