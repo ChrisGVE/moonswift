@@ -263,6 +263,23 @@ struct ResolveHoverItemTests {
         #expect(item?.detail != nil)  // F7a.0 signature enrichment
     }
 
+    @Test("resolves a flat dotted-name function (luaswift.iox.path.join) — CR-007")
+    func resolvesDottedSubtableFunction() {
+        // iox models nested paths as flat dotted labels ("path.join"); the symbol
+        // luaswift.iox.path.join must rejoin parts[2...] to match, not just parts[2].
+        let item = resolveHoverItem(symbolName: "luaswift.iox.path.join", liveMocks: [], tomlProbed: false)
+        #expect(item != nil)
+        #expect(item?.label == "path.join")
+    }
+
+    @Test("resolves a two-component symbol to the module-level item")
+    func resolvesModuleTable() {
+        let item = resolveHoverItem(symbolName: "luaswift.json", liveMocks: [], tomlProbed: false)
+        #expect(item != nil)
+        #expect(item?.label == "json")
+        #expect(item?.kind == .module)
+    }
+
     @Test("returns nil for an unknown symbol")
     func unknownReturnsNil() {
         #expect(resolveHoverItem(symbolName: "luaswift.nope.zzz", liveMocks: [], tomlProbed: false) == nil)

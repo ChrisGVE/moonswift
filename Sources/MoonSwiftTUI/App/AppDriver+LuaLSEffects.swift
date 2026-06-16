@@ -22,7 +22,9 @@ extension AppDriver {
     /// Skeleton/test mode (no `makeLuaLSClient`) is a no-op. Only `.project`
     /// launches spawn a server — `.quickFile`/`.empty` have no `moonswift.toml`
     /// to hash for the cache, so they fall back to the native F7a catalog.
-    /// Any prior client is torn down before the new one starts.
+    /// The prior client is torn down before this client's `start()` runs;
+    /// concurrent re-spawns are made safe by the `torndown` latch inside
+    /// `LuaLSClient` (a retired client neither resurrects nor posts diagnostics).
     func executeSpawnLuaLS() {
         guard let makeLuaLSClient else { return }
         guard case .project(let dir) = state.launch else { return }
