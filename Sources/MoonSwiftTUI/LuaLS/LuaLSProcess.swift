@@ -37,7 +37,9 @@ final class LuaLSProcess: @unchecked Sendable {
     /// from its stdout. Message framing is applied by `JSONRPCServerConnection`.
     let dataChannel: DataChannel
 
-    /// Whether the child is still running (used by teardown tests).
+    /// Whether the child is still running (used by teardown tests). Reads
+    /// `Process.isRunning`, which is internally synchronised by Foundation, so
+    /// this getter needs no `stateQueue` hop (CR-013).
     var isRunning: Bool { process.isRunning }
 
     private init(
@@ -52,7 +54,23 @@ final class LuaLSProcess: @unchecked Sendable {
         self.dataChannel = DataChannel(
             writeHandler: { [weak stdinHandle, writeQueue] data in
                 guard let stdinHandle else { return }
-                try writeQueue.sync { try stdinHandle.write(contentsOf: data) }
+                // Serialise stdin writes on `writeQueue` WITHOUT blocking the
+                // cooperative pool: the write handler is `async`, so suspend the
+                // task on a continuation the queue resumes, rather than
+                // `writeQueue.sync` which would pin a pool thread for the
+                // duration of the pipe write (CR-002). Ordering and error
+                // propagation are preserved by the serial queue + continuation.
+                try await withCheckedThrowingContinuation {
+                    (cont: CheckedContinuation<Void, Error>) in
+                    writeQueue.async {
+                        do {
+                            try stdinHandle.write(contentsOf: data)
+                            cont.resume()
+                        } catch {
+                            cont.resume(throwing: error)
+                        }
+                    }
+                }
             },
             dataSequence: stream
         )
@@ -118,8 +136,10 @@ final class LuaLSProcess: @unchecked Sendable {
             onExit(p.terminationStatus)
         }
 
-        // Avoid SIGPIPE if we write after the child has died — surfaces as a
-        // thrown EPIPE on the write queue instead of killing the host process.
+        // Set F_SETNOSIGPIPE on the PARENT's write end of the stdin pipe (macOS
+        // -only fcntl flag; absent on Linux, but MoonSwift is macOS-only). A
+        // write after the child has died then surfaces as a thrown EPIPE on the
+        // write queue instead of a SIGPIPE killing the host process.
         _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
 
         try proc.run()

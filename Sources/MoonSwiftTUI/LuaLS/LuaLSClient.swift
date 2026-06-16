@@ -42,6 +42,12 @@ public actor LuaLSClient {
     private var listenTask: Task<Void, Never>?
     private var workspaceDir: URL?
 
+    /// Set once `teardown()` runs. A started-then-retired client checks this
+    /// after every suspension so a re-spawn race cannot resurrect it or let it
+    /// post stale diagnostics for a project that has already been replaced
+    /// (CR-005).
+    private var torndown = false
+
     /// Open document URIs mapped to their last LSP version (didOpen → 1, then
     /// monotonically increasing didChange versions).
     private var documentVersions: [String: Int] = [:]
@@ -55,9 +61,14 @@ public actor LuaLSClient {
     /// Resolve, prepare, and spawn the server for the project whose config is
     /// `tomlPath`, generating `metaFiles` into the cache first.
     ///
-    /// Degrades silently when the binary is absent or the spawn fails: calls
-    /// `onUnavailable` (once, by the caller's contract) and leaves the client
-    /// inert. On success, published diagnostics flow to `onDiagnostics`.
+    /// Degrades to the native catalog on every failure path: the binary is
+    /// absent, the spawn fails, or the LSP initialize handshake fails — each
+    /// logs, calls `onUnavailable` (once, by the caller's contract), and leaves
+    /// the client inert. The sole exception is a cache-write failure (e.g. disk
+    /// full): it logs and returns WITHOUT `onUnavailable`, because it is a
+    /// transient environment fault rather than a "LuaLS not installed" condition
+    /// — the next project load retries. On success, published diagnostics flow
+    /// to `onDiagnostics`.
     public func start(
         tomlPath: URL,
         metaFiles: [GeneratedFile],
@@ -69,17 +80,20 @@ public actor LuaLSClient {
             return
         }
 
-        // Best-effort housekeeping: drop long-orphaned caches before adding ours.
-        // Done only when LuaLS is actually present, so an absent binary touches
+        // Eviction housekeeping + cache preparation are blocking filesystem work
+        // (directory enumeration, SHA-256 of every meta file, many writes). Run
+        // them off the actor's executor so they never stall a queued `sync()`
+        // (CR-004). Done only when LuaLS is present, so an absent binary touches
         // no filesystem state.
-        LuaLSCache.evictStale(now: Date())
-
         let dir: URL
         do {
-            dir = try LuaLSCache.prepare(metaFiles: metaFiles, tomlPath: tomlPath)
+            dir = try await Task.detached(priority: .utility) {
+                LuaLSCache.evictStale(now: Date())
+                return try LuaLSCache.prepare(metaFiles: metaFiles, tomlPath: tomlPath)
+            }.value
         } catch {
             // A cache-write failure is not a "not found" condition — log and
-            // degrade silently without the misleading status note.
+            // degrade silently without the misleading status note (see doc above).
             Logger.shared.error("LuaLS cache preparation failed: \(error)")
             return
         }
@@ -114,7 +128,26 @@ public actor LuaLSClient {
 
         // Kick the initialize handshake so diagnostics flow without waiting for
         // the first document notification.
-        _ = try? await initializing.initializeIfNeeded()
+        do {
+            _ = try await initializing.initializeIfNeeded()
+        } catch {
+            // A torn-down client lost a re-spawn race during the handshake — stay
+            // silent (CR-005). Otherwise the handshake genuinely failed: retire
+            // the half-open client and fall back to the catalog (CR-010).
+            if !torndown {
+                Logger.shared.info(
+                    "LuaLS initialize handshake failed: \(error) — using native catalog")
+                await teardown()
+                onUnavailable()
+            }
+            return
+        }
+        // A concurrent teardown may have raced this start to completion (rapid
+        // re-spawn). If so, reap the child we just spawned and stay silent — a
+        // newer client is now the live one (CR-005).
+        if torndown {
+            await teardown()
+        }
     }
 
     /// Push the current text of `fragment` to the server as a full-document
@@ -150,12 +183,16 @@ public actor LuaLSClient {
     }
 
     /// Terminate the server and release all resources. Idempotent.
+    ///
+    /// Terminates the child directly (SIGTERM via `LuaLSProcess.terminate`)
+    /// rather than awaiting the LSP `shutdown`/`exit` handshake: at teardown the
+    /// child is being killed regardless, and an unbounded `shutdownAndExit()`
+    /// await would hang the quitting UI thread forever if the child is wedged
+    /// (the AppDriver blocks on this via a semaphore) — CR-003.
     public func teardown() async {
+        torndown = true
         listenTask?.cancel()
         listenTask = nil
-        if let server {
-            try? await server.shutdownAndExit()
-        }
         process?.terminate()
         process = nil
         server = nil
@@ -172,6 +209,9 @@ public actor LuaLSClient {
     ) {
         listenTask = Task {
             for await event in server.eventSequence {
+                // A retired client must not post stale diagnostics for a project
+                // that has already been replaced by a re-spawn (CR-005).
+                if torndown { break }
                 guard case .notification(let notification) = event,
                     case .textDocumentPublishDiagnostics(let params) = notification
                 else { continue }
