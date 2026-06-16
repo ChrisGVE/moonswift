@@ -78,7 +78,14 @@ enum LuaLSCache {
         fileManager: FileManager = .default
     ) throws -> URL {
         let root = root ?? cacheRoot(fileManager: fileManager)
-        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        // 0700 on the root too, not just the per-project dir: a world-listable
+        // root leaks app presence + the set of project-hash names to other local
+        // users on a shared machine (CR-008).
+        try fileManager.createDirectory(
+            at: root,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
 
         let dir = root.appendingPathComponent(projectHash(forToml: tomlPath), isDirectory: true)
         try fileManager.createDirectory(
@@ -113,10 +120,26 @@ enum LuaLSCache {
     ) throws {
         // Drop the stale meta directory wholesale so removed modules don't linger.
         let metaDir = dir.appendingPathComponent(MetaFileGenerator.metaDirectory, isDirectory: true)
-        try? fileManager.removeItem(at: metaDir)
+        if fileManager.fileExists(atPath: metaDir.path) {
+            do {
+                try fileManager.removeItem(at: metaDir)
+            } catch {
+                // A removal failure (locked/permission) leaves stale module files
+                // that LuaLS would still load; surface it rather than swallow
+                // (CR-020).
+                Logger.shared.info("LuaLS stale meta-dir removal failed: \(error)")
+            }
+        }
 
+        let dirPath = dir.standardizedFileURL.path
         for file in files {
-            let dest = dir.appendingPathComponent(file.relativePath)
+            let dest = dir.appendingPathComponent(file.relativePath).standardizedFileURL
+            // Reject any relativePath that escapes the cache dir (`..` / absolute).
+            // All current paths are compile-time constants, but the public
+            // GeneratedFile type offers no guard, so confine writes here (CR-009).
+            guard dest.path.hasPrefix(dirPath + "/") else {
+                throw LuaLSCacheError.pathEscapesCache(file.relativePath)
+            }
             try fileManager.createDirectory(
                 at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             try file.content.write(to: dest, atomically: true, encoding: .utf8)
@@ -155,4 +178,11 @@ enum LuaLSCache {
             }
         }
     }
+}
+
+/// Errors raised while preparing the LuaLS cache.
+enum LuaLSCacheError: Error, Equatable {
+    /// A generated file's `relativePath` resolved outside the cache directory
+    /// (absolute path or `..` traversal) — refused rather than written (CR-009).
+    case pathEscapesCache(String)
 }
