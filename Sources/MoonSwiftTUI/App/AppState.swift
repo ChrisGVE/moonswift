@@ -303,13 +303,17 @@ public struct BottomPaneState: Sendable, Equatable {
     public var activeTab: Tab
     /// Output lines from the current/last run (capped at 1000 — ARCH §3c).
     public var outputBuffer: [String]
-    /// Diagnostics shown in the Diagnostics tab: the luacheck/pre-pass findings
-    /// merged with the most recent LuaLS batch (`lualsDiagnostics`). The renderer
-    /// reads this single list.
+    /// Diagnostics shown in the Diagnostics tab: the merged display list the
+    /// renderer reads. It is recomputed by the reducer's `remergeDiagnostics`
+    /// helper from the three independent source fields below — never assigned
+    /// directly — so the merge is uniform across every event that touches a
+    /// source (F7b). Order: pre-pass, then luacheck, then LuaLS.
     public var diagnostics: [Diagnostic]
+    /// The most recent luacheck batch (`.luacheck` source), held separately so a
+    /// LuaLS push (or a syntax pre-pass) never drops it (F7b).
+    public var luacheckDiagnostics: [Diagnostic]
     /// The most recent LuaLS-published diagnostics (`.luals` source), held
-    /// separately so a luacheck pass that replaces `diagnostics` does not drop
-    /// them (F7b). Re-merged into `diagnostics` by the reducer.
+    /// separately so a luacheck pass never drops them (F7b).
     public var lualsDiagnostics: [Diagnostic]
     /// Diagnostic from the most recent syntax pre-pass (nil = clean).
     public var prePassDiagnostic: Diagnostic?
@@ -334,6 +338,7 @@ public struct BottomPaneState: Sendable, Equatable {
         activeTab: Tab = .output,
         outputBuffer: [String] = [],
         diagnostics: [Diagnostic] = [],
+        luacheckDiagnostics: [Diagnostic] = [],
         lualsDiagnostics: [Diagnostic] = [],
         prePassDiagnostic: Diagnostic? = nil,
         scrollOffset: Int = 0,
@@ -343,6 +348,7 @@ public struct BottomPaneState: Sendable, Equatable {
         self.activeTab = activeTab
         self.outputBuffer = outputBuffer
         self.diagnostics = diagnostics
+        self.luacheckDiagnostics = luacheckDiagnostics
         self.lualsDiagnostics = lualsDiagnostics
         self.prePassDiagnostic = prePassDiagnostic
         self.scrollOffset = scrollOffset

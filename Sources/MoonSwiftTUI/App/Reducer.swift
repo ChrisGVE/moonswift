@@ -101,8 +101,12 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         s.navigator.mockSelectedIndex = 0
         // F5.6: restore the saved navigator/bottom split ratios into the layout.
         applySplitRatios(&s, settings: file.settings)
-        // F7b: stale LuaLS diagnostics belong to the previous project file.
+        // F7b: every diagnostic source belongs to the previous project file —
+        // clear all three and re-merge so the tab/gutter reflect the new project.
+        s.bottomPane.luacheckDiagnostics = []
         s.bottomPane.lualsDiagnostics = []
+        s.bottomPane.prePassDiagnostic = nil
+        remergeDiagnostics(&s)
         // Re-load sources and (re)start the optional lua-language-server.
         return (s, [.loadSources, .spawnLuaLS])
 
@@ -179,38 +183,28 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         return (s, [])
 
     case .prePassResult(let diag):
+        // Record the new syntax-pre-pass state (nil = clean) and re-merge. A
+        // clean pass now correctly drops the stale syntax-error gutter mark; an
+        // error pass keeps luacheck and LuaLS findings alongside it (F7b).
         s.bottomPane.prePassDiagnostic = diag
-        if let diag {
-            // Propagate to diagnostics list and gutter marks, keeping any
-            // current LuaLS diagnostics alongside the syntax error (F7b).
-            let merged = [diag] + s.bottomPane.lualsDiagnostics
-            s.bottomPane.diagnostics = merged
-            s.codePane.gutterMarks = gutterMarks(from: merged)
-        } else {
-            // Clean pre-pass clears the syntax-error gutter marks while
-            // preserving any luacheck diagnostics that may still be showing.
-        }
+        remergeDiagnostics(&s)
         return (s, [])
 
     case .lintFinished(let diagnostics):
         s.lintState = .idle
-        // Merge the fresh luacheck batch with the current LuaLS diagnostics so a
-        // lint pass does not drop LuaLS findings (F7b).
-        let merged = diagnostics + s.bottomPane.lualsDiagnostics
-        s.bottomPane.diagnostics = merged
-        s.codePane.gutterMarks = gutterMarks(from: merged)
+        // Replace the luacheck batch and re-merge; the pre-pass and LuaLS
+        // findings are preserved by the uniform merge (F7b).
+        s.bottomPane.luacheckDiagnostics = diagnostics
+        remergeDiagnostics(&s)
         return (s, [])
 
     // MARK: LuaLS (F7b)
 
     case .lualsDiagnostics(let lualsDiags):
-        // Replace the prior LuaLS batch, preserving the luacheck/pre-pass entries
-        // already in the tab, then recompute the merged list and gutter marks.
+        // Replace the LuaLS batch and re-merge; the pre-pass and luacheck
+        // findings are preserved by the uniform merge (F7b). No per-push filter.
         s.bottomPane.lualsDiagnostics = lualsDiags
-        let nonLuals = s.bottomPane.diagnostics.filter { $0.source != .luals }
-        let merged = nonLuals + lualsDiags
-        s.bottomPane.diagnostics = merged
-        s.codePane.gutterMarks = gutterMarks(from: merged)
+        remergeDiagnostics(&s)
         return (s, [])
 
     case .lualsUnavailable:
@@ -2102,6 +2096,22 @@ private func tickEffectsAfterRunEnds(_ s: AppState) -> [Effect] {
         return [tick]
     }
     return [.stopTick]
+}
+
+/// Recompute the merged diagnostics display list and gutter marks from the three
+/// independent sources MoonSwift maintains: the syntax pre-pass (0 or 1), the
+/// luacheck batch, and the LuaLS batch (F7b). Every reducer arm that mutates one
+/// source calls this so the merge stays uniform — no arm reconstructs the list
+/// from a partial set, which previously dropped luacheck on a syntax error and
+/// dropped the pre-pass on a lint pass. Order (pre-pass → luacheck → LuaLS)
+/// matches the Diagnostics-tab reading order.
+func remergeDiagnostics(_ s: inout AppState) {
+    var merged: [Diagnostic] = []
+    if let pre = s.bottomPane.prePassDiagnostic { merged.append(pre) }
+    merged.append(contentsOf: s.bottomPane.luacheckDiagnostics)
+    merged.append(contentsOf: s.bottomPane.lualsDiagnostics)
+    s.bottomPane.diagnostics = merged
+    s.codePane.gutterMarks = gutterMarks(from: merged)
 }
 
 /// Build gutter marks from a diagnostic array.
