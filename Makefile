@@ -27,8 +27,14 @@ FFI_HEADER_DST := $(REPO_ROOT)/Sources/CRatatuiFFI/include/ratatui_ffi.h
 export MOONSWIFT_SHIM_SOURCE  := 1
 export LUASWIFT_INCLUDE_TOMLKIT := 1
 
+# Installation prefix for `make install` / `make uninstall`. Override on the
+# command line, e.g. `make install PREFIX=$HOME/.local`.
+PREFIX     ?= /usr/local
+BINDIR     := $(PREFIX)/bin
+BIN_NAME   := mswift
+
 # Phony targets have no corresponding files; always re-run when requested.
-.PHONY: build test clean reset shim
+.PHONY: build test clean reset shim install uninstall
 
 # ── shim ──────────────────────────────────────────────────────────────────────
 # Build the Rust static library and regenerate the cbindgen header.
@@ -113,6 +119,29 @@ test:
 reset:
 	@echo "==> Resetting SPM manifest cache (swift package reset)"
 	swift package reset
+
+# ── install ─────────────────────────────────────────────────────────────────
+# Build (source mode) and copy the `mswift` binary onto PATH at $(BINDIR).
+#
+# Source-mode binaries link libratatui_ffi.dylib by ABSOLUTE path into this
+# repo's rust/ratatui-ffi/target/release (see otool -L). The installed binary
+# therefore keeps working from anywhere AS LONG AS this checkout stays put —
+# moving or deleting the repo breaks the installed command. This target exists
+# for local exercise of a real `mswift` (e.g. the e2e/ fixtures), not for
+# distribution; the shippable artifact is the release xcframework build
+# (ARCHITECTURE.md §5.4), produced by the release workflow.
+install: build
+	@echo "==> Installing $(BIN_NAME) -> $(BINDIR)/$(BIN_NAME)"
+	@mkdir -p $(BINDIR)
+	install -m 0755 $(REPO_ROOT)/.build/debug/$(BIN_NAME) $(BINDIR)/$(BIN_NAME)
+	@echo "==> Installed. Run '$(BIN_NAME) --version' to verify it is on PATH."
+
+# ── uninstall ─────────────────────────────────────────────────────────────────
+# Remove the installed binary. Leaves the build tree and the repo untouched.
+uninstall:
+	@echo "==> Removing $(BINDIR)/$(BIN_NAME)"
+	@rm -f $(BINDIR)/$(BIN_NAME)
+	@echo "==> Uninstalled."
 
 # ── clean ─────────────────────────────────────────────────────────────────────
 # Remove build artifacts from both the Rust shim and the Swift package.

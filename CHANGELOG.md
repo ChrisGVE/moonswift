@@ -247,7 +247,7 @@ standalone `.lua` files.
 - `RenderBackend` protocol with a production `RatatuiKitBackend`, a
   `CommandInterpreter`, and an FFI-free `RecordingRenderBackend` test double.
 
-#### CLI (moonswift)
+#### CLI (mswift)
 
 - Typed argument parser with `sysexits`-style exit codes (0 success, 64 usage,
   65 data error, 70 internal error).
@@ -284,7 +284,7 @@ standalone `.lua` files.
   tag → GitHub release with artifact upload → build-provenance attestation
   (`actions/attest-build-provenance`) → clean x86_64 verify job (`swift build`
   in binaryTarget mode, no Rust toolchain).  Also builds and attaches a
-  notarization-ready universal `moonswift` binary.
+  notarization-ready universal `mswift` binary.
 - `RELEASING.md` — documents the release pipeline, the branch-protection bypass
   allowance setup for `github-actions[bot]`, the `TAP_DISPATCH_TOKEN` Homebrew
   secret, recovery procedures, and notarization instructions.
@@ -303,7 +303,7 @@ standalone `.lua` files.
   table, `MouseKind` enum, `FFICellWriter.writeCells` bitfield extractions)
   to preserve readability alignment while allowing mechanical formatting
   everywhere else.
-- SPM package skeleton: targets `moonswift`, `MoonSwiftCore`, `MoonSwiftTUI`,
+- SPM package skeleton: targets `mswift`, `MoonSwiftCore`, `MoonSwiftTUI`,
   `RatatuiKit`, `CRatatuiFFI`, `CTreeSitterTOML`; Swift 6 language mode;
   macOS 13 minimum.
 - Vendored ratatui-ffi Rust shim (fork of holo-q/ratatui-ffi) in
@@ -371,7 +371,7 @@ standalone `.lua` files.
   test instead of silently passing.
 - Lint prewarm engine-init failure is reported via `onFailed` rather than
   swallowed.
-- Release pipeline: the distributable universal `moonswift` binary is now
+- Release pipeline: the distributable universal `mswift` binary is now
   force-statically linked against the Rust shim (the source-mode build
   otherwise links the dylib, whose `install_name` is an absolute build-tree
   path — producing a `dyld: Library not loaded` failure on any other machine).

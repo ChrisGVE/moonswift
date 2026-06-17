@@ -18,7 +18,7 @@
 #     6. Dispatch to ChrisGVE/homebrew-tap (formula bump PR)
 #     7. Verify job: clean checkout of the new tag + plain swift build
 #
-# The distributable `moonswift` universal binary is force-statically-linked
+# The distributable `mswift` universal binary is force-statically-linked
 # against the shim (dylib removed before the source-mode build) and otool-
 # verified self-contained, so it runs on any machine and via Homebrew.
 #
@@ -165,14 +165,14 @@ jobs:
           echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
           echo "Checksum: ${CHECKSUM}"
 
-      # ── Phase 4: Build universal moonswift binary (notarization-ready) ───
+      # ── Phase 4: Build universal mswift binary (notarization-ready) ───
       # Build the Swift package in binaryTarget mode using the XCFramework
       # we just assembled (which isn't uploaded yet — we use the local copy
       # via a temporary source-mode shim build to produce the universal binary,
       # then strip back to binaryTarget for the release commit).
       #
       # Strategy: build arm64 and x86_64 separately via SDKROOT overrides,
-      # then lipo the two moonswift executables into a universal binary.
+      # then lipo the two mswift executables into a universal binary.
 
       - name: Cache SPM packages
         uses: actions/cache@v4
@@ -182,7 +182,7 @@ jobs:
           restore-keys: |
             spm-release-${{ runner.os }}-
 
-      # The distributable `moonswift` binary must be self-contained.  Source
+      # The distributable `mswift` binary must be self-contained.  Source
       # mode links the Rust shim, and `ld` prefers libratatui_ffi.dylib over
       # the .a when both are present — but the dylib's install_name is an
       # absolute build-tree path (and Package.swift embeds an rpath into the
@@ -200,7 +200,7 @@ jobs:
           rm -f rust/ratatui-ffi/target/x86_64-apple-darwin/release/libratatui_ffi.dylib
           rm -f rust/ratatui-ffi/target/release/libratatui_ffi.dylib
 
-      - name: Build moonswift arm64 (source mode, shim from XCFramework build)
+      - name: Build mswift arm64 (source mode, shim from XCFramework build)
         env:
           MOONSWIFT_SHIM_SOURCE: "1"
         run: |
@@ -210,10 +210,10 @@ jobs:
             -Xlinker -L"$PWD/rust/ratatui-ffi/target/aarch64-apple-darwin/release" \
             -Xlinker -lratatui_ffi
 
-      - name: Copy arm64 moonswift binary
-        run: cp .build/aarch64-apple-macosx/release/moonswift moonswift_arm64
+      - name: Copy arm64 mswift binary
+        run: cp .build/aarch64-apple-macosx/release/mswift mswift_arm64
 
-      - name: Build moonswift x86_64 (source mode, shim from XCFramework build)
+      - name: Build mswift x86_64 (source mode, shim from XCFramework build)
         env:
           MOONSWIFT_SHIM_SOURCE: "1"
         run: |
@@ -223,13 +223,13 @@ jobs:
             -Xlinker -L"$PWD/rust/ratatui-ffi/target/x86_64-apple-darwin/release" \
             -Xlinker -lratatui_ffi
 
-      - name: Copy x86_64 moonswift binary
-        run: cp .build/x86_64-apple-macosx/release/moonswift moonswift_x86_64
+      - name: Copy x86_64 mswift binary
+        run: cp .build/x86_64-apple-macosx/release/mswift mswift_x86_64
 
-      - name: Create universal moonswift binary (lipo)
+      - name: Create universal mswift binary (lipo)
         run: |
-          lipo -create moonswift_arm64 moonswift_x86_64 -output moonswift_universal
-          echo "Universal moonswift arches: $(lipo -archs moonswift_universal)"
+          lipo -create mswift_arm64 mswift_x86_64 -output mswift_universal
+          echo "Universal mswift arches: $(lipo -archs mswift_universal)"
 
       # Distribution gate: the binary must carry no dynamic dependency on the
       # Rust shim (see the force-static step above).  A leftover libratatui_ffi
@@ -237,16 +237,16 @@ jobs:
       # loaded` on a user's machine (and via Homebrew) — fail the release here.
       - name: Verify the universal binary is self-contained (no shim dylib)
         run: |
-          if otool -L moonswift_universal | grep -q "libratatui_ffi"; then
-            echo "ERROR: moonswift_universal links libratatui_ffi dynamically — not distributable."
-            otool -L moonswift_universal
+          if otool -L mswift_universal | grep -q "libratatui_ffi"; then
+            echo "ERROR: mswift_universal links libratatui_ffi dynamically — not distributable."
+            otool -L mswift_universal
             exit 1
           fi
-          echo "moonswift_universal is self-contained (static shim)."
-          otool -L moonswift_universal
+          echo "mswift_universal is self-contained (static shim)."
+          otool -L mswift_universal
 
-      - name: Zip universal moonswift binary
-        run: zip moonswift_universal.zip moonswift_universal
+      - name: Zip universal mswift binary
+        run: zip mswift_universal.zip mswift_universal
 
       # ── Phase 5 (two-phase protocol): Bot commit updating Package.swift ──
       # The predictable artifact URL (known before the release exists) and
@@ -331,7 +331,7 @@ jobs:
           | File | Description |
           |------|-------------|
           | \`CRatatuiFFI.xcframework.zip\` | Universal XCFramework (arm64 + x86_64 static lib + cbindgen header) |
-          | \`moonswift_universal.zip\` | Universal \`moonswift\` binary (notarization-ready) |
+          | \`mswift_universal.zip\` | Universal \`mswift\` binary (notarization-ready) |
 
           ### sha256 (CRatatuiFFI.xcframework.zip)
           \`\`\`
@@ -351,7 +351,7 @@ jobs:
           A plain \`swift build\` resolves and downloads it automatically.
           " \
             CRatatuiFFI.xcframework.zip \
-            moonswift_universal.zip
+            mswift_universal.zip
 
       # ── Phase 8: Generate build-provenance attestation ───────────────────
       # Produces a signed SLSA-style attestation for the XCFramework zip and
@@ -366,7 +366,7 @@ jobs:
       - name: Generate build-provenance attestation (universal binary)
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: moonswift_universal.zip
+          subject-path: mswift_universal.zip
 
       # ── Phase 9: Publish to the Homebrew tap ─────────────────────────────
       # After the release + artifacts exist, notify ChrisGVE/homebrew-tap so it
@@ -385,9 +385,9 @@ jobs:
       #     -f version=<X.Y.Z> -f darwin_universal_sha256=<sha>
       # See RELEASING.md §3 (PAT scope) and §6 (recovery).
 
-      - name: Compute moonswift_universal.zip sha256 (for Homebrew)
+      - name: Compute mswift_universal.zip sha256 (for Homebrew)
         id: brew-sha
-        run: echo "sha256=$(shasum -a 256 moonswift_universal.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        run: echo "sha256=$(shasum -a 256 mswift_universal.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch release to the Homebrew tap
         id: tap-dispatch
@@ -461,13 +461,13 @@ jobs:
       - name: Build Swift package (plain swift build, binaryTarget mode)
         run: swift build
 
-      - name: Verify moonswift binary was produced
+      - name: Verify mswift binary was produced
         run: |
-          BIN=".build/debug/moonswift"
+          BIN=".build/debug/mswift"
           if [ ! -f "$BIN" ]; then
             echo "ERROR: $BIN not found after swift build"
             exit 1
           fi
-          echo "moonswift binary: $BIN"
+          echo "mswift binary: $BIN"
           file "$BIN"
           echo "Build verified successfully."

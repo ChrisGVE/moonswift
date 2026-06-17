@@ -117,8 +117,8 @@ let package = Package(
 
     products: [
         .executable(
-            name: "moonswift",
-            targets: ["moonswift"]
+            name: "mswift",
+            targets: ["mswift"]
         )
     ],
 
@@ -319,17 +319,17 @@ let package = Package(
             swiftSettings: swiftTargetSettings
         ),
 
-        // MARK: - moonswift (executable)
+        // MARK: - mswift (executable)
         //
         // Entry point: arg parsing, signal handlers, terminal init,
         // AppDriver bootstrap, exit codes. Contains no domain or UI logic.
 
         .executableTarget(
-            name: "moonswift",
+            name: "mswift",
             dependencies: [
                 "MoonSwiftTUI"
             ],
-            path: "Sources/moonswift",
+            path: "Sources/mswift",
             swiftSettings: swiftTargetSettings
         ),
 

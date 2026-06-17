@@ -1,5 +1,5 @@
-// File: Sources/moonswift/ShimEventSource.swift
-// Location: Sources/moonswift/
+// File: Sources/mswift/ShimEventSource.swift
+// Location: Sources/mswift/
 // Role: Production conformance of `EventSource` that delegates to the
 //       RatatuiKit `pollEvent(timeout:pumpThread:)` free function. Lives in
 //       the executable target so the test targets (which link no FFI shim)
@@ -11,8 +11,8 @@
 // `MoonSwiftTUITests` can inject `ScriptedEventSource` without linking the
 // shim. The production implementation belongs here because only the
 // executable target is allowed to link both `MoonSwiftTUI` and `RatatuiKit`.
-// (ARCHITECTURE.md §5.1, §5.2; dependency rule: moonswift → MoonSwiftTUI
-// → MoonSwiftCore; moonswift also imports RatatuiKit for the shim wiring.)
+// (ARCHITECTURE.md §5.1, §5.2; dependency rule: mswift → MoonSwiftTUI
+// → MoonSwiftCore; mswift also imports RatatuiKit for the shim wiring.)
 
 import Foundation
 import MoonSwiftTUI

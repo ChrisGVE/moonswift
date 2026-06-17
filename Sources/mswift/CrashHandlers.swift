@@ -1,5 +1,5 @@
-// File: Sources/moonswift/CrashHandlers.swift
-// Location: Sources/moonswift/
+// File: Sources/mswift/CrashHandlers.swift
+// Location: Sources/mswift/
 // Role: Fatal-signal handlers that restore the terminal before the process
 //       dies. Installed before terminal init so they are always active, but
 //       rffi_emergency_restore is a guarded no-op until the shim's INITIALIZED

@@ -1,5 +1,5 @@
-// File: Sources/moonswift/Main.swift
-// Location: Sources/moonswift/
+// File: Sources/mswift/Main.swift
+// Location: Sources/mswift/
 // Role: Process entry point. Parses CLI arguments, installs signal handlers
 //       (guarded no-ops until terminal init, ARCHITECTURE.md §3a/§3f), loads
 //       the project file, initialises the terminal, constructs and starts the
@@ -57,7 +57,7 @@ struct MoonSwift {
             exit(ExitCode.success)
 
         case .usageError(let message):
-            fputs("moonswift: \(message)\n", stderr)
+            fputs("mswift: \(message)\n", stderr)
             exit(ExitCode.usage)
 
         case .projectCwd(let url):
@@ -102,7 +102,7 @@ private func run(launchMode: LaunchMode) {
     do {
         terminal = try Terminal()
     } catch {
-        fputs("moonswift: terminal init failed — \(error)\n", stderr)
+        fputs("mswift: terminal init failed — \(error)\n", stderr)
         exit(ExitCode.software)
     }
 

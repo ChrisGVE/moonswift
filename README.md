@@ -65,7 +65,7 @@ A terminal (TUI) workbench for testing Lua code written against
 3. Launch MoonSwift in the project directory:
 
    ```sh
-   moonswift
+   mswift
    ```
 
 4. Press `r` to run, `l` to lint. Press `?` for the full keybinding reference.

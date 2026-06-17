@@ -30,7 +30,7 @@ A single `workflow_dispatch` run performs every step in the correct order:
 3. **Tag** — the release tag (e.g. `v0.5.0`) points at **that commit**, not
    at the pre-checksum HEAD.
 4. **Release** — GitHub release is created; the XCFramework zip and a
-   notarization-ready universal `moonswift` binary are uploaded as assets.
+   notarization-ready universal `mswift` binary are uploaded as assets.
 5. **Attest** — build-provenance attestations are generated for both artifacts
    via `actions/attest-build-provenance`.
 6. **Verify** — a clean x86_64 runner checks out the tag and runs a plain
@@ -45,7 +45,7 @@ A single `workflow_dispatch` run performs every step in the correct order:
 | Artifact | Description |
 |----------|-------------|
 | `CRatatuiFFI.xcframework.zip` | Universal XCFramework wrapping the Rust FFI static lib + regenerated cbindgen header.  Referenced by `Package.swift`'s `binaryTarget`. |
-| `moonswift_universal.zip` | Universal `moonswift` CLI binary (arm64 + x86_64), shim statically linked and `otool`-verified self-contained (notarization-ready, runs via Homebrew). |
+| `mswift_universal.zip` | Universal `mswift` CLI binary (arm64 + x86_64), shim statically linked and `otool`-verified self-contained (notarization-ready, runs via Homebrew). |
 | Provenance attestations | SLSA-style attestations for both zips, signed by GitHub's OIDC infrastructure.  Verified with `gh attestation verify`. |
 | Homebrew formula PR | A formula-bump PR opened in `ChrisGVE/homebrew-tap` (`Formula/moonswift.rb`); merge it to publish `brew install ChrisGVE/tap/moonswift`. |
 
@@ -98,7 +98,7 @@ The build job's final step sends a cross-repo `repository_dispatch`, which
 >
 > ```sh
 > SHA=$(gh release download vX.Y.Z -R ChrisGVE/moonswift \
->   --pattern moonswift_universal.zip -O - | shasum -a 256 | cut -d' ' -f1)
+>   --pattern mswift_universal.zip -O - | shasum -a 256 | cut -d' ' -f1)
 > gh workflow run update-moonswift.yml -R ChrisGVE/homebrew-tap \
 >   -f version=X.Y.Z -f darwin_universal_sha256="$SHA"
 > ```
@@ -132,7 +132,7 @@ Steps:
    - Lipo a universal static lib.
    - Regenerate the cbindgen header.
    - Wrap in an XCFramework and zip it.
-   - Build the universal `moonswift` binary with the shim **statically**
+   - Build the universal `mswift` binary with the shim **statically**
      linked (the dylib is removed first; an `otool -L` gate fails the release
      if any `libratatui_ffi` load command survives), so the artifact runs on
      any machine and via Homebrew.
@@ -148,7 +148,7 @@ Steps:
    then complete.
 
 > **Before bumping the version:** the `--version` string is hard-coded at
-> `Sources/moonswift/CLIArguments.swift` (`versionString = "moonswift X.Y.Z"`).
+> `Sources/mswift/CLIArguments.swift` (`versionString = "mswift X.Y.Z"`).
 > It MUST match the release version, or the Homebrew formula's `test do`
 > (`assert_match version`) fails.  Bump it in the same change-set that prepares
 > the release.
@@ -212,7 +212,7 @@ correctly, but if it does:
 
 ## 7. Notarization (post-release, optional)
 
-The `moonswift_universal.zip` artifact contains the universal `moonswift`
+The `mswift_universal.zip` artifact contains the universal `mswift`
 binary in a state ready for Apple notarization.  Notarization is optional for
 a CLI tool distributed via GitHub but may be desired for Gatekeeper
 compatibility on end-user machines.
@@ -222,15 +222,15 @@ To notarize after a release:
 ```sh
 # Download the binary from the release:
 gh release download vX.Y.Z --repo ChrisGVE/moonswift \
-  --pattern moonswift_universal.zip
-unzip moonswift_universal.zip
+  --pattern mswift_universal.zip
+unzip mswift_universal.zip
 
 # Sign with your Developer ID (requires a signing certificate):
 codesign --sign "Developer ID Application: <Name> (<TeamID>)" \
-  --options runtime moonswift_universal
+  --options runtime mswift_universal
 
 # Notarize (requires App Store Connect API key):
-xcrun notarytool submit moonswift_universal \
+xcrun notarytool submit mswift_universal \
   --apple-id <APPLE_ID> \
   --team-id <TEAM_ID> \
   --password <APP_SPECIFIC_PASSWORD> \
@@ -244,4 +244,4 @@ xcrun notarytool submit moonswift_universal \
 | Variable | Where set | Purpose |
 |----------|-----------|---------|
 | `LUASWIFT_INCLUDE_TOMLKIT=1` | Every swift build step in `release.yml` | LuaSwift's manifest reads this at evaluation time; the release binary must always include `luaswift.toml` (ARCHITECTURE.md §5.4). |
-| `MOONSWIFT_SHIM_SOURCE` | **Not set** in binaryTarget build steps; set to `1` only for the source-mode shim build that produces the universal `moonswift` binary | Controls whether `Package.swift` declares `CRatatuiFFI` as a stub C target or a binaryTarget (ARCHITECTURE.md §5.4). |
+| `MOONSWIFT_SHIM_SOURCE` | **Not set** in binaryTarget build steps; set to `1` only for the source-mode shim build that produces the universal `mswift` binary | Controls whether `Package.swift` declares `CRatatuiFFI` as a stub C target or a binaryTarget (ARCHITECTURE.md §5.4). |

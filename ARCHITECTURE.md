@@ -71,7 +71,7 @@ Why this shape:
 
 ```mermaid
 flowchart TB
-    subgraph exe["moonswift (executable)"]
+    subgraph exe["mswift (executable)"]
         CLI["Main / CLI<br/>arg parse · exit codes"]
     end
 
@@ -159,7 +159,7 @@ above — *input-class* (called only from the pump thread) and
 *render/terminal-class* (called only from the UI thread) — and asserts the
 calling thread in debug builds (§5.2).
 
-Dependency rule (binding, from PRD §4.1): `moonswift → MoonSwiftTUI →
+Dependency rule (binding, from PRD §4.1): `mswift → MoonSwiftTUI →
 MoonSwiftCore`; `MoonSwiftTUI → RatatuiKit → CRatatuiFFI`. `MoonSwiftCore`
 never imports `MoonSwiftTUI` or `RatatuiKit`. Only `RatatuiKit` contains FFI
 calls.
@@ -1082,7 +1082,7 @@ via `ProcessInfo` (established SPM pattern).
   root; verified at F0.3. A `.systemLibrary` target takes
   **no** `linkerSettings` — hence the stub-C-target design.
   **Flagged consequence:** `unsafeFlags` makes a package unconsumable as a
-  dependency of other packages; harmless for the `moonswift` executable,
+  dependency of other packages; harmless for the `mswift` executable,
   but it means the deferred "SwiftRatatui" extraction (§14 PRD) must be
   **binaryTarget-only for consumers** — source mode can never be its
   public face.
@@ -1259,7 +1259,7 @@ on `exit(70)` paths.
   nvim home/data/cache dirs are redirected to a 0700 temp directory
   created per-session; this prevents nvim plugins from loading and
   eliminates cross-session state. `signal(SIGPIPE, SIG_IGN)` is
-  installed at process startup (`Sources/moonswift/main.swift`) so a
+  installed at process startup (`Sources/mswift/main.swift`) so a
   write to a dead nvim pipe surfaces as `EPIPE` / `.ioFailure` rather
   than SIGPIPE termination.
 - **Temp files** (`$EDITOR` fallback path, P4): created atomically with
@@ -1295,7 +1295,7 @@ on `exit(70)` paths.
 
 Highest wins; each layer overrides only the keys it sets:
 
-1. CLI arguments (`moonswift <path>`, future flags)
+1. CLI arguments (`mswift <path>`, future flags)
 2. Project file `moonswift.toml`
 3. User config `~/Library/Application Support/moonswift/config.toml`
 4. Built-in defaults
@@ -1330,7 +1330,7 @@ audited against the tree.
 ### Swift targets
 
 ```
-Sources/moonswift/
+Sources/mswift/
   Main.swift                 ~120  entry, signal handlers, AppDriver bootstrap, exit codes
   CLIArguments.swift          ~80  --version/--help/path parsing
 
@@ -1679,7 +1679,7 @@ sequenceDiagram
     AD->>CB: write(col:row:char:style:) per cell, flush(to:writer) once per frame (UI thread)
 ```
 
-`--clean` and the unconditional hardening options prevent the user's full plugin stack from running inside MoonSwift's process. XDG_CONFIG_HOME, XDG_DATA_HOME, and XDG_STATE_HOME are set to a per-session temporary directory (a `UUID`-named subdirectory under `FileManager.default.temporaryDirectory`, created mode 0700) so nvim's runtime state is fully isolated. `signal(SIGPIPE, SIG_IGN)` is installed once at process startup in `Sources/moonswift/main.swift`.
+`--clean` and the unconditional hardening options prevent the user's full plugin stack from running inside MoonSwift's process. XDG_CONFIG_HOME, XDG_DATA_HOME, and XDG_STATE_HOME are set to a per-session temporary directory (a `UUID`-named subdirectory under `FileManager.default.temporaryDirectory`, created mode 0700) so nvim's runtime state is fully isolated. `signal(SIGPIPE, SIG_IGN)` is installed once at process startup in `Sources/mswift/main.swift`.
 
 #### 10.3b. Key forwarding (nvim pane active)
 
@@ -2004,7 +2004,7 @@ final class NvimProcessSupervisor: @unchecked Sendable {
 }
 ```
 
-**Note on `signal(SIGPIPE, SIG_IGN)`:** This is called once at process startup in `Sources/moonswift/main.swift`, not per-spawn. It is process-global and must be in place before any pipe is opened.
+**Note on `signal(SIGPIPE, SIG_IGN)`:** This is called once at process startup in `Sources/mswift/main.swift`, not per-spawn. It is process-global and must be in place before any pipe is opened.
 
 **Note on controlling-TTY isolation:** `nvim --embed` does not require a controlling TTY. As defence-in-depth, `posix_spawn` attributes or `setsid()` may be used to ensure the child has no controlling terminal, preventing any inherited TTY from interfering with nvim's raw-mode state. This is optional and not required for correctness.
 
@@ -2336,7 +2336,7 @@ Each increment is independently testable, committable, TDD-first. Ordering respe
 
 11. **Inc-11: Renderer (mandatory split)** — `NvimGridView.swift`, `NvimConflictView.swift`, `NvimDiffView.swift` created as new files (day-one pre-condition). `Renderer.swift` gains delegation only. `.nvimPane`: walk `nvimGrid.cells`, call `CellBuffer.write(col:row:char:style:)` per cell, `CellBuffer.flush(to: writer)` once per frame (UI thread). `.conflictModal`: exact §7.4 string. `.diffView`: side-by-side highlight. Status/tab bars stay; nvim `laststatus=0` suppresses nvim's own status bar. Tests: cell-grid snapshots for all three via `CellGrid` mock writer.
 
-12. **Inc-12: Integration + acceptance** — PRD §F8: YAML fragment syntax error → comment injected; fix → file updated, outside-span bytes identical; external change → conflict prompt; `:w` triggers write-back; per-format property tests. `signal(SIGPIPE, SIG_IGN)` confirmed in `Sources/moonswift/main.swift`. Docs: merge §10 into `ARCHITECTURE.md`; user docs "Editing & write-back"; internals doc for the `EditorBridge`/`WriteBackCoordinator` seam.
+12. **Inc-12: Integration + acceptance** — PRD §F8: YAML fragment syntax error → comment injected; fix → file updated, outside-span bytes identical; external change → conflict prompt; `:w` triggers write-back; per-format property tests. `signal(SIGPIPE, SIG_IGN)` confirmed in `Sources/mswift/main.swift`. Docs: merge §10 into `ARCHITECTURE.md`; user docs "Editing & write-back"; internals doc for the `EditorBridge`/`WriteBackCoordinator` seam.
 
 ### 10.9 Edits to Existing Sections (checklist for merge)
 

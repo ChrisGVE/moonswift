@@ -3,11 +3,11 @@
 ## Usage
 
 ```
-moonswift                   open current directory as a project
-moonswift <dir>             open <dir> as a project root
-moonswift <file.lua>        quick one-off: run/lint a single .lua file
-moonswift --version         print version and exit
-moonswift --help            print this help and exit
+mswift                   open current directory as a project
+mswift <dir>             open <dir> as a project root
+mswift <file.lua>        quick one-off: run/lint a single .lua file
+mswift --version         print version and exit
+mswift --help            print this help and exit
 ```
 
 A bare invocation opens the current working directory as a project root. If
@@ -28,7 +28,7 @@ non-`.lua` file paths all result in exit code 64.
 
 | Flag | Short | Action |
 |------|-------|--------|
-| `--version` | `-V` | Print `moonswift 0.1.0` to stdout and exit 0 |
+| `--version` | `-V` | Print `mswift 0.1.0` to stdout and exit 0 |
 | `--help` | `-h` | Print the usage text to stdout and exit 0 |
 
 ## Exit codes

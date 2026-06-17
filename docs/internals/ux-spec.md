@@ -230,7 +230,7 @@ The `?` help overlay is a centered modal (max 60 columns × 20 rows), rendered u
 
 ### 3.2 Open project (normal launch)
 
-1. User runs `moonswift` or `moonswift <directory>`.
+1. User runs `mswift` or `mswift <directory>`.
 2. `moonswift.toml` is parsed; on success, `AppState` is seeded with the decoded `ProjectFile`.
 3. First frame renders immediately: navigator shows all source entries in `.loading` state (spinner after 100 ms). [ARCH §3a]
 4. Source loads complete asynchronously; entries transition to `.loaded` or `.failed` state.
@@ -443,7 +443,7 @@ Displayed as a space-separated sequence of bracketed labels. Multiple may coexis
 | `[running…]` | A run is in progress |
 | `[linting…]` | A lint pass is in progress |
 | `[Lua X.X: unsupported]` | Project specifies an unsupported Lua version |
-| `[no project]` | Quick-file mode (launched with `moonswift <file.lua>`) |
+| `[no project]` | Quick-file mode (launched with `mswift <file.lua>`) |
 | `[project error]` | Malformed project file |
 
 [PRD §6.5, §6.1]
