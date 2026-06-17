@@ -148,9 +148,13 @@ struct EditorFallbackRoundTripTests {
         let fileURL = root.appendingPathComponent("script.lua")
         try "return 1\n".write(to: fileURL, atomically: true, encoding: .utf8)
         let fixed = "return 42\n"
-        // Whole-.lua fragment; contentHash matches the bytes the user writes, so
-        // the write-back conflict guard passes and the overwrite succeeds. The
-        // file lives inside the project root so validateReadable accepts it.
+        // Whole-.lua fragment. This test deliberately drives the *no-conflict*
+        // success path: `contentHash` is seeded to the post-edit bytes the fake
+        // writes, so the coordinator (force:false) reads matching bytes and the
+        // conflict guard passes — isolating the loop→coordinator→success seam.
+        // The conflict path (hash mismatch → .conflictDetected) is covered by
+        // WriteBackIntegrationTests/WriteBackCoordinatorTests, not here. The file
+        // lives inside the project root so validateReadable accepts it.
         let provenance = FragmentProvenance(
             file: fileURL, jsonpath: nil, document: 0,
             byteRange: 0..<8, lineOffset: 0,

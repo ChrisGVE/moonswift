@@ -7,7 +7,7 @@
 // Coverage:
 //   1. DiffViewState off-thread construction (.building → .ready) at the
 //      reducer level via AppEvent.diffViewReady.
-//   2. diffView [c] cancel returns to .nvimPane (focus restored).
+//   2. diffView [c] cancel with no pending modal falls back to the code pane.
 //   3. diffView j/k scrolling increments/decrements scrollOffset on .ready state.
 //   4. Keys in .diffView(.building) are absorbed (no state change).
 //   5. Syntax pre-pass failure in WriteBackCoordinator returns .syntaxPrePassBlocked
@@ -100,16 +100,20 @@ struct DiffViewStateTransitionTests {
 @Suite("NvimDiffView — key handling")
 struct DiffViewKeyHandlingTests {
 
-    @Test("[c] in .diffView(.ready) returns focus to .nvimPane")
-    func cancelReturnsFocusToNvimPane() {
+    @Test("[c] in .diffView(.ready) with no pending modal falls back to the code pane")
+    func cancelWithNoPendingFallsBackToCodePane() {
+        // `makeDiffViewState` sets no `pendingConflictModal`, so this exercises the
+        // unexpected-nil fallback. It must land on the always-valid code pane —
+        // fabricating an `.nvimPane` would strand a fallback-origin conflict on a
+        // dead session (P4 audit gap #1, diff-cancel arm).
         let diffState = makeReadyDiffState()
         let s = makeDiffViewState(phase: .ready(diffState))
         let (next, _) = dvApply(s, .key(.char("c"), modifiers: []))
 
-        if case .nvimPane = next.focus {
+        if case .pane(.codePane) = next.focus {
             // correct
         } else {
-            Issue.record("Expected .nvimPane, got \(next.focus)")
+            Issue.record("Expected .pane(.codePane), got \(next.focus)")
         }
     }
 
