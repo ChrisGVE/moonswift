@@ -22,11 +22,21 @@ struct MockLintService: LintServiceProtocol {
     /// When non-nil, syntaxPrePass returns this diagnostic for every call.
     let stubbedDiagnostic: Diagnostic?
 
-    init(stubbedDiagnostic: Diagnostic? = nil) {
+    /// When non-nil, overrides `stubbedDiagnostic`: syntaxPrePass returns
+    /// whatever this closure returns for the fragment's code. Lets a test drive
+    /// content-dependent outcomes (e.g. broken code → diagnostic, fixed → nil).
+    let prePass: (@Sendable (LuaSourceFragment) -> Diagnostic?)?
+
+    init(
+        stubbedDiagnostic: Diagnostic? = nil,
+        prePass: (@Sendable (LuaSourceFragment) -> Diagnostic?)? = nil
+    ) {
         self.stubbedDiagnostic = stubbedDiagnostic
+        self.prePass = prePass
     }
 
     func syntaxPrePass(_ fragment: LuaSourceFragment) -> Diagnostic? {
+        if let prePass { return prePass(fragment) }
         return stubbedDiagnostic
     }
 
