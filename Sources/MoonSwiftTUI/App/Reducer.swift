@@ -544,6 +544,16 @@ private func reduceNvimCleanupFocus(
     s.nvimPendingResize = nil
     s.nvimResizeDeadline = nil
 
+    // A persistent (nvim-session-scoped) write-block message has no meaning once
+    // the session is gone. Clear it here — it has no expiry, so neither the tick
+    // handler nor a code-pane keystroke would ever clear it, and it would freeze
+    // in the status bar after an exit that did not pass through the nvim-pane key
+    // handler (process crash, `:q` via a mapping). Done before any replacement
+    // transient is set below.
+    if let t = s.transient, t.expiry == nil {
+        s.transient = nil
+    }
+
     if let text = transientText {
         s.transient = TransientMessage(text: text)
         if let tick = armTickIfNeeded(s) { effects.append(tick) }
@@ -760,14 +770,15 @@ private func reduceDiffViewKey(
         // Cancel: restore to the conflict modal with state preserved (§10.3d, CR-022).
         // `pendingConflictModal` was set when [d] transitioned to the diff view; if
         // it is non-nil we can restore .conflictModal exactly. If it is nil (unexpected
-        // path) fall back to the nvim pane so the user is not stranded.
+        // path) fall back to the always-valid code pane — fabricating an `.nvimPane`
+        // would strand a `$EDITOR`-fallback-origin conflict on a dead session, the
+        // same hazard the conflict-modal arms guard against (P4 audit gap #1).
         var s = s
         if let pending = s.pendingConflictModal {
             s.pendingConflictModal = nil
             s.focus = .conflictModal(pending)
         } else {
-            let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
-            s.focus = .nvimPane(NvimPaneState(attachedRect: rect))
+            s.focus = .pane(.codePane)
         }
         return (s, [])
 

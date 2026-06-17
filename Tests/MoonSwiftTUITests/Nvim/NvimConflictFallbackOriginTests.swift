@@ -127,4 +127,58 @@ struct ConflictModalFallbackResolutionTests {
             Issue.record("Expected .pane(.codePane), got \(next.focus)")
         }
     }
+
+    @Test("[r] reload from a fallback-origin conflict returns to the code pane and detaches")
+    func reloadReturnsToCodePane() {
+        let s = fallbackModalState()
+        let (next, effects) = foApply(s, .key(.char("r"), modifiers: []))
+        if case .pane(.codePane) = next.focus {
+            // correct
+        } else {
+            Issue.record("Expected .pane(.codePane), got \(next.focus)")
+        }
+        let hasDetach = effects.contains {
+            if case .nvimDetach = $0 { return true }
+            return false
+        }
+        #expect(hasDetach)
+    }
+
+    @Test("[d]→diff→[c] preserves returnsToNvim=false through the round-trip")
+    func diffRoundTripPreservesFallbackOrigin() {
+        let s = fallbackModalState()
+        let (afterD, _) = foApply(s, .key(.char("d"), modifiers: []))
+        let diffState = DiffViewState(
+            leftTitle: "On disk", rightTitle: "Edited",
+            leftLines: ["a"], rightLines: ["b"])
+        let (afterReady, _) = foApply(afterD, .diffViewReady(diffState))
+        let (afterC, _) = foApply(afterReady, .key(.char("c"), modifiers: []))
+        guard case .conflictModal(let restored) = afterC.focus else {
+            Issue.record("Expected .conflictModal, got \(afterC.focus)")
+            return
+        }
+        #expect(restored.returnsToNvim == false)
+    }
+}
+
+// MARK: - Suite: diff-view cancel with no pending modal
+
+@Suite("NvimConflictModal — diff cancel nil-pending fallback")
+struct DiffCancelNilPendingTests {
+
+    @Test("[c] in the diff view with no pending modal returns to the code pane, not a dead nvim pane")
+    func diffCancelNilPendingReturnsToCodePane() {
+        var s = foCodePaneAppState()
+        let diffState = DiffViewState(
+            leftTitle: "On disk", rightTitle: "Edited",
+            leftLines: ["a"], rightLines: ["b"])
+        s.focus = .diffView(.ready(diffState))
+        s.pendingConflictModal = nil
+        let (next, _) = foApply(s, .key(.char("c"), modifiers: []))
+        if case .pane(.codePane) = next.focus {
+            // correct
+        } else {
+            Issue.record("Expected .pane(.codePane), got \(next.focus)")
+        }
+    }
 }
