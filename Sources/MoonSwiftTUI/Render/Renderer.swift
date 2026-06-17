@@ -1339,11 +1339,26 @@ private func renderBottomPaneTabBar(
 
     // Per-tab style: active = underlined focus_border; inactive = normal.
     let activeTab = state.bottomPane.activeTab
+
+    // The `[ Debug ]` tab is present ONLY while a debug session is active or
+    // launching (ux-spec §6.1 lines 489-490, §7.2 "the tab is normally only
+    // visible during a session"). When absent, `3`/Tab still handle the no-
+    // session case with the `Debug tab not active.` transient (UX-R2-N03). The
+    // `activeTab == .debug` clause keeps the tab visible in the defensive
+    // tab-active-but-no-session case (§7.2 line 673) so its content never orphans.
+    let debugVisible =
+        state.activeDebugSessionID != nil
+        || state.debugLaunchPending
+        || activeTab == .debug
+
     let outputStyle = activeTab == .output ? tabActiveStyle(theme) : normalStyle(theme)
     let diagStyle = activeTab == .diagnostics ? tabActiveStyle(theme) : normalStyle(theme)
     let debugStyle = activeTab == .debug ? tabActiveStyle(theme) : normalStyle(theme)
 
-    let tabsText = outputLabel + separator + diagLabel + separator + debugLabel
+    let tabsText =
+        debugVisible
+        ? outputLabel + separator + diagLabel + separator + debugLabel
+        : outputLabel + separator + diagLabel
 
     // Right-justified source provenance (ux-spec §6.1).
     let provenance: String?
@@ -1365,11 +1380,15 @@ private func renderBottomPaneTabBar(
     // Diagnostics tab span.
     let diagCol = sep1Col + UInt16(separator.count)
     commands.append(.cellRun(col: diagCol, row: row, text: diagLabel, style: diagStyle))
-    let sep2Col = diagCol + UInt16(diagLabel.count)
-    commands.append(.cellRun(col: sep2Col, row: row, text: separator, style: normalStyle(theme)))
-    // Debug tab span.
-    let debugCol = sep2Col + UInt16(separator.count)
-    commands.append(.cellRun(col: debugCol, row: row, text: debugLabel, style: debugStyle))
+    // Debug tab span — rendered only while a debug session is active/launching
+    // (see `debugVisible`); the separator before it is part of the same gate so
+    // no trailing space is left when the tab is absent.
+    if debugVisible {
+        let sep2Col = diagCol + UInt16(diagLabel.count)
+        commands.append(.cellRun(col: sep2Col, row: row, text: separator, style: normalStyle(theme)))
+        let debugCol = sep2Col + UInt16(separator.count)
+        commands.append(.cellRun(col: debugCol, row: row, text: debugLabel, style: debugStyle))
+    }
 
     // Provenance and padding fill the rest of the row.
     let usedCols = tabsText.count

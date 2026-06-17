@@ -14,7 +14,7 @@ moonswift                                                 [Lua 5.1: unsupported]
 |                ||                                                            |
 +----------------++------------------------------------------------------------+
 +------------------------------------------------------------------------------+
-|[ Output ] [ Diagnostics ] [ Debug ]                                          |
+|[ Output ] [ Diagnostics ]                                                    |
 |✖ Lua version "5.1" is not supported. MoonSwift P1 supports Lua 5.4 only.     |
 |                                                                              |
 |                                                                              |
