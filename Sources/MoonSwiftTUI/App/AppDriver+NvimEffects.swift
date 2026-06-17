@@ -56,6 +56,25 @@ extension AppDriver {
         }
     }
 
+    /// Forward pasted text to the running nvim instance via `nvim_paste`.
+    ///
+    /// `nvim_paste(data, crlf, phase)` with `phase = -1` inserts the whole
+    /// payload in a single call (not a streamed paste) as one undo block, and —
+    /// unlike `nvim_input` — does not interpret termcode notation or control
+    /// bytes in `data`. `crlf = false`: the payload uses `\n` line separators.
+    /// Guarded with the session reference captured synchronously on the UI
+    /// thread; a no-op if teardown already nil-ed the session.
+    func executeNvimPaste(_ text: String) {
+        guard let session = nvimSession else { return }
+        Task {
+            await session.rpc.notify(
+                method: "nvim_paste",
+                params: [.string(text), .bool(false), .int(-1)]
+            )
+            // nvim_paste(phase: -1) is fire-and-forget; ignore the continue flag.
+        }
+    }
+
     /// Send `qa!` to detach; post `.nvimDetached` after the notify returns.
     ///
     /// Note: no leading colon — `nvim_command` takes an Ex command, not a

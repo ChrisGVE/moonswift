@@ -131,6 +131,15 @@ public enum Effect: Sendable {
     /// by AppDriver before the Task fires).
     case nvimInput(String)
 
+    /// Forward pasted text to the running nvim instance via `nvim_paste`.
+    ///
+    /// `nvim_paste` is used rather than `nvim_input` so the payload is inserted
+    /// verbatim — `nvim_input` would interpret `<...>` termcode notation and
+    /// control bytes in the pasted text — and so a multi-line paste lands as a
+    /// single undo block. No-op if no session is active (nil-guarded by
+    /// AppDriver before the Task fires).
+    case nvimPaste(String)
+
     /// Detach from the running nvim instance cleanly via `nvim_command "qa!"`.
     ///
     /// AppDriver posts `.nvimDetached` after the notify completes. The reducer

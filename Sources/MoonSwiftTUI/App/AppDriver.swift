@@ -392,6 +392,9 @@ public final class AppDriver: @unchecked Sendable {
         case .nvimInput(let keyNotation):
             executeNvimInput(keyNotation)
 
+        case .nvimPaste(let text):
+            executeNvimPaste(text)
+
         case .nvimDetach:
             executeNvimDetach()
 

@@ -289,3 +289,40 @@ struct NvimReducerTests {
         #expect(grid == expected)
     }
 }
+
+// MARK: - Paste routing
+
+/// Paste is dropped everywhere except the embedded-nvim pane, where it is
+/// forwarded verbatim via `Effect.nvimPaste` (P4 audit gap #2).
+@Suite("NvimReducer — paste routing")
+struct NvimReducerPasteTests {
+
+    private func nvimPaneState() -> AppState {
+        var s = AppState()
+        s.focus = .nvimPane(NvimPaneState(attachedRect: Rect(x: 0, y: 0, width: 80, height: 24)))
+        return s
+    }
+
+    private func pastedText(from effects: [Effect]) -> String? {
+        for e in effects {
+            if case .nvimPaste(let text) = e { return text }
+        }
+        return nil
+    }
+
+    @Test("paste in the nvim pane forwards the text verbatim via Effect.nvimPaste")
+    func pasteForwardedInNvimPane() {
+        let (_, effects) = reduce(nvimPaneState(), .paste("line one\nline two"))
+        #expect(pastedText(from: effects) == "line one\nline two")
+    }
+
+    @Test("paste in the code pane is a no-op (read-only)")
+    func pasteNoOpInCodePane() {
+        var s = AppState()
+        s.focus = .pane(.codePane)
+        let (next, effects) = reduce(s, .paste("ignored"))
+        #expect(next.focus == s.focus)
+        #expect(pastedText(from: effects) == nil)
+        #expect(effects.isEmpty)
+    }
+}

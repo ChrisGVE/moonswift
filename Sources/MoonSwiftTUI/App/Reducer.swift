@@ -57,8 +57,13 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // Mouse events are no-op in P1 (vim-flavored keyboard-only navigation).
         return (s, [])
 
-    case .paste:
-        // Paste is no-op in P1 (read-only code pane; picker uses key events).
+    case .paste(let text):
+        // Forward pasted text to nvim while its pane is focused (via nvim_paste,
+        // not nvim_input, so the payload is inserted verbatim). Elsewhere paste
+        // is a no-op: the code pane is read-only and the picker uses key events.
+        if case .nvimPane = s.focus {
+            return (s, [.nvimPaste(text)])
+        }
         return (s, [])
 
     // MARK: Tick
