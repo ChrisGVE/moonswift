@@ -325,4 +325,18 @@ struct NvimReducerPasteTests {
         #expect(pastedText(from: effects) == nil)
         #expect(effects.isEmpty)
     }
+
+    @Test("paste is a no-op in non-nvim focus states (no nvimPaste effect, focus unchanged)")
+    func pasteNoOpInOtherFocusStates() {
+        let states: [FocusState] = [
+            .pane(.navigator), .pickerModal, .nvimSpawning, .diffView(.building),
+        ]
+        for focus in states {
+            var s = AppState()
+            s.focus = focus
+            let (next, effects) = reduce(s, .paste("ignored"))
+            #expect(next.focus == focus)
+            #expect(pastedText(from: effects) == nil)
+        }
+    }
 }

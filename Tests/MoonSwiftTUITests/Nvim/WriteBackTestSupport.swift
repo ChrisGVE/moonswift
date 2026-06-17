@@ -25,6 +25,10 @@ struct MockLintService: LintServiceProtocol {
     /// When non-nil, overrides `stubbedDiagnostic`: syntaxPrePass returns
     /// whatever this closure returns for the fragment's code. Lets a test drive
     /// content-dependent outcomes (e.g. broken code → diagnostic, fixed → nil).
+    ///
+    /// The `@Sendable` annotation is load-bearing: `MockLintService` must remain
+    /// `Sendable` to satisfy `LintServiceProtocol: Sendable`, and a bare closure
+    /// type would break that synthesis. Do not drop it.
     let prePass: (@Sendable (LuaSourceFragment) -> Diagnostic?)?
 
     init(

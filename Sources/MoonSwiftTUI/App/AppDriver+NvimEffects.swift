@@ -71,7 +71,12 @@ extension AppDriver {
                 method: "nvim_paste",
                 params: [.string(text), .bool(false), .int(-1)]
             )
-            // nvim_paste(phase: -1) is fire-and-forget; ignore the continue flag.
+            // `nvim_paste(phase: -1)` submits the whole payload in one call, so
+            // its boolean "continue" return is meaningless here and the notify
+            // (fire-and-forget) is correct. This is NOT generally safe: a
+            // streaming paste (phases 1/2/3) must use `request` and honor the
+            // continue flag, or data is silently dropped. Matches the
+            // `executeNvimInput` notify precedent.
         }
     }
 

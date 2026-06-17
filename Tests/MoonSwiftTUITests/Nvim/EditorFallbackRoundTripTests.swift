@@ -22,6 +22,11 @@ import Testing
 /// A stand-in for the editor step: at each "open" it records the file content it
 /// is handed (what the loop wrote/injected), then writes the next scripted
 /// payload to simulate the user editing the buffer.
+///
+/// `@unchecked Sendable` is sound here because the instance is touched only on
+/// the single thread that calls `spawnEditorFallbackAndWait` (the loop invokes
+/// `runEditor` synchronously, never across a task boundary). Reference semantics
+/// are required so the test can read `observedContents` after the call returns.
 private final class FakeEditorRunner: @unchecked Sendable {
     private(set) var observedContents: [String] = []
     private var writes: [String]
@@ -131,5 +136,47 @@ struct EditorFallbackRoundTripTests {
 
         // No syntax error → the editor opened once and the loop exited.
         #expect(fake.observedContents.count == 1)
+    }
+
+    @Test("a clean edit drives the seam through to a writeBackSucceeded event")
+    func roundTripReachesWriteBackSuccess() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fallback-success-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fileURL = root.appendingPathComponent("script.lua")
+        try "return 1\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        let fixed = "return 42\n"
+        // Whole-.lua fragment; contentHash matches the bytes the user writes, so
+        // the write-back conflict guard passes and the overwrite succeeds. The
+        // file lives inside the project root so validateReadable accepts it.
+        let provenance = FragmentProvenance(
+            file: fileURL, jsonpath: nil, document: 0,
+            byteRange: 0..<8, lineOffset: 0,
+            contentHash: SHA256.hash(data: Data(fixed.utf8)))
+        let fragment = LuaSourceFragment(code: "return 1\n", provenance: provenance)
+
+        let fake = FakeEditorRunner(writes: [fixed])
+        let lint = MockLintService(prePass: { _ in nil })
+
+        let channel = EventChannel()
+        let pump = EventPump(source: ScriptedEventSource([]), channel: channel)
+        let tick = TickSource(channel: channel)
+        let driver = AppDriver(
+            channel: channel, pump: pump, tickSource: tick,
+            suspender: RecordingTerminalSuspender(),
+            seed: projectState(root: root), lintService: lint)
+
+        driver.spawnEditorFallbackAndWait(fragment: fragment, runEditor: { fake.run($0) })
+
+        // The clean edit exits the loop and dispatches WriteBackCoordinator.write,
+        // which posts writeBackSucceeded — the seam between the reopen loop and the
+        // coordinator that the loop-only test cannot reach.
+        let event = await waitForEvent(in: channel) {
+            if case .writeBackSucceeded = $0 { return true }
+            return false
+        }
+        #expect(event != nil, "expected writeBackSucceeded from the fallback write-back")
     }
 }

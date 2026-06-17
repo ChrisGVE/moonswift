@@ -408,7 +408,7 @@ public struct BottomPaneState: Sendable, Equatable {
 /// A message built with `init(persistentText:)` has no expiry (`expiry == nil`)
 /// and stays until a reducer clears it explicitly — used for the nvim
 /// write-block error, which must remain visible until the next `:w` or edit
-/// rather than vanishing after the 1.5 s window (ux-spec §7.3, P4 audit gap #5).
+/// rather than vanishing after the 1.5 s window (ux-spec §7.3).
 public struct TransientMessage: Sendable, Equatable {
     public let text: String
     /// When the message auto-clears, or `nil` if it persists until a reducer

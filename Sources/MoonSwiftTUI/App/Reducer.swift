@@ -664,11 +664,8 @@ private func reduceConflictDetected(
 }
 
 /// The focus to restore when a conflict modal is resolved with `[o]` or `[c]`.
-///
-/// `returnsToNvim` is `true` only when the conflict was raised from the live
-/// embedded-nvim `:w` path; the `$EDITOR`-suspend fallback raises the same
-/// conflict with no nvim session, so it must land on the code pane rather than a
-/// dead `.nvimPane` placeholder (P4 audit gap #1).
+/// See `ConflictModalState.returnsToNvim` for the two-path origin semantics and
+/// why the fallback case must land on the code pane.
 private func conflictReturnFocus(_ s: AppState, returnsToNvim: Bool) -> FocusState {
     guard returnsToNvim else { return .pane(.codePane) }
     let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane

@@ -60,7 +60,7 @@ extension AppDriver {
         fragment: LuaSourceFragment,
         runEditor: ((URL) -> Void)? = nil
     ) {
-        let openEditor: (URL) -> Void = runEditor ?? { [self] url in spawnEditorAndWait(url: url) }
+        let editStep: (URL) -> Void = runEditor ?? { [self] url in spawnEditorAndWait(url: url) }
 
         // Resolve the project root early; no-op if unavailable.
         guard let projectRoot = projectDirectoryURL() else {
@@ -134,7 +134,7 @@ extension AppDriver {
         // Skeleton path: if no lint service is injected, skip the pre-pass loop
         // and post synthetic success immediately (same skeleton contract as writeBack).
         guard let lint = lintService else {
-            openEditor(editURL)
+            editStep(editURL)
             // CR-023 skeleton path: use fragment-derived SourceID, not state.selection.
             let fragmentID = Self.sourceID(for: fragment, projectRoot: projectRoot)
             Task { [channel] in
@@ -148,7 +148,7 @@ extension AppDriver {
         // read file, syntax pre-pass. On error: inject comment block and loop.
         // On success: break and dispatch write-back.
         while true {
-            openEditor(editURL)
+            editStep(editURL)
 
             // Read the edited bytes from the temp file (or the source file).
             let editedText: String
