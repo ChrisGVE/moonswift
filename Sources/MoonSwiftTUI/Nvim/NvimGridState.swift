@@ -274,17 +274,32 @@ public struct ConflictModalState: Sendable, Equatable {
     public let editedText: String
     /// Provenance for re-location (format, jsonpath, document).
     public let fragment: LuaSourceFragment
+    /// Whether resolving the conflict should return focus to the embedded-nvim
+    /// pane (`true`) or the read-only code pane (`false`).
+    ///
+    /// A conflict can be raised from two paths: the embedded-nvim `:w` flow,
+    /// where a live nvim session is still attached and `[o]`/`[c]` should land
+    /// back in the nvim pane; and the `$EDITOR`-suspend fallback flow, where the
+    /// editor process has already exited and there is **no** nvim session — in
+    /// which case returning to `.nvimPane` would strand the UI on a dead
+    /// "Connecting…" placeholder with input routed to a nil session. The flag is
+    /// captured from the pre-modal focus in `reduceConflictDetected`. The default
+    /// is `false` (the always-valid code pane) so an unknown origin can never
+    /// resolve into a dead nvim pane.
+    public let returnsToNvim: Bool
 
     public init(
         fileURL: URL,
         expectedHash: SHA256Digest,
         editedText: String,
-        fragment: LuaSourceFragment
+        fragment: LuaSourceFragment,
+        returnsToNvim: Bool = false
     ) {
         self.fileURL = fileURL
         self.expectedHash = expectedHash
         self.editedText = editedText
         self.fragment = fragment
+        self.returnsToNvim = returnsToNvim
     }
 }
 

@@ -47,12 +47,13 @@ private func hashOf(_ s: String) -> SHA256Digest { SHA256.hash(data: Data(s.utf8
 
 private func makeModal(
     path: String = "/tmp/conflict_test.lua",
-    editedText: String = "return 99\n"
+    editedText: String = "return 99\n",
+    returnsToNvim: Bool = true
 ) -> ConflictModalState {
     ConflictModalState(
         fileURL: URL(fileURLWithPath: path),
         expectedHash: hashOf("original"), editedText: editedText,
-        fragment: cmMakeFragment(path: path))
+        fragment: cmMakeFragment(path: path), returnsToNvim: returnsToNvim)
 }
 
 private func apply(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect]) {

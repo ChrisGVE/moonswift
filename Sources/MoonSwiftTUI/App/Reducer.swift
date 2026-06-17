@@ -615,14 +615,40 @@ private func reduceConflictDetected(
         case .loaded(let fragment) = s.sources[sid]
     else { return (s, []) }
 
+    // Capture the origin so resolution returns to the right surface. A `:w`
+    // conflict arrives while the nvim pane is focused (a live session is
+    // attached); the $EDITOR-suspend fallback posts the same event from the
+    // code pane (its editor process has already exited — no nvim session). The
+    // resolution arms must not send the fallback case back to `.nvimPane`, which
+    // has no session behind it (P4 audit gap #1).
+    let returnsToNvim: Bool
+    if case .nvimPane = s.focus {
+        returnsToNvim = true
+    } else {
+        returnsToNvim = false
+    }
+
     let modalState = ConflictModalState(
         fileURL: fileURL,
         expectedHash: expectedHash,
         editedText: editedText,
-        fragment: fragment
+        fragment: fragment,
+        returnsToNvim: returnsToNvim
     )
     s.focus = .conflictModal(modalState)
     return (s, [])
+}
+
+/// The focus to restore when a conflict modal is resolved with `[o]` or `[c]`.
+///
+/// `returnsToNvim` is `true` only when the conflict was raised from the live
+/// embedded-nvim `:w` path; the `$EDITOR`-suspend fallback raises the same
+/// conflict with no nvim session, so it must land on the code pane rather than a
+/// dead `.nvimPane` placeholder (P4 audit gap #1).
+private func conflictReturnFocus(_ s: AppState, returnsToNvim: Bool) -> FocusState {
+    guard returnsToNvim else { return .pane(.codePane) }
+    let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
+    return .nvimPane(NvimPaneState(attachedRect: rect))
 }
 
 /// Handle key events while `FocusState.conflictModal` is active.
@@ -655,10 +681,11 @@ private func reduceConflictModalKey(
 
     case (.char("o"), []):
         // Overwrite: force write-back with the user's edited text (skip conflict check).
-        // Return to the nvim pane while the write completes in the background.
+        // Return to the originating surface while the write completes in the
+        // background — the nvim pane only when a live session is attached; the
+        // $EDITOR fallback returns to the code pane (gap #1).
         var s = s
-        let overwriteRect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
-        s.focus = .nvimPane(NvimPaneState(attachedRect: overwriteRect))
+        s.focus = conflictReturnFocus(s, returnsToNvim: modal.returnsToNvim)
         return (s, [.writeBack(modal.fragment, editedText: modal.editedText, force: true)])
 
     case (.char("d"), []):
@@ -681,10 +708,11 @@ private func reduceConflictModalKey(
         )
 
     case (.char("c"), []):
-        // Cancel: return to the nvim buffer without any changes.
+        // Cancel: return to the originating surface without any changes — the
+        // nvim buffer when a live session is attached, otherwise the code pane
+        // (the $EDITOR fallback has no nvim session to return to — gap #1).
         var s = s
-        let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
-        s.focus = .nvimPane(NvimPaneState(attachedRect: rect))
+        s.focus = conflictReturnFocus(s, returnsToNvim: modal.returnsToNvim)
         return (s, [])
 
     default:
