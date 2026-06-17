@@ -227,9 +227,11 @@ public final class AppDriver: @unchecked Sendable {
         while quitCode == nil {
             let events = channel.waitAndDrainAll()
             for event in events {
-                // Track terminal size from resize events so renderNow() always
-                // has the current dimensions. Updated before the reduce call so
-                // the renderer sees the new size immediately on the same frame.
+                // Track terminal size from non-degenerate resize events so
+                // renderNow() always has the current dimensions. Updated before
+                // the reduce call so the renderer sees the new size on the same
+                // frame; a 0×0 resize is ignored here (and in reduceResize) so the
+                // last good size is kept.
                 //
                 // CR-019 (revised): EventPump posts `.terminalClosed` when the
                 // terminal source throws (closed TTY / SIGHUP). Treat it as a

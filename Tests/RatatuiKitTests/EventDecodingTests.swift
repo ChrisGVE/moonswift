@@ -5,6 +5,14 @@
 // Upstream: RatatuiKit/Events.swift (Event.init?(reading:), KeyCode, KeyModifiers)
 // Downstream: (test target — nothing imports this)
 //
+// ABI: the discriminant values below are the Rust shim's RffiEventKind /
+// RffiKeyCode / RffiMouseKind / RffiMouseButton (events.rs), now also emitted
+// into the cbindgen header as RffiEventKind_* / RffiKeyCode_* constants. These
+// tests are the regression guard for the 2026-06-17 input bug, where the Swift
+// decode tables had drifted from the shim ABI (key=0 vs 1, char=26 vs 0, …) so
+// every keypress decoded as resize(0,0). If the Swift tables drift again, the
+// `kind=Key(1)` cases below stop producing `.key` and these tests fail.
+//
 // Stack discipline: RffiEvent is ~4 KB (inline paste buffer). Tests construct
 // events through EventBox, a heap-allocating helper, and decode them via the
 // pointer-based Event(reading:) — never holding an RffiEvent on the stack.
@@ -55,15 +63,21 @@ private final class EventBox {
     }
 }
 
+// ABI discriminant constants (mirror events.rs / the cbindgen header).
+private let kindKey: UInt32 = 1
+private let kindResize: UInt32 = 2
+private let kindMouse: UInt32 = 3
+private let kindPaste: UInt32 = 4
+
 // MARK: - Key event decoding
 
 @Suite("Event decoding — key events")
 struct KeyEventDecodingTests {
 
-    @Test("char key: scalar 'a' (code 26, char 97)")
+    @Test("char key: scalar 'a' (code Char=0, char 97)")
     func charKeyA() {
-        let box = EventBox(kind: 0)  // RffiEventKind.key
-        box.ev.key_code = 26  // RffiKeyCode.char
+        let box = EventBox(kind: kindKey)
+        box.ev.key_code = 0  // RffiKeyCode_Char
         box.ev.key_char = 97  // Unicode scalar for 'a'
         box.ev.key_mods = 0
 
@@ -80,10 +94,10 @@ struct KeyEventDecodingTests {
         #expect(mods == [])
     }
 
-    @Test("char key with Ctrl modifier (code 26, char 99, mods 4)")
+    @Test("char key with Ctrl modifier (code Char=0, char 99, mods 4)")
     func charKeyCtrlC() {
-        let box = EventBox(kind: 0)
-        box.ev.key_code = 26
+        let box = EventBox(kind: kindKey)
+        box.ev.key_code = 0
         box.ev.key_char = 99  // 'c'
         box.ev.key_mods = 4  // CTRL
 
@@ -101,10 +115,10 @@ struct KeyEventDecodingTests {
         #expect(!mods.contains(.alt))
     }
 
-    @Test("backspace key (code 0)")
+    @Test("backspace key (code 7)")
     func backspaceKey() {
-        let box = EventBox(kind: 0)
-        box.ev.key_code = 0
+        let box = EventBox(kind: kindKey)
+        box.ev.key_code = 7  // RffiKeyCode_Backspace
         let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key")
@@ -115,8 +129,8 @@ struct KeyEventDecodingTests {
 
     @Test("enter key (code 1)")
     func enterKey() {
-        let box = EventBox(kind: 0)
-        box.ev.key_code = 1
+        let box = EventBox(kind: kindKey)
+        box.ev.key_code = 1  // RffiKeyCode_Enter
         let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key")
@@ -125,10 +139,10 @@ struct KeyEventDecodingTests {
         #expect(code == .enter)
     }
 
-    @Test("escape key (code 27)")
+    @Test("escape key (code 6)")
     func escapeKey() {
-        let box = EventBox(kind: 0)
-        box.ev.key_code = 27
+        let box = EventBox(kind: kindKey)
+        box.ev.key_code = 6  // RffiKeyCode_Esc
         let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key")
@@ -137,10 +151,10 @@ struct KeyEventDecodingTests {
         #expect(code == .escape)
     }
 
-    @Test("F5 key (code 18)")
+    @Test("F5 key (code 104)")
     func f5Key() {
-        let box = EventBox(kind: 0)
-        box.ev.key_code = 18
+        let box = EventBox(kind: kindKey)
+        box.ev.key_code = 104  // RffiKeyCode_F5
         let event = box.decode()
         guard case let .key(code, _) = event else {
             Issue.record("Expected .key")
@@ -151,7 +165,7 @@ struct KeyEventDecodingTests {
 
     @Test("unknown key code falls back to .unknown")
     func unknownKeyCode() {
-        let box = EventBox(kind: 0)
+        let box = EventBox(kind: kindKey)
         box.ev.key_code = 9999
         let event = box.decode()
         guard case let .key(code, _) = event else {
@@ -165,9 +179,20 @@ struct KeyEventDecodingTests {
         #expect(raw == 9999)
     }
 
+    @Test("Rust Unknown sentinel (code 255) falls back to .unknown")
+    func unknownSentinel() {
+        let box = EventBox(kind: kindKey)
+        box.ev.key_code = 255  // RffiKeyCode_Unknown
+        let event = box.decode()
+        guard case let .key(code, _) = event, case .unknown = code else {
+            Issue.record("Expected .key(.unknown), got \(String(describing: event))")
+            return
+        }
+    }
+
     @Test("Shift+Alt modifier combination (mods = 3)")
     func shiftAltModifiers() {
-        let box = EventBox(kind: 0)
+        let box = EventBox(kind: kindKey)
         box.ev.key_code = 1  // enter
         box.ev.key_mods = 3  // SHIFT | ALT
         let event = box.decode()
@@ -187,7 +212,7 @@ struct KeyEventDecodingTests {
             (2, .left), (3, .right), (4, .up), (5, .down),
         ]
         for (code, expected) in cases {
-            let box = EventBox(kind: 0)
+            let box = EventBox(kind: kindKey)
             box.ev.key_code = code
             let event = box.decode()
             guard case let .key(kc, _) = event else {
@@ -206,7 +231,7 @@ struct ResizeEventDecodingTests {
 
     @Test("resize event carries cols and rows")
     func resizeEvent() {
-        let box = EventBox(kind: 1)  // RffiEventKind.resize
+        let box = EventBox(kind: kindResize)
         box.ev.resize_cols = 200
         box.ev.resize_rows = 60
         let event = box.decode()
@@ -217,6 +242,35 @@ struct ResizeEventDecodingTests {
         #expect(cols == 200)
         #expect(rows == 60)
     }
+
+    /// Regression: a Key event (kind=1) must NOT decode as `.resize`. When the
+    /// Swift table had key=0/resize=1, a real keypress (shim kind=1) decoded as
+    /// `.resize(0,0)` and the app quit on the first keystroke. A genuine 0×0
+    /// resize is still a valid `.resize` (the AppDriver treats it as a no-op).
+    @Test("kind=Key(1) decodes as .key, never .resize")
+    func keyKindNotMisdecodedAsResize() {
+        let box = EventBox(kind: kindKey)
+        box.ev.key_code = 0
+        box.ev.key_char = UInt32(Unicode.Scalar("j").value)
+        let event = box.decode()
+        guard case .key = event else {
+            Issue.record("kind=1 must be .key, got \(String(describing: event)) — ABI drift")
+            return
+        }
+    }
+
+    @Test("genuine 0×0 resize decodes as .resize(0,0)")
+    func zeroByZeroResize() {
+        let box = EventBox(kind: kindResize)
+        box.ev.resize_cols = 0
+        box.ev.resize_rows = 0
+        let event = box.decode()
+        guard case let .resize(cols, rows) = event else {
+            Issue.record("Expected .resize, got \(String(describing: event))")
+            return
+        }
+        #expect(cols == 0 && rows == 0)
+    }
 }
 
 // MARK: - Mouse event decoding
@@ -226,9 +280,9 @@ struct MouseEventDecodingTests {
 
     @Test("mouse down event carries position and button")
     func mouseDown() {
-        let box = EventBox(kind: 2)  // RffiEventKind.mouse
-        box.ev.mouse_kind = 0  // MouseKind.down
-        box.ev.mouse_button = 0  // MouseButton.left
+        let box = EventBox(kind: kindMouse)
+        box.ev.mouse_kind = 1  // RffiMouseKind_Down
+        box.ev.mouse_button = 1  // RffiMouseButton_Left
         box.ev.mouse_col = 10
         box.ev.mouse_row = 5
         box.ev.mouse_mods = 0
@@ -245,11 +299,23 @@ struct MouseEventDecodingTests {
         #expect(mods == [])
     }
 
+    @Test("scroll-up mouse kind decodes (code 5)")
+    func scrollUp() {
+        let box = EventBox(kind: kindMouse)
+        box.ev.mouse_kind = 5  // RffiMouseKind_ScrollUp
+        let event = box.decode()
+        guard case let .mouse(kind, _, _, _, _) = event else {
+            Issue.record("Expected .mouse")
+            return
+        }
+        #expect(kind == .scrollUp)
+    }
+
     @Test("unknown mouse kind falls back to .moved")
     func unknownMouseKind() {
-        let box = EventBox(kind: 2)
+        let box = EventBox(kind: kindMouse)
         box.ev.mouse_kind = 9999  // unknown
-        box.ev.mouse_button = 0
+        box.ev.mouse_button = 0  // none
         let event = box.decode()
         guard case let .mouse(kind, _, _, _, _) = event else {
             Issue.record("Expected .mouse")
@@ -267,7 +333,7 @@ struct PasteEventDecodingTests {
 
     @Test("paste event carries text content")
     func pasteText() {
-        let box = EventBox(kind: 3)  // RffiEventKind.paste
+        let box = EventBox(kind: kindPaste)
         let text = "hello world"
         let bytes = Array(text.utf8)
         box.ev.paste_len = UInt32(bytes.count)
@@ -288,7 +354,7 @@ struct PasteEventDecodingTests {
 
     @Test("empty paste event gives empty string")
     func emptyPaste() {
-        let box = EventBox(kind: 3)
+        let box = EventBox(kind: kindPaste)
         box.ev.paste_len = 0
         let event = box.decode()
         guard case let .paste(str) = event else {
@@ -302,7 +368,7 @@ struct PasteEventDecodingTests {
     func byValueDecode() {
         // Covers the by-value convenience initializer. One deliberate stack
         // copy — the only such copy in the suite.
-        let box = EventBox(kind: 3)
+        let box = EventBox(kind: kindPaste)
         box.ev.paste_len = 0
         let event = Event(from: box.ev)
         guard case let .paste(str) = event else {

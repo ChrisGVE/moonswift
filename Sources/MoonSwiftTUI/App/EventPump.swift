@@ -162,7 +162,14 @@ public final class EventPump: @unchecked Sendable {
             do {
                 event = try source.next(timeout: EventPump.pollTimeout)
             } catch {
-                // I/O errors are rare (terminal closed, SIGHUP received).
+                // I/O errors are rare (terminal closed, SIGHUP received). Log the
+                // error message the shim worked to produce (FFIError carries the
+                // Rust `set_last_error` text) before discarding it — a genuine
+                // terminal I/O failure otherwise exits indistinguishably from a
+                // normal quit, with nothing in the log to post-mortem. The async
+                // file logger is tty-safe (it never writes to stdout/stderr while
+                // the TUI owns the terminal).
+                Logger.shared.error("EventPump terminal source failed; quitting: \(error)")
                 // Post the dedicated fatal-terminal signal that the AppDriver
                 // interprets as a clean EOF quit, then stop. We do NOT overload
                 // this onto resize(0,0): a genuine content resize of 0×0 (which

@@ -6,7 +6,8 @@
 //       Covers:
 //         • resize while .nvimPane → stores pending size, arms tick
 //         • resize while .pane(.codePane) → no debounce state set
-//         • resize always updates AppState.terminalSize
+//         • a non-degenerate resize updates AppState.terminalSize; a 0×0
+//           resize is ignored and keeps the last good size
 //         • tick after debounce deadline → emits Effect.nvimResize, clears state
 //         • tick before deadline → no nvimResize emitted
 //         • modeChange in .nvimPane → updates NvimPaneState.mode
@@ -118,8 +119,8 @@ struct NvimReducerResizeTests {
         #expect(s2.nvimPendingResize == TerminalSize(cols: 100, rows: 30))
     }
 
-    @Test("0×0 sentinel resize does not set debounce state")
-    func sentinelResizeIgnored() {
+    @Test("degenerate 0×0 resize does not set debounce state")
+    func degenerateResizeDoesNotArmDebounce() {
         var s = makeResizeNvimPaneState()
         let (next, _) = applyResize(s, .resize(TerminalSize(cols: 0, rows: 0)))
         #expect(next.nvimPendingResize == nil)

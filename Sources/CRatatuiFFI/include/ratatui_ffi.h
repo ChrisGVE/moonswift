@@ -66,6 +66,102 @@
 #define CTRL (1 << 2)
 
 /**
+ * Discriminant for the `kind` field of RffiEvent. Authoritative ABI values
+ * the Rust shim writes; RatatuiKit's decode verifies its table against these.
+ */
+enum RffiEventKind
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  RffiEventKind_None = 0,
+  RffiEventKind_Key = 1,
+  RffiEventKind_Resize = 2,
+  RffiEventKind_Mouse = 3,
+  RffiEventKind_Paste = 4,
+};
+#ifndef __cplusplus
+typedef uint32_t RffiEventKind;
+#endif // __cplusplus
+
+/**
+ * Key-code discriminant for RffiEvent.key_code. F-keys start at 100.
+ */
+enum RffiKeyCode
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  RffiKeyCode_Char = 0,
+  RffiKeyCode_Enter = 1,
+  RffiKeyCode_Left = 2,
+  RffiKeyCode_Right = 3,
+  RffiKeyCode_Up = 4,
+  RffiKeyCode_Down = 5,
+  RffiKeyCode_Esc = 6,
+  RffiKeyCode_Backspace = 7,
+  RffiKeyCode_Tab = 8,
+  RffiKeyCode_Delete = 9,
+  RffiKeyCode_Home = 10,
+  RffiKeyCode_End = 11,
+  RffiKeyCode_PageUp = 12,
+  RffiKeyCode_PageDown = 13,
+  RffiKeyCode_Insert = 14,
+  RffiKeyCode_F1 = 100,
+  RffiKeyCode_F2 = 101,
+  RffiKeyCode_F3 = 102,
+  RffiKeyCode_F4 = 103,
+  RffiKeyCode_F5 = 104,
+  RffiKeyCode_F6 = 105,
+  RffiKeyCode_F7 = 106,
+  RffiKeyCode_F8 = 107,
+  RffiKeyCode_F9 = 108,
+  RffiKeyCode_F10 = 109,
+  RffiKeyCode_F11 = 110,
+  RffiKeyCode_F12 = 111,
+  RffiKeyCode_Unknown = 255,
+};
+#ifndef __cplusplus
+typedef uint32_t RffiKeyCode;
+#endif // __cplusplus
+
+/**
+ * Mouse button — 0 = none/unknown.
+ */
+enum RffiMouseButton
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  RffiMouseButton_None = 0,
+  RffiMouseButton_Left = 1,
+  RffiMouseButton_Right = 2,
+  RffiMouseButton_Middle = 3,
+};
+#ifndef __cplusplus
+typedef uint32_t RffiMouseButton;
+#endif // __cplusplus
+
+/**
+ * Mouse-event kind discriminant for RffiEvent.mouse_kind.
+ */
+enum RffiMouseKind
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  RffiMouseKind_Down = 1,
+  RffiMouseKind_Up = 2,
+  RffiMouseKind_Drag = 3,
+  RffiMouseKind_Moved = 4,
+  RffiMouseKind_ScrollUp = 5,
+  RffiMouseKind_ScrollDown = 6,
+};
+#ifndef __cplusplus
+typedef uint32_t RffiMouseKind;
+#endif // __cplusplus
+
+/**
  * Fixed cell count (value_a = length).
  */
 #define LENGTH 0

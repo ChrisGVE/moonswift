@@ -363,7 +363,15 @@ standalone `.lua` files.
   rather than failing later at evaluation.
 - Diagnostics-tab jump/yank index offset corrected.
 - FIFO notice ordering fixed and the dead `clearedNoticeInserted` flag removed.
-- `resize(0,0)` sentinel treated as a clean quit.
+- Terminal I/O failure (closed TTY / SIGHUP) produces a clean quit via a
+  dedicated `terminalClosed` signal (logged before exit); a transient content
+  resize of 0×0 is now a harmless no-op. Previously 0×0 was overloaded as the
+  quit sentinel.
+- FFI event-discriminant ABI realigned: the RatatuiKit decode tables
+  (`RffiEventKind`/`RffiKeyCode`/`RffiMouseKind`/`RffiMouseButton`) had drifted
+  from the Rust shim, so every keypress decoded as `resize(0,0)` and the app
+  quit on the first keystroke; the cbindgen header now emits the discriminant
+  constants as the enforced ABI contract.
 - `q` quits from the help overlay; misleading `n`/`N` hints dropped.
 - `Coalescer` made thread-safe for cross-thread output coalescing.
 - Backslash escaped before quote in generated Lua table literals.
