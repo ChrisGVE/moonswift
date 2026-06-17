@@ -168,7 +168,22 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `FileHandle` after teardown (`NSFileHandleOperationException` is uncatchable
   in Swift).
 
-## [0.1.0] - 2026-06-08
+#### Editing subsystem (P4 F8b audit)
+
+- Conflict modal `[o]`/`[c]`/`[d]` now return to the correct surface: the nvim
+  pane when a live `:w` session raised the conflict, the code pane when the
+  `$EDITOR` fallback did (previously always returned to the nvim pane, stranding
+  the fallback case on a dead "Connecting…" placeholder).
+- Paste events are forwarded into the embedded nvim pane via `nvim_paste`
+  (verbatim, single undo block) instead of being dropped.
+- `:w` syntax errors on the nvim path now surface a persistent status-bar
+  message (cleared by the next `:w`, keystroke, or nvim exit) instead of a 1.5 s
+  toast that vanished before it could be read; the buffer stays open with the
+  edits intact.
+- `grid_scroll` is correctly described as a region cell-copy (honoring the
+  `left..<right` column sub-region) rather than a reference-shift.
+- A persistent write-block message no longer freezes in the status bar after an
+  nvim exit that bypasses the key handler (crash, `:q` via a mapping).
 
 First public preview (P1 feature set). MoonSwift is a terminal UI editor and
 runner for Lua fragments embedded in structured files (JSON/YAML/TOML) and

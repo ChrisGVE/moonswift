@@ -740,8 +740,8 @@ P2 audit, #16.)
 
 1. `nvim --embed` is spawned when `<C-e>` is pressed and `nvim` is on PATH (P4b behavior; P4a is the fallback). [PRD F8b]
 2. The code pane becomes the nvim grid: MoonSwift renders the single ext_linegrid grid into the code pane area using the cell-level API. [PRD F8b]
-3. Input: crossterm key events are translated to nvim key notation and sent via msgpack-RPC.
-4. `:w` is intercepted by MoonSwift (not forwarded to nvim) and triggers the write-back contract.
+3. Input: crossterm key events are translated to nvim key notation and sent via msgpack-RPC. Terminal paste events (`AppEvent.paste`) while the nvim pane is focused are forwarded verbatim via `nvim_paste` (not `nvim_input`), so `<...>` sequences in pasted text are not interpreted as termcode notation and a multi-line paste lands as a single undo block. Paste is a no-op in every other focus state (the code pane is read-only pre-P4). [PRD F8b]
+4. `:w` is intercepted by MoonSwift (not forwarded to nvim) and triggers the write-back contract. On a `:w` syntax pre-pass failure the nvim buffer stays open with the user's edits intact, and MoonSwift surfaces a **persistent** status-bar message (no 1.5 s expiry) `Syntax error: <message> (line N)`, cleared by the next `:w`, any keystroke in the nvim pane, or nvim exit. No comment block is injected into the nvim buffer — that pattern (§7.3 step 7) applies only to the `$EDITOR` fallback, where the editor has already closed. [PRD F8b]
 5. MoonSwift's own status bar and tab bar remain; nvim `laststatus=0`.
 6. No `nvim` on PATH: fall back silently to P4a behavior with a one-time status-bar note:
    ```

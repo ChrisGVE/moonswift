@@ -768,6 +768,8 @@ enum Effect: Sendable {
   case spawnNvim(LuaSourceFragment, rect: Rect)
                                    // → EditorBridge.spawn → AppEvent.nvimReady
   case nvimInput(String)           // → rpc.notify nvim_input(string)
+  case nvimPaste(String)           // → rpc.notify nvim_paste(data, crlf:false, phase:-1)
+                                   //   (verbatim; one undo block — not nvim_input)
   case nvimDetach                  // → rpc.notify nvim_command(":qa!")
                                    //   → AppEvent.nvimDetached
   case nvimResize(TerminalSize)    // → rpc.notify nvim_ui_try_resize (debounced)
@@ -1800,8 +1802,8 @@ sequenceDiagram
     Note over AD: Task { re-read fresh data, re-locate span → DiffViewState; channel.post(.diffViewReady(state)) }
 
     U->>CH: AppEvent.key(.c, [])
-    RED-->>AD: (state focus=.nvimPane(…)), []
-    Note over AD: returns to nvim buffer unchanged
+    RED-->>AD: (state focus=conflictReturnFocus(returnsToNvim)), []
+    Note over AD: returns to the originating surface unchanged — the nvim buffer when a live `:w` session raised the conflict (returnsToNvim=true), else the code pane ($EDITOR fallback, no session). The same conditional applies to the [o] arm. If [c] is pressed in the diff view with no pending modal, the safe fallback is the code pane.
 ```
 
 #### 10.3e. `$EDITOR` fallback path (nvim absent)
@@ -1829,6 +1831,8 @@ sequenceDiagram
 ```
 
 The `$EDITOR` fallback uses `AppDriver`'s existing private `spawnEditorAndWait`, which already holds the correct `pump`/`suspender` references and implements the CR-011 absolute-path + executable guard. There is no separate `EditorBridge` instance for the fallback path; `WriteBackCoordinator.write` is called directly after the synchronous editor session.
+
+**Test seam.** `spawnEditorFallbackAndWait` accepts a `runEditor: ((URL) -> Void)?` parameter (default `nil` → the real `spawnEditorAndWait`). When non-nil it replaces the per-iteration editor-open step, so tests can drive the reopen loop — introduce a syntax error, observe the injected comment block, fix, write — without a real `$EDITOR` or TTY (`EditorFallbackRoundTripTests`). It is test-only and UI-thread-only; production callers pass nothing. This mirrors the `EditorBridge` `SessionOverride?` seam.
 
 ### 10.4 Interfaces and Contracts
 
@@ -2215,6 +2219,11 @@ struct ConflictModalState: Sendable, Equatable {
     let expectedHash: SHA256Digest     // hash captured at load, for conflict re-check
     let editedText: String             // the edited buffer content
     let fragment: LuaSourceFragment    // provenance for re-location
+    let returnsToNvim: Bool            // [o]/[c] restore target: nvim pane (live :w
+                                       // session) vs code pane ($EDITOR fallback, no
+                                       // session). Captured from pre-modal focus in
+                                       // reduceConflictDetected; default false (the
+                                       // always-valid code pane). See §10.3d.
 }
 ```
 
@@ -2295,7 +2304,7 @@ NvimDiffView.swift      ~182  DiffViewState → [RenderCommand] (side-by-side hi
 
 `Renderer.swift` gains only delegation calls at the appropriate `FocusState` branches — no new content logic.
 
-**Tests:** `Tests/MoonSwiftTUITests/Nvim/` — 21 test files totalling ~7,035 lines. Key files: `NvimKeyTranslatorTests` (~309), `NvimRedrawHandlerTests` (~327), `WriteBackCoordinatorTests` (~351, includes mock `LintServiceProtocol`), `WriteBackIntegrationTests` (~595), `NvimRenderSnapshotTests` (~596), `NvimRPCClientTests` (~579), `EditorBridgeTests` (~389), `NvimProcessSupervisorTests` (~299). Perf bench lives in `Tests/MoonSwiftPerfTests/PerfTests.swift` (NvimRedrawPerfTests suite, §3b).
+**Tests:** `Tests/MoonSwiftTUITests/Nvim/` — 23 test files totalling ~7,300 lines. Key files: `NvimKeyTranslatorTests` (~309), `NvimRedrawHandlerTests` (~327), `WriteBackCoordinatorTests` (~351, includes mock `LintServiceProtocol`), `WriteBackIntegrationTests` (~595), `NvimRenderSnapshotTests` (~596), `NvimRPCClientTests` (~579), `EditorBridgeTests` (~389), `NvimProcessSupervisorTests` (~299), `NvimConflictFallbackOriginTests` (~190, conflict resolution origin), `EditorFallbackRoundTripTests` (~135, 4a reopen loop via the `runEditor` seam). Perf bench lives in `Tests/MoonSwiftPerfTests/PerfTests.swift` (NvimRedrawPerfTests suite, §3b).
 
 **Rust crate:** no changes (`cells.rs` already documents the P4 nvim grid blit).
 

@@ -209,4 +209,6 @@ functions.
 | `Sources/MoonSwiftCore/Sources/SpanLocator.swift` | tree-sitter-based byte-span location |
 | `Tests/MoonSwiftTUITests/Nvim/WriteBackCoordinatorTests.swift` | Unit tests: format paths, conflict, errors |
 | `Tests/MoonSwiftTUITests/Nvim/WriteBackIntegrationTests.swift` | E2e / acceptance tests (PRD §F8) |
-| `Tests/MoonSwiftTUITests/Nvim/WriteBackTestSupport.swift` | MockLintService, WriteBackFixtures |
+| `Tests/MoonSwiftTUITests/Nvim/WriteBackTestSupport.swift` | MockLintService (incl. content predicate), WriteBackFixtures |
+| `Tests/MoonSwiftTUITests/Nvim/NvimConflictFallbackOriginTests.swift` | Conflict-modal resolution origin (nvim `:w` vs `$EDITOR` fallback) |
+| `Tests/MoonSwiftTUITests/Nvim/EditorFallbackRoundTripTests.swift` | 4a reopen-loop round-trip via the `runEditor` seam |
