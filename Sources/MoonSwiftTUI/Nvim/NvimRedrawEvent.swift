@@ -93,8 +93,11 @@ public enum NvimRedrawEvent: Sendable, Equatable {
     /// Positive `rows` scrolls content up (lines move toward lower row indices);
     /// negative scrolls down. The vacated rows are cleared.
     ///
-    /// NvimRedrawHandler implements this as a reference-shift (O(1) row-slice
-    /// re-index) rather than a cell-copy loop. See ARCHITECTURE.md §10.4.8.
+    /// `NvimGridState.applyScroll` applies this by copying cells within the
+    /// scroll region — each row's `left..<right` columns are copied to the
+    /// destination row, then the vacated rows are cleared. A reference-shift
+    /// cannot honor the column sub-region, so a cell copy is required. See
+    /// ARCHITECTURE.md §10.4.8.
     case gridScroll(grid: Int, top: Int, bot: Int, left: Int, right: Int, rows: Int)
 
     /// Clear all cells in `grid` to the default highlight.

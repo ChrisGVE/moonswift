@@ -2077,10 +2077,11 @@ enum NvimRedrawEvent: Sendable {
 
     case gridCursorGoto(grid: Int, row: Int, col: Int)
 
-    // grid_scroll: implemented as a reference-shift (not a cell-copy loop).
-    // NvimGridState.cells is re-indexed by offsetting the row slice, then
-    // the vacated rows are cleared. This is O(1) in the row-slice sense and
-    // avoids moving cell data in memory.
+    // grid_scroll: applied by copying cells within the scroll region. Each row
+    // in top..<bot has its left..<right columns copied to the destination row,
+    // then the vacated rows are cleared — O((bot-top) × (right-left)). A true
+    // reference-shift cannot honor the left..<right column sub-region, so a
+    // cell copy is required (NvimGridState.applyScroll).
     case gridScroll(grid: Int, top: Int, bot: Int,
                     left: Int, right: Int, rows: Int)
 
@@ -2109,7 +2110,7 @@ struct NvimGridState: Sendable, Equatable {
 struct NvimCellState: Sendable, Equatable { var text: String; var hlId: Int }
 ```
 
-The reducer applies all events in a `redraw` batch before `AppDriver` renders, so one render per batch is guaranteed (no partial-batch flicker). **Flush invariant (binding):** every nvim `redraw` notification in `ext_linegrid` mode terminates with a `flush` sub-event; `NvimRedrawHandler` posts `AppEvent.nvimRedrawBatch` only when it observes that terminating `flush`, and `AppDriver` issues `CellBuffer.flush(to:)` only after reducing a batch that ended in `.flush`. The renderer never flushes a partially-applied batch — a batch without a trailing `flush` is a protocol error, logged at `debug` and held until the next `flush` arrives. `grid_scroll` is applied as a reference-shift: the affected row slice is re-indexed by `rows`, and the vacated rows are reset to empty cells. `grid_line` rows are pre-sized to `width` before `colStart`-relative cell writes so out-of-bounds writes are impossible.
+The reducer applies all events in a `redraw` batch before `AppDriver` renders, so one render per batch is guaranteed (no partial-batch flicker). **Flush invariant (binding):** every nvim `redraw` notification in `ext_linegrid` mode terminates with a `flush` sub-event; `NvimRedrawHandler` posts `AppEvent.nvimRedrawBatch` only when it observes that terminating `flush`, and `AppDriver` issues `CellBuffer.flush(to:)` only after reducing a batch that ended in `.flush`. The renderer never flushes a partially-applied batch — a batch without a trailing `flush` is a protocol error, logged at `debug` and held until the next `flush` arrives. `grid_scroll` is applied by copying cells within the scroll region (each `top..<bot` row's `left..<right` columns are copied to the destination row), then resetting the vacated rows to empty cells — a cell copy rather than a reference-shift, because the `left..<right` column sub-region cannot be honored by re-indexing a whole row slice. `grid_line` rows are pre-sized to `width` before `colStart`-relative cell writes so out-of-bounds writes are impossible.
 
 #### 10.4.9 Write-back shared contract (format dispatch)
 
@@ -2310,7 +2311,7 @@ Each increment is independently testable, committable, TDD-first. Ordering respe
 
 3. **Inc-3: `NvimRPCClient` (actor)** — actor owns stdin `FileHandle`; `request`/`notify`/`deliver` on actor executor; `onNotification` registry; reader loop (blocking `read(2)` on named Thread); continuation resume from actor; `Task { await client.deliver(msg) }` enqueue pattern. Tests: request/response over a fake pipe pair; `notify` encodes and writes on actor (not UI thread); notification handler invoked by actor; concurrent ordering; reader-thread stop + join.
 
-4. **Inc-4: `NvimRedrawHandler` + `NvimGridState`** — handler, grid state (`grid_scroll` as reference-shift, `grid_line` with row pre-sizing from width), conflict/modal state types, `DiffViewPhase`/`DiffViewState`, `NvimSession`. Reducer: `.nvimRedrawBatch` → `nvimGrid`. Tests: `grid_line` run expansion; `grid_scroll` shift; `hl_attr_define` cache; `flush`; reducer snapshot.
+4. **Inc-4: `NvimRedrawHandler` + `NvimGridState`** — handler, grid state (`grid_scroll` as a region cell-copy, `grid_line` with row pre-sizing from width), conflict/modal state types, `DiffViewPhase`/`DiffViewState`, `NvimSession`. Reducer: `.nvimRedrawBatch` → `nvimGrid`. Tests: `grid_line` run expansion; `grid_scroll` shift; `hl_attr_define` cache; `flush`; reducer snapshot.
 
 5. **Inc-5: `NvimKeyTranslator`** — complete table. Tests: printable, `<CR>`/`<Esc>`/`<BS>`/`<Tab>`, F-keys, `<C-x>`/`<S-x>`/`<M-x>`, `<` → `<lt>`.
 
