@@ -17,7 +17,9 @@ import RatatuiKit
 /// or close/quit the overlay.
 ///
 /// The keybinding list overflows the 60×20 overlay, so it scrolls (ux-spec
-/// §2.5). The viewport reserves the last overlay row for the scroll footer;
+/// §2.5). The overlay is a bordered modal box (ux-spec §2.5 line 204), so the
+/// border eats two rows (top + bottom) and the last inner row is the scroll
+/// footer; the half/full page steps below size off that inner content viewport.
 /// `helpOverlayMaxScrollOffset` mirrors the renderer's window maths so the clamp
 /// is exact. Keymap (vim/neovim, with keyboard-nav shadows):
 ///   ↑ / ↓                line up / down
@@ -32,7 +34,7 @@ func reduceHelpOverlayKey(
     var s = s
 
     let overlayH = Int(min(20, s.terminalSize.rows))
-    let contentViewport = max(1, overlayH - 1)  // -1 reserves the footer row
+    let contentViewport = max(1, overlayH - 2 - 1)  // -2 border rows, -1 footer
     let maxOffset = helpOverlayMaxScrollOffset(terminalRows: s.terminalSize.rows)
     let half = max(1, contentViewport / 2)
     let full = max(1, contentViewport)

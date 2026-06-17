@@ -14,9 +14,16 @@ import RatatuiKit
 
 /// Renders the help overlay at the current scroll offset (ux-spec §2.5).
 ///
-/// The content (`helpOverlayLineSpecs()`) overflows the 60×20 box, so the last
-/// overlay row is reserved for a static scroll footer and the content scrolls in
-/// the rows above it. The offset is clamped here to mirror the reducer's clamp.
+/// Per ux-spec §2.5 (line 204) the overlay is "a centered modal (max 60 columns
+/// × 20 rows), rendered using ratatui's `Clear` widget behind the content box":
+/// a `.clear` occludes the panes underneath, then a bordered `.paragraph`
+/// (rounded border, " Help " title) draws the discrete modal box on top.
+///
+/// The content (`helpOverlayLineSpecs()`) overflows the box, so the last *inner*
+/// row is reserved for a static scroll footer and the content scrolls in the rows
+/// above it. The border insets the content by one row top and bottom, so the
+/// inner content height is `overlayH - 2`; the offset is clamped here to mirror
+/// the reducer's clamp (`helpOverlayMaxScrollOffset`).
 func renderHelpOverlay(
     size: TerminalSize,
     theme: ThemeState,
@@ -36,10 +43,15 @@ func renderHelpOverlay(
 
     // The full content (single source of truth, shared with the reducer's scroll
     // clamp via helpOverlayLineSpecs().count). It overflows the box, so the last
-    // overlay row is reserved for a static scroll footer and the content scrolls
-    // in the rows above it (ux-spec §2.5).
+    // inner row is reserved for a static scroll footer and the content scrolls in
+    // the inner rows above it (ux-spec §2.5).
+    //
+    // The bordered block (added below) insets the content into the inner area:
+    // inner height = overlayH - 2 (top + bottom border rows). Of those inner rows,
+    // the last one is the footer, so the scrollable content viewport is
+    // `overlayH - 2 - 1`. `helpOverlayMaxScrollOffset` mirrors this exactly.
     let specs = helpOverlayLineSpecs()
-    let contentViewport = max(1, Int(overlayH) - 1)  // -1 reserves the footer row
+    let contentViewport = max(1, Int(overlayH) - 2 - 1)  // -2 border rows, -1 footer
     let maxOffset = max(0, specs.count - contentViewport)
     let offset = min(max(0, scrollOffset), maxOffset)
     let endIdx = min(offset + contentViewport, specs.count)
@@ -61,9 +73,19 @@ func renderHelpOverlay(
         [Span(helpOverlayFooter(canScrollUp: offset > 0, canScrollDown: offset < maxOffset), style: noteStyle)]
     )
 
+    // The bordered block gives the overlay a clean, discrete modal boundary so
+    // the panes underneath never bleed into the help text at its edges
+    // (ux-spec §2.5 line 204 — "rendered using ratatui's `Clear` widget behind
+    // the content box"). The rounded border matches the pane chrome; the dim
+    // " Help " title labels the modal without competing with the keybinding rows.
+    let helpBlock = BlockConfig(
+        borders: .all,
+        borderType: .rounded,
+        titleSpans: [Span(" Help ", style: headerStyle)]
+    )
     return [
         .clear(rect: overlayRect),
-        .paragraph(rect: overlayRect, lines: lines, block: nil),
+        .paragraph(rect: overlayRect, lines: lines, block: helpBlock),
     ]
 }
 
@@ -182,11 +204,12 @@ func helpOverlayLineSpecs() -> [HelpLine] {
 }
 
 /// The largest valid `helpScrollOffset` for a terminal of `terminalRows` rows.
-/// Mirrors `renderHelpOverlay`'s window maths (overlay height capped at 20, last
+/// Mirrors `renderHelpOverlay`'s window maths (overlay height capped at 20, two
+/// rows consumed by the top/bottom border of the modal box, and the last inner
 /// row reserved for the scroll footer) so the reducer's clamp is exact.
 func helpOverlayMaxScrollOffset(terminalRows: UInt16) -> Int {
     let overlayH = Int(min(20, terminalRows))
-    let contentViewport = max(1, overlayH - 1)  // -1 reserves the footer row
+    let contentViewport = max(1, overlayH - 2 - 1)  // -2 border rows, -1 footer
     return max(0, helpOverlayLineSpecs().count - contentViewport)
 }
 
