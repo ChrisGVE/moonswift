@@ -163,9 +163,12 @@ public final class EventPump: @unchecked Sendable {
                 event = try source.next(timeout: EventPump.pollTimeout)
             } catch {
                 // I/O errors are rare (terminal closed, SIGHUP received).
-                // Post a resize event with zero dimensions as a sentinel that
-                // the AppDriver interprets as a fatal terminal error, then stop.
-                channel.post(.resize(TerminalSize(cols: 0, rows: 0)))
+                // Post the dedicated fatal-terminal signal that the AppDriver
+                // interprets as a clean EOF quit, then stop. We do NOT overload
+                // this onto resize(0,0): a genuine content resize of 0×0 (which
+                // crossterm can emit transiently on the first input event) must
+                // stay a harmless no-op rather than quit the app (CR-019 revision).
+                channel.post(.terminalClosed)
                 return
             }
 

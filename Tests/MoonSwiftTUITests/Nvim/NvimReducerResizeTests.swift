@@ -125,6 +125,17 @@ struct NvimReducerResizeTests {
         #expect(next.nvimPendingResize == nil)
     }
 
+    /// A degenerate 0×0 resize must NOT overwrite the last good terminal size:
+    /// the renderer always needs valid dimensions, and crossterm can emit a
+    /// transient 0×0 on first input (E2E first-keystroke-quit regression).
+    @Test("0×0 resize keeps the prior terminalSize")
+    func zeroSizeResizeKeepsPriorTerminalSize() {
+        let s = makeResizeCodePaneState()  // seeded terminalSize 120×40
+        let prior = s.terminalSize
+        let (next, _) = applyResize(s, .resize(TerminalSize(cols: 0, rows: 0)))
+        #expect(next.terminalSize == prior, "Degenerate resize must not clobber the last good size")
+    }
+
     // MARK: Debounce tick firing
 
     @Test("tick after deadline emits nvimResize(size) and clears pending state")

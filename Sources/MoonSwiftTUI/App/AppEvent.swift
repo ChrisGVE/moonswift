@@ -92,6 +92,15 @@ public enum AppEvent: Sendable {
     /// returns Effect.loadSources and other startup effects (ARCH §3a).
     case appStarted
 
+    /// The terminal I/O source failed irrecoverably (closed TTY / SIGHUP):
+    /// `EventPump` posts this when `pollEvent` throws. The AppDriver loop treats
+    /// it as a clean EOF quit (code 0). This is a DEDICATED fatal signal — it is
+    /// deliberately NOT overloaded onto `resize(0,0)`, because a genuine content
+    /// resize of 0×0 (which crossterm can emit transiently on the first input
+    /// event) must remain a harmless no-op, not a quit (CR-019 revision; E2E
+    /// first-keystroke-quit fix).
+    case terminalClosed
+
     // MARK: Terminal input (EventPump → EventChannel)
 
     /// A key was pressed. The reducer dispatches based on focus and key.

@@ -187,11 +187,18 @@ struct DriverIntegrationTests {
         )
     }
 
-    /// CR-019: EventPump posts resize(0,0) when the terminal I/O source throws.
-    /// The AppDriver must exit its run loop immediately (clean quit, code 0) rather
-    /// than looping forever on an unresponsive channel.
-    @Test("resize(0,0) sentinel causes driver to exit cleanly (CR-019)")
-    func zeroSizeResizeCausesCleanQuit() {
+    /// CR-019 (revised): EventPump posts `.terminalClosed` when the terminal I/O
+    /// source throws (closed TTY / SIGHUP). The AppDriver must exit its run loop
+    /// immediately (clean quit, code 0) rather than looping forever on an
+    /// unresponsive channel.
+    ///
+    /// Previously this fatal signal was overloaded onto `resize(0,0)`, which
+    /// collided with a genuine transient 0×0 resize that crossterm can emit on
+    /// the first real input event — making the live app quit on the first
+    /// keystroke (found in E2E). The fatal signal now has its own event so a
+    /// content 0×0 resize is a harmless no-op (see `zeroSizeResizeIsNotFatal`).
+    @Test("terminalClosed event causes driver to exit cleanly (CR-019)")
+    func terminalClosedCausesCleanQuit() {
         let channel = EventChannel()
         let pump = EventPump(source: ScriptedEventSource([]), channel: channel)
         let tick = TickSource(channel: channel)
@@ -213,16 +220,60 @@ struct DriverIntegrationTests {
 
         // Let the driver boot.
         Thread.sleep(forTimeInterval: 0.1)
-        // Post the zero-size sentinel that EventPump emits on I/O error.
-        channel.post(.resize(TerminalSize(cols: 0, rows: 0)))
+        // Post the fatal-terminal signal that EventPump emits on I/O error.
+        channel.post(.terminalClosed)
 
         // The driver must exit within a generous deadline.
         let exited = waitUntil(timeout: 3.0) { exitCode.withLock { $0 } != nil }
         pump.stop()
         tick.stop()
 
-        #expect(exited, "Driver must exit when resize(0,0) sentinel is posted (was hanging)")
+        #expect(exited, "Driver must exit when .terminalClosed is posted (was hanging)")
         #expect(exitCode.withLock { $0 } == 0, "Clean EOF must produce exit code 0")
+    }
+
+    /// Regression (E2E first-keystroke quit): a genuine content resize of 0×0 —
+    /// which crossterm can emit transiently on the first input event in some
+    /// terminals/multiplexers — must NOT terminate the driver. The driver stays
+    /// alive and keeps processing input; only `.terminalClosed` or a `q`-driven
+    /// `Effect.quit` ends the loop.
+    @Test("resize(0,0) is a no-op, not a fatal quit")
+    func zeroSizeResizeIsNotFatal() {
+        let channel = EventChannel()
+        let pump = EventPump(source: ScriptedEventSource([]), channel: channel)
+        let tick = TickSource(channel: channel)
+        var seed = AppState()
+        seed.focus = .pane(.navigator)  // so the `q` quit key is in scope
+
+        let driver = AppDriver(
+            channel: channel,
+            pump: pump,
+            tickSource: tick,
+            seed: seed
+        )
+
+        let exitCode = OSAllocatedUnfairLock<Int32?>(initialState: nil)
+        let driverThread = Thread {
+            let code = driver.run()
+            exitCode.withLock { $0 = code }
+        }
+        driverThread.start()
+
+        Thread.sleep(forTimeInterval: 0.1)
+        // A transient 0×0 resize: must be ignored, the driver stays running.
+        channel.post(.resize(TerminalSize(cols: 0, rows: 0)))
+
+        let exitedEarly = waitUntil(timeout: 0.5) { exitCode.withLock { $0 } != nil }
+        #expect(!exitedEarly, "Driver must NOT quit on a content resize of 0×0")
+
+        // The driver is still alive and responsive: a quit key ends it cleanly.
+        channel.post(.key(.char("q"), modifiers: []))
+        let exited = waitUntil(timeout: 3.0) { exitCode.withLock { $0 } != nil }
+        pump.stop()
+        tick.stop()
+
+        #expect(exited, "Driver must still process input after a 0×0 resize")
+        #expect(exitCode.withLock { $0 } == 0, "q quits cleanly with code 0")
     }
 
     @Test("l dispatches Effect.lint to the injected LintService with the selected fragment")

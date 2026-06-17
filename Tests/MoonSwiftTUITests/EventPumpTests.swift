@@ -140,6 +140,38 @@ struct EventPumpTests {
         }
         #expect(hasResize, "Resize event must be translated and posted")
     }
+
+    @Test("pump posts .terminalClosed (not resize(0,0)) when the source throws")
+    func pumpPostsTerminalClosedOnThrow() {
+        let channel = EventChannel()
+        let pump = EventPump(source: ThrowingEventSource(), channel: channel)
+        // Wide window absorbs CI-runner scheduling starvation.
+        Thread.sleep(forTimeInterval: 0.5)
+        pump.stop()
+
+        let events = channel.drainAll()
+        let hasTerminalClosed = events.contains {
+            if case .terminalClosed = $0 { return true }
+            return false
+        }
+        let hasZeroResize = events.contains {
+            if case .resize(let s) = $0 { return s.cols == 0 && s.rows == 0 }
+            return false
+        }
+        #expect(hasTerminalClosed, "A thrown source must surface as the dedicated .terminalClosed signal")
+        #expect(!hasZeroResize, "The fatal signal must NOT be overloaded onto resize(0,0)")
+    }
+}
+
+// MARK: - ThrowingEventSource (helper for the fatal-terminal test)
+
+/// An `EventSource` whose first poll throws an I/O error, simulating a closed
+/// TTY / SIGHUP. Used to verify the pump's fatal-terminal handling.
+final class ThrowingEventSource: EventSource, @unchecked Sendable {
+    struct PollError: Error {}
+    func next(timeout: Duration) throws -> Event? {
+        throw PollError()
+    }
 }
 
 // MARK: - InfiniteEventSource (helper for park tests)

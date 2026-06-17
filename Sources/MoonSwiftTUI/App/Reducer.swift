@@ -41,6 +41,12 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     case .appStarted:
         return reduceAppStarted(s)
 
+    case .terminalClosed:
+        // Fatal-terminal signal. The AppDriver intercepts this before reduce and
+        // exits the loop (clean EOF quit), so the reducer never normally sees it;
+        // handled here as a defensive no-op for switch exhaustiveness.
+        return (s, [])
+
     // MARK: Terminal input
 
     case .key(let code, let modifiers):
@@ -834,10 +840,14 @@ private func reduceNvimPaneKey(
 ///   stores the pending size, sets the deadline, and arms the tick.
 private func reduceResize(_ s: AppState, size: TerminalSize) -> (AppState, [Effect]) {
     var s = s
-    s.terminalSize = size
 
-    // Only debounce for nvim pane; ignore 0×0 sentinel (AppDriver CR-019).
+    // Ignore a degenerate 0×0 resize entirely: keep the last good terminalSize so
+    // the renderer always has valid dimensions. crossterm can emit a transient
+    // 0×0 on the first input event in some terminals/multiplexers (CR-019
+    // revision; E2E first-keystroke-quit fix). Only after this guard do we adopt
+    // the new size.
     guard size.cols > 0 && size.rows > 0 else { return (s, []) }
+    s.terminalSize = size
 
     switch s.focus {
     case .nvimPane, .nvimSpawning:

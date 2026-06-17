@@ -231,15 +231,18 @@ public final class AppDriver: @unchecked Sendable {
                 // has the current dimensions. Updated before the reduce call so
                 // the renderer sees the new size immediately on the same frame.
                 //
-                // CR-019: EventPump posts resize(0,0) as a sentinel when the
+                // CR-019 (revised): EventPump posts `.terminalClosed` when the
                 // terminal source throws (closed TTY / SIGHUP). Treat it as a
-                // clean EOF quit so the loop exits gracefully instead of
-                // looping forever on an unresponsive channel.
-                if case .resize(let size) = event {
-                    if size.cols == 0 && size.rows == 0 {
-                        quitCode = 0
-                        break
-                    }
+                // clean EOF quit so the loop exits gracefully instead of looping
+                // forever on an unresponsive channel. A genuine content resize of
+                // 0×0 is NOT fatal — it flows into reduce and is ignored there
+                // (reduceResize keeps the last good size). Conflating the two was
+                // the E2E first-keystroke-quit bug.
+                if case .terminalClosed = event {
+                    quitCode = 0
+                    break
+                }
+                if case .resize(let size) = event, size.cols > 0, size.rows > 0 {
                     currentSize = size
                 }
 
