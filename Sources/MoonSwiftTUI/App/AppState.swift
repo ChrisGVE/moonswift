@@ -401,13 +401,19 @@ public struct BottomPaneState: Sendable, Equatable {
 
 // MARK: - TransientMessage
 
-/// A time-limited status-bar message with an expiry date.
+/// A status-bar message, normally time-limited by an expiry date.
 ///
-/// The TickSource is armed at 1.5 s while a transient is active; on each
-/// `.tick` the reducer checks whether the expiry has passed and clears it.
+/// The TickSource is armed at 1.5 s while an *expiring* transient is active; on
+/// each `.tick` the reducer checks whether the expiry has passed and clears it.
+/// A message built with `init(persistentText:)` has no expiry (`expiry == nil`)
+/// and stays until a reducer clears it explicitly — used for the nvim
+/// write-block error, which must remain visible until the next `:w` or edit
+/// rather than vanishing after the 1.5 s window (ux-spec §7.3, P4 audit gap #5).
 public struct TransientMessage: Sendable, Equatable {
     public let text: String
-    public let expiry: Date
+    /// When the message auto-clears, or `nil` if it persists until a reducer
+    /// clears it explicitly.
+    public let expiry: Date?
 
     public init(text: String, duration: Duration = TickInterval.transientExpiry) {
         self.text = text
@@ -415,6 +421,12 @@ public struct TransientMessage: Sendable, Equatable {
             Double(duration.components.seconds)
             + Double(duration.components.attoseconds) / 1e18
         self.expiry = Date(timeIntervalSinceNow: seconds)
+    }
+
+    /// A message with no expiry — it persists until a reducer clears it.
+    public init(persistentText text: String) {
+        self.text = text
+        self.expiry = nil
     }
 }
 

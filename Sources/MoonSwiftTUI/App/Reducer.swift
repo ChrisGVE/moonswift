@@ -288,10 +288,14 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         return reduceWriteBackFailed(s, outcome: outcome)
 
     case .writeBackBlocked(let diagnostic):
-        // Syntax error blocked the write. AppDriver injected the comment block
-        // into the nvim buffer; reducer surfaces the diagnostic in the status bar.
+        // A syntax pre-pass blocked the write. The nvim buffer stays open with
+        // the user's edits intact; surface the diagnostic as a *persistent*
+        // status-bar message (no 1.5 s expiry) so the reason stays visible until
+        // the next `:w` or edit clears it. (Decision: no buffer comment-injection
+        // on the nvim path — the buffer is still open, unlike the $EDITOR
+        // fallback. ux-spec §7.3, P4 audit gap #5.)
         s.transient = TransientMessage(
-            text: "Syntax error: \(diagnostic.message) (line \(diagnostic.line))"
+            persistentText: "Syntax error: \(diagnostic.message) (line \(diagnostic.line))"
         )
         return (s, [armTickIfNeeded(s)].compactMap { $0 })
 
@@ -563,6 +567,11 @@ private func reduceNvimWriteRequested(_ s: AppState) -> (AppState, [Effect]) {
     else {
         return (s, [])
     }
+    // A fresh `:w` supersedes a persistent write-block message; clear it so a
+    // stale error does not linger while the new write runs (gap #5). A
+    // re-blocked write re-posts it via `.writeBackBlocked`.
+    var s = s
+    if let t = s.transient, t.expiry == nil { s.transient = nil }
     return (s, [.writeBack(fragment, editedText: "", force: false)])
 }
 
@@ -791,6 +800,12 @@ private func reduceNvimPaneKey(
     modifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
 
+    var s = s
+    // Any keystroke in the nvim pane counts as the "next edit" that dismisses a
+    // persistent write-block message — this also covers typing `:w` (its keys
+    // are forwarded here) and `<C-e>` (gap #5).
+    if let t = s.transient, t.expiry == nil { s.transient = nil }
+
     // <C-e> exits the nvim pane (ux-spec §7.4; symmetric with the enter binding).
     if code == .char("e"), modifiers == .ctrl {
         return (s, [.nvimDetach])
@@ -848,8 +863,10 @@ private func reduceTick(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
     var effects: [Effect] = []
 
-    // Expire the transient message if its deadline has passed.
-    if let t = s.transient, Date() >= t.expiry {
+    // Expire the transient message if it has a deadline and the deadline has
+    // passed. A persistent message (expiry == nil) is left for a reducer to
+    // clear explicitly.
+    if let t = s.transient, let expiry = t.expiry, Date() >= expiry {
         s.transient = nil
     }
 
@@ -2088,8 +2105,10 @@ private func armTickIfNeeded(_ s: AppState) -> Effect? {
         }
     }
 
-    // Transient expiry (1.5 s) while a transient message is showing.
-    if s.transient != nil {
+    // Transient expiry (1.5 s) while an *expiring* transient message is showing.
+    // A persistent message (expiry == nil) needs no tick — it is cleared by a
+    // reducer, not by deadline — so it must not spin the timer forever.
+    if let t = s.transient, t.expiry != nil {
         let candidate = TickInterval.transientExpiry
         if let m = minimum {
             minimum = m < candidate ? m : candidate

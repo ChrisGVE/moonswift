@@ -257,7 +257,11 @@ Full interactive debugging in the TUI:
   reopened with error comment; fix → file updated, all comments/format
   preserved per the validation contract; externally-touched file triggers the
   conflict prompt; (4b): nvim renders in-pane, `:w` triggers the same
-  write-back.
+  write-back. On a `:w` syntax error the nvim buffer stays open with the user's
+  edits intact, so the diagnostic surfaces as a persistent status-bar message
+  (cleared by the next `:w` or edit) rather than being injected into the buffer
+  as comments — the comment-injection of 4a applies only where the editor has
+  closed.
 
 ### User Experience
 

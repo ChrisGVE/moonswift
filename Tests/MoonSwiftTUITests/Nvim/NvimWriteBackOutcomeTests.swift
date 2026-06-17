@@ -217,16 +217,46 @@ struct WriteBackBlockedReducerTests {
         }
     }
 
-    @Test("writeBackBlocked arms the tick source for transient expiry")
-    func blockedArmsTickSource() {
+    @Test("writeBackBlocked message is persistent (no expiry) — gap #5")
+    func blockedIsPersistent() {
         let s = wboMakeNvimPaneState()
         let diag = Diagnostic(severity: .error, line: 1, message: "e", source: .syntaxPrePass)
-        let (_, effects) = wboApply(s, .writeBackBlocked(diag))
+        let (next, effects) = wboApply(s, .writeBackBlocked(diag))
+        // No expiry, and no tick armed for it (a persistent message is cleared
+        // by a reducer, not by deadline).
+        #expect(next.transient?.expiry == nil)
         let hasTick = effects.contains {
             if case .startTick = $0 { return true }
             return false
         }
-        #expect(hasTick)
+        #expect(hasTick == false)
+    }
+
+    @Test("a persistent writeBackBlocked message survives a tick — gap #5")
+    func blockedSurvivesTick() {
+        let s = wboMakeNvimPaneState()
+        let diag = Diagnostic(severity: .error, line: 1, message: "e", source: .syntaxPrePass)
+        let (afterBlock, _) = wboApply(s, .writeBackBlocked(diag))
+        let (afterTick, _) = wboApply(afterBlock, .tick)
+        #expect(afterTick.transient?.text == "Syntax error: e (line 1)")
+    }
+
+    @Test("the next nvim-pane keystroke dismisses the persistent message — gap #5")
+    func blockedClearedByNextEdit() {
+        let s = wboMakeNvimPaneState()
+        let diag = Diagnostic(severity: .error, line: 1, message: "e", source: .syntaxPrePass)
+        let (afterBlock, _) = wboApply(s, .writeBackBlocked(diag))
+        let (afterKey, _) = wboApply(afterBlock, .key(.char("x"), modifiers: []))
+        #expect(afterKey.transient == nil)
+    }
+
+    @Test("the next :w dismisses the persistent message — gap #5")
+    func blockedClearedByNextWrite() {
+        let s = wboMakeNvimPaneState()
+        let diag = Diagnostic(severity: .error, line: 1, message: "e", source: .syntaxPrePass)
+        let (afterBlock, _) = wboApply(s, .writeBackBlocked(diag))
+        let (afterWrite, _) = wboApply(afterBlock, .nvimWriteRequested)
+        #expect(afterWrite.transient == nil)
     }
 }
 

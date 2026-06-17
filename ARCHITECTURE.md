@@ -1732,8 +1732,8 @@ sequenceDiagram
     WB->>LS: lintService.syntaxPrePass(LuaSourceFragment(code: editedText, provenance: fragment.provenance))
     alt syntax error
         LS-->>WB: Diagnostic
-        WB->>RPC: await rpc.notify nvim_buf_set_lines — inject error comment block (ux-spec §7.3 step 7)
         WB->>CH: AppEvent.writeBackBlocked(Diagnostic)
+        Note over CH: nvim buffer stays open with the user's edits; the reducer surfaces a persistent status-bar message (no buffer injection — gap #5). The $EDITOR fallback, where the editor has closed, injects the comment instead (§10.3e).
     end
     WB->>SRC: SourceStore.validateReadable(at: fragment.provenance.file, projectRoot:, sizeLimit:)
     alt validateReadable rejection
@@ -1877,7 +1877,7 @@ case nvimReady(NvimSession)                       // spawn + handshake complete;
 case nvimDetached                                 // nvim_command :qa! acknowledged
 case writeBackSucceeded(SourceID)                 // reload the source
 case writeBackFailed(WriteBackResult.Outcome)     // SpliceError/IO/validation error
-case writeBackBlocked(Diagnostic)                 // syntax error; comment injected
+case writeBackBlocked(Diagnostic)                 // syntax error; persistent status-bar message (nvim buffer stays open — gap #5)
 case conflictDetected(fileURL: URL,
                       expectedHash: SHA256Digest,
                       editedText: String)         // conflict modal
