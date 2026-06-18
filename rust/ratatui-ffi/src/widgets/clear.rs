@@ -35,13 +35,9 @@ pub extern "C" fn rffi_clear_rect_widget(handle: *mut (), rect: crate::layout::R
             width: rect.width,
             height: rect.height,
         };
-        match t.terminal.draw(|frame| frame.render_widget(RtClear, area)) {
-            Ok(_) => 0,
-            Err(e) => {
-                set_last_error(format!("rffi_clear_rect_widget: {e}"));
-                crate::error::RFFI_ERR_IO
-            }
-        }
+        // Accumulate into the scratch buffer; rffi_flush presents the frame.
+        t.render_to_scratch(RtClear, area);
+        0
     })
 }
 

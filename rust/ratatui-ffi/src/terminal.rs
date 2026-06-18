@@ -58,12 +58,77 @@ static SAVED_TERMIOS: OnceLock<Option<libc::termios>> = OnceLock::new();
 // ---------------------------------------------------------------------------
 
 use ratatui::backend::CrosstermBackend;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 /// Heap-allocated terminal handle. Swift receives an opaque `*mut RffiTerminal`
 /// and passes it back on every render/terminal-class call.
+///
+/// # Frame accumulation model (the "accumulate-then-present" contract)
+///
+/// Each render cycle is: `rffi_begin_frame` → N widget/cell draws →
+/// `rffi_flush`. All draws within a cycle render into `scratch` — an
+/// off-screen buffer this handle owns — and `rffi_flush` blits the whole
+/// `scratch` to the terminal in a SINGLE `Terminal::draw` (one diff + write).
+///
+/// This replaces the original model where every widget/cell call was its own
+/// `Terminal::draw`. That was fatal: ratatui's draw renders into the back
+/// buffer, diffs against the previous buffer, then swaps and resets. So each
+/// per-widget draw erased everything the previous one drew, and the trailing
+/// empty-closure flush erased the last survivor — the screen went blank
+/// (the black-screen blocker; see handover.md). Accumulating into a buffer we
+/// own and presenting once is the fix.
 pub struct RffiTerminal {
     pub(crate) terminal: Terminal<CrosstermBackend<Stdout>>,
+    /// Off-screen accumulation buffer. Sized to the terminal at begin-frame;
+    /// every widget/cell draw renders into it; `present` blits it out.
+    pub(crate) scratch: Buffer,
+}
+
+impl RffiTerminal {
+    /// Start a new frame: resize `scratch` to the current terminal dimensions
+    /// (only when they changed) and clear every cell to blank. Called by
+    /// `rffi_begin_frame` before any widget/cell draw.
+    pub(crate) fn begin_frame(&mut self) -> std::io::Result<()> {
+        let size = self.terminal.size()?;
+        let area = Rect::new(0, 0, size.width, size.height);
+        if self.scratch.area != area {
+            self.scratch.resize(area);
+        }
+        self.scratch.reset();
+        Ok(())
+    }
+
+    /// Render a widget into `scratch`, clamping the target rect to the buffer
+    /// bounds so an oversized or off-screen rect is a no-op rather than a panic.
+    pub(crate) fn render_to_scratch<W: ratatui::widgets::Widget>(&mut self, widget: W, area: Rect) {
+        let clamped = area.intersection(self.scratch.area);
+        if clamped.width == 0 || clamped.height == 0 {
+            return;
+        }
+        widget.render(clamped, &mut self.scratch);
+    }
+
+    /// Present the accumulated `scratch` buffer: a single `Terminal::draw` that
+    /// copies `scratch` into the frame's back buffer, so ratatui performs ONE
+    /// diff + write for the whole frame.
+    pub(crate) fn present(&mut self) -> std::io::Result<()> {
+        // Reborrow scratch immutably before the mutable terminal borrow — the
+        // two are disjoint fields, so the closure may read scratch while
+        // Terminal::draw holds &mut terminal.
+        let scratch = &self.scratch;
+        self.terminal.draw(|frame| {
+            let buf = frame.buffer_mut();
+            let area = buf.area.intersection(scratch.area);
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    buf[(x, y)] = scratch[(x, y)].clone();
+                }
+            }
+        })?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +204,18 @@ pub extern "C" fn rffi_terminal_init() -> *mut () {
             Ok(mut term) => {
                 let _ = term.hide_cursor();
                 let _ = term.clear();
-                let handle = Box::new(RffiTerminal { terminal: term });
+                // Size the accumulation buffer to the current terminal; a
+                // zero-area fallback is harmless — begin_frame resizes it on
+                // the first frame anyway.
+                let area = term
+                    .size()
+                    .map(|s| Rect::new(0, 0, s.width, s.height))
+                    .unwrap_or_else(|_| Rect::new(0, 0, 0, 0));
+                let scratch = Buffer::empty(area);
+                let handle = Box::new(RffiTerminal {
+                    terminal: term,
+                    scratch,
+                });
                 INITIALIZED.store(true, Ordering::Release);
                 Box::into_raw(handle) as *mut ()
             }
@@ -287,6 +363,32 @@ pub extern "C" fn rffi_terminal_resume(handle: *mut ()) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
+// rffi_begin_frame — reset the accumulation buffer for a new render cycle
+// ---------------------------------------------------------------------------
+
+/// Begin a new render frame: resize the off-screen accumulation buffer to the
+/// current terminal size and clear it to blank. Call once at the start of each
+/// render cycle, before any widget or cell draw; finish the cycle with
+/// `rffi_flush`, which presents the accumulated buffer in a single draw.
+///
+/// Thread class: render/terminal (UI thread only).
+#[no_mangle]
+pub extern "C" fn rffi_begin_frame(handle: *mut ()) -> i32 {
+    ffi_guard!("rffi_begin_frame", {
+        if handle.is_null() {
+            set_last_error("rffi_begin_frame: null handle");
+            return crate::error::RFFI_ERR_NULL_PTR;
+        }
+        let t = unsafe { &mut *(handle as *mut RffiTerminal) };
+        if let Err(e) = t.begin_frame() {
+            set_last_error(format!("rffi_begin_frame: {e}"));
+            return RFFI_ERR_IO;
+        }
+        0
+    })
+}
+
+// ---------------------------------------------------------------------------
 // rffi_emergency_restore — async-signal-safe, exempt from error protocol
 // ---------------------------------------------------------------------------
 
@@ -404,5 +506,27 @@ mod tests {
         // In the test process the terminal is never initialised, so this is
         // a pure no-op. We only verify it does not panic.
         rffi_emergency_restore();
+    }
+
+    /// Regression for the black-screen blocker (handover.md): the original
+    /// model issued one `Terminal::draw` per widget, and ratatui's per-draw
+    /// diff+swap erased everything the previous draw had rendered, so only one
+    /// widget — or none — ever reached the screen. The fix renders every widget
+    /// into ONE shared buffer (the accumulate-then-present contract). This test
+    /// asserts both widgets survive in a single buffer, exactly as `present`
+    /// then blits it. It needs no TTY.
+    #[test]
+    fn two_widgets_accumulate_in_one_buffer() {
+        use ratatui::text::Line;
+        use ratatui::widgets::{Paragraph, Widget};
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
+        Paragraph::new(Line::from("AAAA")).render(Rect::new(0, 0, 10, 1), &mut buf);
+        Paragraph::new(Line::from("BBBB")).render(Rect::new(0, 1, 10, 1), &mut buf);
+
+        let row0: String = (0..4).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        let row1: String = (0..4).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert_eq!(row0, "AAAA", "first widget must survive accumulation");
+        assert_eq!(row1, "BBBB", "second widget must survive accumulation");
     }
 }

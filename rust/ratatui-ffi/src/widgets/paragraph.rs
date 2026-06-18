@@ -268,13 +268,9 @@ pub extern "C" fn rffi_paragraph_draw(
             width: rect.width,
             height: rect.height,
         };
-        match t.terminal.draw(|frame| frame.render_widget(widget, area)) {
-            Ok(_) => 0,
-            Err(e) => {
-                set_last_error(format!("rffi_paragraph_draw: {e}"));
-                crate::error::RFFI_ERR_IO
-            }
-        }
+        // Accumulate into the scratch buffer; rffi_flush presents the frame.
+        t.render_to_scratch(widget, area);
+        0
     })
 }
 

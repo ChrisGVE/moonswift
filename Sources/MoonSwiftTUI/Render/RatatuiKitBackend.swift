@@ -72,12 +72,12 @@ public final class RatatuiKitBackend: RenderBackend {
     // MARK: Frame lifecycle
 
     public func beginFrame(size: TerminalSize, defaultStyle: CellStyle) throws {
-        // beginFrame has no dedicated FFI entry point — the clear below fills
-        // the role of "reset the frame buffer". Widgets draw on top of it.
-        // A full-screen clear with the default background is the idiomatic
-        // ratatui frame start.
-        let fullRect = Rect(x: 0, y: 0, width: size.cols, height: size.rows)
-        try clearWidget(handle: terminal.rawHandle, rect: fullRect)
+        // Reset the shim's off-screen accumulation buffer for a new frame.
+        // Every widget/cell draw this cycle renders into that buffer; flush()
+        // presents it in a single draw (accumulate-then-present contract).
+        // This replaces the old per-call clearWidget, which was itself a
+        // standalone terminal.draw and part of the black-screen render model.
+        try terminal.beginFrame()
     }
 
     public func flush() throws {

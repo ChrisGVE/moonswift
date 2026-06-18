@@ -36,8 +36,9 @@ pub extern "C" fn rffi_flush(handle: *mut ()) -> i32 {
             return crate::error::RFFI_ERR_NULL_PTR;
         }
         let t = unsafe { &mut *(handle as *mut RffiTerminal) };
-        // Drawing an empty frame triggers the diff + terminal write.
-        if let Err(e) = t.terminal.draw(|_| {}) {
+        // Present the accumulated scratch buffer in a single diff + write.
+        // (Frame model: rffi_begin_frame → widget/cell draws → rffi_flush.)
+        if let Err(e) = t.present() {
             set_last_error(format!("rffi_flush: {e}"));
             return crate::error::RFFI_ERR_IO;
         }
@@ -117,40 +118,29 @@ pub extern "C" fn rffi_write_cells(
             .bg(bg_color)
             .add_modifier(mods);
 
+        // Write directly into the accumulation buffer — no per-call draw.
+        // The scratch buffer is anchored at (0, 0), so cell coordinates are
+        // absolute. rffi_flush presents the whole frame later.
         let t = unsafe { &mut *(handle as *mut RffiTerminal) };
-        let err_cell = std::cell::RefCell::new(None::<String>);
-
-        let res = t.terminal.draw(|frame| {
-            let area = frame.area();
-            if start_row >= area.height || start_col >= area.width {
-                return; // out of bounds — silent skip
+        let area = t.scratch.area;
+        if start_row >= area.height || start_col >= area.width {
+            return 0; // out of bounds — silent skip
+        }
+        let mut col = start_col;
+        for grapheme in s.chars() {
+            if col >= area.width {
+                break;
             }
-            let buf = frame.buffer_mut();
-            let mut col = start_col;
-            for grapheme in s.chars() {
-                if col >= area.width {
-                    break;
-                }
-                let cell = buf
-                    .cell_mut(ratatui::layout::Position::new(col, start_row))
-                    .expect("position in bounds");
+            if let Some(cell) = t
+                .scratch
+                .cell_mut(ratatui::layout::Position::new(col, start_row))
+            {
                 cell.set_char(grapheme);
                 cell.set_style(style);
-                col += 1;
             }
-        });
-
-        if let Some(msg) = err_cell.into_inner() {
-            set_last_error(msg);
-            return crate::error::RFFI_ERR_IO;
+            col += 1;
         }
-        match res {
-            Ok(_) => 0,
-            Err(e) => {
-                set_last_error(format!("rffi_write_cells: draw: {e}"));
-                crate::error::RFFI_ERR_IO
-            }
-        }
+        0
     })
 }
 
@@ -184,28 +174,19 @@ pub extern "C" fn rffi_clear_rect(
             return 0; // empty rect — nothing to do
         }
 
+        // Clear the region directly in the accumulation buffer (no draw).
         let t = unsafe { &mut *(handle as *mut RffiTerminal) };
-        let res = t.terminal.draw(|frame| {
-            let area = frame.area();
-            let buf = frame.buffer_mut();
-            let end_col = (col + width).min(area.width);
-            let end_row = (row + height).min(area.height);
-            for r in row..end_row {
-                for c in col..end_col {
-                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(c, r)) {
-                        *cell = ratatui::buffer::Cell::default();
-                    }
+        let area = t.scratch.area;
+        let end_col = (col + width).min(area.width);
+        let end_row = (row + height).min(area.height);
+        for r in row..end_row {
+            for c in col..end_col {
+                if let Some(cell) = t.scratch.cell_mut(ratatui::layout::Position::new(c, r)) {
+                    *cell = ratatui::buffer::Cell::default();
                 }
             }
-        });
-
-        match res {
-            Ok(_) => 0,
-            Err(e) => {
-                set_last_error(format!("rffi_clear_rect: {e}"));
-                crate::error::RFFI_ERR_IO
-            }
         }
+        0
     })
 }
 

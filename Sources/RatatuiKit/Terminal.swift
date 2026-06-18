@@ -154,7 +154,23 @@ public final class Terminal {
         try checkFFI(rffi_terminal_resume(h))
     }
 
-    // MARK: - Frame flush
+    // MARK: - Frame lifecycle
+
+    /// Begins a new render frame: resizes the shim's off-screen accumulation
+    /// buffer to the current terminal size and clears it. Call once at the
+    /// start of each render cycle, before any widget or cell draw; finish the
+    /// cycle with `flush()`, which presents the accumulated buffer in a single
+    /// draw. (Accumulate-then-present contract — see RffiTerminal in the shim.)
+    ///
+    /// - Throws: `FFIError` on shim failure.
+    /// - Thread class: render/terminal-class.
+    public func beginFrame() throws {
+        assertRenderClass(owningThread: owningThread)
+        guard let h = handle else {
+            preconditionFailure("Terminal.beginFrame() called after teardown")
+        }
+        try checkFFI(rffi_begin_frame(h))
+    }
 
     /// Flushes the current ratatui frame (diff + write). Call once per render
     /// cycle after all widget and cell writes.

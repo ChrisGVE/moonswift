@@ -349,25 +349,27 @@ pub extern "C" fn rffi_list_draw(
             width: rect.width,
             height: rect.height,
         };
-        let res = t.terminal.draw(|frame| {
+        // Accumulate into the scratch buffer; rffi_flush presents the frame.
+        // Clamp to the buffer bounds so an oversized rect is a no-op.
+        let clamped = area.intersection(t.scratch.area);
+        if clamped.width != 0 && clamped.height != 0 {
             if let Some(sel) = l.selected {
                 let mut state = ratatui::widgets::ListState::default();
                 state.select(Some(sel));
                 if let Some(off) = l.scroll_offset {
                     state = state.with_offset(off);
                 }
-                frame.render_stateful_widget(widget.clone(), area, &mut state);
+                ratatui::widgets::StatefulWidget::render(
+                    widget,
+                    clamped,
+                    &mut t.scratch,
+                    &mut state,
+                );
             } else {
-                frame.render_widget(widget.clone(), area);
-            }
-        });
-        match res {
-            Ok(_) => 0,
-            Err(e) => {
-                set_last_error(format!("rffi_list_draw: {e}"));
-                crate::error::RFFI_ERR_IO
+                ratatui::widgets::Widget::render(widget, clamped, &mut t.scratch);
             }
         }
+        0
     })
 }
 
@@ -400,16 +402,12 @@ pub extern "C" fn rffi_list_draw_stateful(
             state.select(Some(sel));
         }
         state = state.with_offset(s.offset);
-        let res = t.terminal.draw(|frame| {
-            frame.render_stateful_widget(widget.clone(), area, &mut state);
-        });
-        match res {
-            Ok(_) => 0,
-            Err(e) => {
-                set_last_error(format!("rffi_list_draw_stateful: {e}"));
-                crate::error::RFFI_ERR_IO
-            }
+        // Accumulate into the scratch buffer; rffi_flush presents the frame.
+        let clamped = area.intersection(t.scratch.area);
+        if clamped.width != 0 && clamped.height != 0 {
+            ratatui::widgets::StatefulWidget::render(widget, clamped, &mut t.scratch, &mut state);
         }
+        0
     })
 }
 
