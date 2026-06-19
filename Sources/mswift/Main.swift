@@ -119,10 +119,16 @@ private func run(launchMode: LaunchMode) {
     // The suspender also wraps the terminal for $EDITOR suspend/resume.
     let suspender = LiveTerminalSuspender(terminal: terminal)
 
+    // Resolve the color theme from the live terminal environment. Without this
+    // the AppState defaults to an empty token table, so every `tokenStyle(...)`
+    // falls back to `CellStyle.default` and the whole UI renders monochrome —
+    // no syntax colors, no focus border, no navigator selection highlight.
+    // Env-reading belongs at bootstrap, not in the pure reducer.
     let seed = AppState(
         launch: launchMode,
         project: projectState,
-        lintState: .initializing
+        lintState: .initializing,
+        theme: ThemeEngine.resolve()
     )
 
     // ── Engine services ───────────────────────────────────────────────────────
