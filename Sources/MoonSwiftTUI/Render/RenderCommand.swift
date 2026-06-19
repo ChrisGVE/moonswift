@@ -84,8 +84,11 @@ public enum RenderCommand: Sendable {
     /// Render a navigator list widget into `rect`.
     ///
     /// `items` are pre-formatted display strings; `selectedIndex` marks the
-    /// highlighted row; `title` is the block title (if any).
-    case navigatorList(rect: Rect, items: [Span], selectedIndex: Int?, title: [Span])
+    /// highlighted row; `title` is the block title (if any); `highlightStyle` is
+    /// the style applied to the selected row (the `focus_bg` background when the
+    /// navigator is focused, `dim` otherwise).
+    case navigatorList(
+        rect: Rect, items: [Span], selectedIndex: Int?, title: [Span], highlightStyle: CellStyle)
 
     /// Render a paragraph widget (code pane content, help text, error text)
     /// into `rect`.

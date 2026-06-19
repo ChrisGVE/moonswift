@@ -343,7 +343,8 @@ private func renderNavigator(
             rect: listRect,
             items: items,
             selectedIndex: finalSelectedIndex,
-            title: []
+            title: [],
+            highlightStyle: highlightStyle
         )
     ]
 

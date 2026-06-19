@@ -56,7 +56,9 @@ private final class NvimCellGridBackend: RenderBackend {
         try grid.writeCells(col: rect.x, row: rect.y, text: line, style: style)
     }
 
-    func navigatorList(rect: Rect, items: [Span], selectedIndex: Int?, title: [Span]) throws {
+    func navigatorList(
+        rect: Rect, items: [Span], selectedIndex: Int?, title: [Span], highlightStyle: CellStyle
+    ) throws {
         let innerWidth = Int(rect.width)
         for (idx, span) in items.enumerated() {
             guard idx < Int(rect.height) else { break }

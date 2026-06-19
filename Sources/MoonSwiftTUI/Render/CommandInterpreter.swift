@@ -49,7 +49,8 @@ public protocol RenderBackend: AnyObject {
         rect: Rect,
         items: [Span],
         selectedIndex: Int?,
-        title: [Span]
+        title: [Span],
+        highlightStyle: CellStyle
     ) throws
 
     /// Render a paragraph (code pane content, help text, error text).
@@ -231,12 +232,13 @@ public final class CommandInterpreter {
         case .titleBar(let rect, let left, let badges, let style):
             try backend.titleBar(rect: rect, left: left, badges: badges, style: style)
 
-        case .navigatorList(let rect, let items, let selectedIndex, let title):
+        case .navigatorList(let rect, let items, let selectedIndex, let title, let highlightStyle):
             try backend.navigatorList(
                 rect: rect,
                 items: items,
                 selectedIndex: selectedIndex,
-                title: title
+                title: title,
+                highlightStyle: highlightStyle
             )
 
         case .paragraph(let rect, let lines, let block):

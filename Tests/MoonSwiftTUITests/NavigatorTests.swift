@@ -63,7 +63,7 @@ private let size80x24 = TerminalSize(cols: 80, rows: 24)
 /// Extracts all `.navigatorList` commands from a render output.
 private func extractNavigatorLists(_ cmds: [RenderCommand]) -> [(items: [Span], selectedIndex: Int?)] {
     cmds.compactMap {
-        if case .navigatorList(_, let items, let sel, _) = $0 {
+        if case .navigatorList(_, let items, let sel, _, _) = $0 {
             return (items, sel)
         }
         return nil
@@ -396,6 +396,39 @@ struct NavigatorRenderingTests {
         // Use a blank theme — tokenStyle returns .default for unknown tokens.
         // The tests here check the *text prefix*, not the color style.
         ThemeState(name: "test", capability: .truecolor, tokens: [:])
+    }
+
+    /// Extracts the `highlightStyle` of the first `.navigatorList` command.
+    private func navigatorHighlightStyle(_ cmds: [RenderCommand]) -> CellStyle? {
+        for cmd in cmds {
+            if case .navigatorList(_, _, _, _, let hl) = cmd { return hl }
+        }
+        return nil
+    }
+
+    @Test("Focused navigator highlights the selected row with a focus_bg background")
+    func focusedNavigatorHasBackgroundHighlight() {
+        // Regression: navigatorList previously never set a highlight style, so the
+        // selected row was invisible on a real terminal even though setSelected was
+        // called. The focused highlight must carry the focus_bg *background*.
+        let theme = ThemeEngine.resolve(capability: .truecolor)
+        let id = SourceID(path: "scripts/init.lua")
+        let sources: [SourceID: SourceState] = [id: .loaded(makeFragment(path: "scripts/init.lua"))]
+        var focused = stateWithNavigator(ids: [id], sources: sources)
+        focused.theme = theme
+        focused.focus = .pane(.navigator)
+        let focusedHL = navigatorHighlightStyle(render(focused, size: size80x24))
+        #expect(focusedHL != nil, "render must emit a navigatorList with a highlight style")
+        let expected = tokenStyle(.focusBg, theme: theme)
+        #expect(focusedHL == expected, "focused selection must use the focus_bg style")
+        #expect(expected.bg != CellStyle.default.bg, "focus_bg must contribute a real background")
+
+        // Unfocused navigator uses a different (dim) highlight — proves focus-awareness.
+        var unfocused = stateWithNavigator(ids: [id], sources: sources)
+        unfocused.theme = theme
+        unfocused.focus = .pane(.codePane)
+        let unfocusedHL = navigatorHighlightStyle(render(unfocused, size: size80x24))
+        #expect(unfocusedHL != focusedHL, "unfocused highlight must differ from the focused one")
     }
 
     @Test("Loaded entry shows provenance displayName, no prefix")

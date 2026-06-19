@@ -109,17 +109,19 @@ struct CommandInterpreterTests {
         let rect = makeRect(0, 1, 18, 14)
         let items: [Span] = [Span("init.lua"), Span("helper.lua")]
         let title: [Span] = [Span("Sources")]
+        let hlStyle = CellStyle(fg: 0xFFFF_FFFF, bg: 0x0044_475A, mods: 0)
 
         try interp.apply([
             .beginFrame(size: makeSize(), defaultStyle: defaultStyle()),
-            .navigatorList(rect: rect, items: items, selectedIndex: 0, title: title),
+            .navigatorList(
+                rect: rect, items: items, selectedIndex: 0, title: title, highlightStyle: hlStyle),
         ])
 
         let navCall = backend.calls.first {
             if case .navigatorList = $0 { return true }
             return false
         }
-        guard case .navigatorList(let r, let its, let sel, let ttl) = navCall else {
+        guard case .navigatorList(let r, let its, let sel, let ttl, let hl) = navCall else {
             Issue.record("No navigatorList call recorded")
             return
         }
@@ -127,6 +129,7 @@ struct CommandInterpreterTests {
         #expect(its == items)
         #expect(sel == 0)
         #expect(ttl == title)
+        #expect(hl == hlStyle, "interpreter must forward the highlight style to the backend")
     }
 
     // MARK: paragraph
@@ -439,7 +442,8 @@ struct CommandInterpreterTests {
         try interp.apply([
             .beginFrame(size: makeSize(), defaultStyle: style),
             .titleBar(rect: rect, left: "app", badges: [], style: style),
-            .navigatorList(rect: rect, items: [], selectedIndex: nil, title: []),
+            .navigatorList(
+                rect: rect, items: [], selectedIndex: nil, title: [], highlightStyle: style),
             .paragraph(rect: rect, lines: [], block: nil),
             .tabBar(rect: rect, tabs: ["T"], selectedIndex: 0),
             .block(rect: rect, config: config, borderStyle: style),

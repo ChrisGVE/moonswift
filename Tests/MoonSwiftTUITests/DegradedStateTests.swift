@@ -85,7 +85,7 @@ private func cellRunTexts(_ cmds: [RenderCommand]) -> [String] {
 /// Extracts all `.navigatorList` first-item texts from render commands.
 private func navigatorFirstItemText(_ cmds: [RenderCommand]) -> String? {
     for cmd in cmds {
-        if case .navigatorList(_, let items, _, _) = cmd {
+        if case .navigatorList(_, let items, _, _, _) = cmd {
             return items.first?.text
         }
     }
@@ -163,7 +163,7 @@ struct ColorCapabilityTests {
     /// Finds the first navigator item text in render commands.
     private func firstNavItem(_ cmds: [RenderCommand]) -> String? {
         for cmd in cmds {
-            if case .navigatorList(_, let items, _, _) = cmd { return items.first?.text }
+            if case .navigatorList(_, let items, _, _, _) = cmd { return items.first?.text }
         }
         return nil
     }
@@ -232,7 +232,7 @@ struct MalformedProjectNavigatorTests {
         state.theme.tokens[.error] = TokenStyle(fg: .rgb(255, 0, 0))
         let cmds = render(state, size: minSize())
         for cmd in cmds {
-            if case .navigatorList(_, let items, _, _) = cmd {
+            if case .navigatorList(_, let items, _, _, _) = cmd {
                 if let first = items.first {
                     #expect(first.text == "Project file error")
                     // CellStyle.fg is UInt32 encoded as 0x00RRGGBB.

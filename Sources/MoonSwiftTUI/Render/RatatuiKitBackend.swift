@@ -107,12 +107,18 @@ public final class RatatuiKitBackend: RenderBackend {
         rect: Rect,
         items: [Span],
         selectedIndex: Int?,
-        title: [Span]
+        title: [Span],
+        highlightStyle: CellStyle
     ) throws {
         let widget = try ListWidget()
         for item in items {
             try widget.appendItem(spans: [item])
         }
+        // Without an explicit highlight style a ratatui List renders the selected
+        // row identically to the rest — `setSelected` alone is invisible. Apply
+        // the focus-aware style so the selection actually shows (focus_bg
+        // background when focused, dim otherwise).
+        try widget.setHighlightStyle(highlightStyle)
         if let idx = selectedIndex {
             try widget.setSelected(Int32(idx))
         } else {
