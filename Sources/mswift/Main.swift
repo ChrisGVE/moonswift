@@ -165,6 +165,18 @@ private func run(launchMode: LaunchMode) {
         makeLuaLSClient: { LuaLSClient() }
     )
 
+    // Seed the real terminal size before the loop starts. The EventPump only
+    // posts a `.resize` when crossterm emits one (on SIGWINCH), and a terminal
+    // launched directly at its final size sends no startup SIGWINCH — so without
+    // this seed the opening frames render at the AppDriver's 80×24 default (a
+    // tiny box inside a larger window). Querying the live size here (a
+    // render-class call on this UI thread) and posting it as an event makes
+    // run() drain the resize ahead of the .appStarted render, so the first
+    // frame fills the screen. If the query fails we keep the 80×24 fallback.
+    if let initialSize = try? terminal.size() {
+        channel.post(.resize(initialSize))
+    }
+
     // ── 6. Enter the loop ─────────────────────────────────────────────────────
     // AppDriver.run() blocks until Effect.quit is processed. The returned code
     // comes from the quit effect's exitCode payload (0 = normal quit, 70 =
