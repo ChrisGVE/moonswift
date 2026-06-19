@@ -196,12 +196,15 @@ pub extern "C" fn rffi_clear_rect(
 
 /// Decode a packed colour word into a ratatui `Color`.
 ///
-/// Encoding:
-///   0xFFFFFFFF — terminal default (`Color::Reset`)
-///   0x00RRGGBB — RGB truecolor
+/// Encoding (shared with `widgets/block.rs`):
+///   0xFFFFFFFF  — terminal default (`Color::Reset`)
+///   0x0100_00NN — 256-palette index NN (top byte 0x01)
+///   0x00RRGGBB  — RGB truecolor
 fn decode_color(packed: u32) -> Color {
     if packed == 0xFFFF_FFFF {
         Color::Reset
+    } else if (packed >> 24) == 0x01 {
+        Color::Indexed((packed & 0xFF) as u8)
     } else {
         let r = ((packed >> 16) & 0xFF) as u8;
         let g = ((packed >> 8) & 0xFF) as u8;
@@ -228,6 +231,13 @@ mod tests {
         assert_eq!(decode_color(0x00FF_8000), Color::Rgb(0xFF, 0x80, 0x00));
         assert_eq!(decode_color(0x0000_0000), Color::Rgb(0, 0, 0));
         assert_eq!(decode_color(0x00FF_FFFF), Color::Rgb(0xFF, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn decode_color_indexed() {
+        // 0x0100_00NN encodes 256-palette index NN, shared with block.rs.
+        assert_eq!(decode_color(0x0100_00ED), Color::Indexed(237));
+        assert_eq!(decode_color(0x0100_00FF), Color::Indexed(255));
     }
 
     #[test]
