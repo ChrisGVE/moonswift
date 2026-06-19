@@ -936,11 +936,42 @@ private func reduceTick(_ s: AppState) -> (AppState, [Effect]) {
 
 // MARK: - Key dispatch
 
+/// Drops a `.shift` modifier that a terminal decoder leaves set on an
+/// already-shifted printable scalar (e.g. `.char("G")` + `.shift` for Shift+g).
+///
+/// The case of a printable is carried by the scalar itself, so the modifier is
+/// redundant there and only a plain printable is normalized: when Ctrl or Alt is
+/// also held the shift distinguishes a real chord (`<C-S-x>` ≠ `<C-x>`) and is
+/// kept, and non-`.char` keys (arrows, Tab, …) are returned untouched. This lets
+/// the `(.char("G"), [])`-style bindings match live crossterm events as they
+/// already match the synthetic `[]`-modifier events in the unit tests.
+private func normalizingRedundantShift(code: KeyCode, modifiers: KeyModifiers) -> KeyModifiers {
+    guard case .char = code,
+        modifiers.contains(.shift),
+        !modifiers.contains(.ctrl),
+        !modifiers.contains(.alt)
+    else { return modifiers }
+    return modifiers.subtracting(.shift)
+}
+
 private func reduceKey(
     _ s: AppState,
     code: KeyCode,
-    modifiers: KeyModifiers
+    modifiers rawModifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
+
+    // Terminal key decoders (crossterm) deliver a shifted printable as the
+    // already-uppercased scalar with `.shift` STILL set — e.g. Shift+g arrives
+    // as `.char("G")` + `.shift`. There the shift is redundant (the scalar
+    // encodes the case), yet every pane/global binding is written against the
+    // bare scalar (`(.char("G"), [])`, `(.char("K"), [])`, `(.char("N"), [])`).
+    // Strip that redundant shift so the bindings fire on a real terminal exactly
+    // as they do for the synthetic-event unit tests. Only a plain printable is
+    // normalized: when Ctrl or Alt is also held the shift is meaningful (e.g.
+    // `<C-S-x>`) and is preserved, and the nvim translator already ignores a
+    // bare shift on printables (NvimKeyTranslator §translateChar), so the
+    // forwarded notation is unchanged.
+    let modifiers = normalizingRedundantShift(code: code, modifiers: rawModifiers)
 
     // Modal states capture all keys before global/pane dispatch.
     // No `default:` arm — every FocusState case must be handled here.
