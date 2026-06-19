@@ -866,6 +866,18 @@ private func reduceResize(_ s: AppState, size: TerminalSize) -> (AppState, [Effe
 // MARK: - Lifecycle handler
 
 private func reduceAppStarted(_ s: AppState) -> (AppState, [Effect]) {
+    var s = s
+    // Seed project-derived runtime state that the startup seed (Main.swift)
+    // does not establish — it loads the ProjectFile into `project` directly
+    // but leaves mock store and layout at their defaults. This mirrors the
+    // derivation half of `.projectLoaded` (the C-r reload path); the reload-
+    // only stale-state clears are omitted because the seed starts empty
+    // (issue #24).
+    if case .loaded(let file, _) = s.project {
+        s.mockStore = file.mocks
+        applySplitRatios(&s, settings: file.settings)
+    }
+
     var effects: [Effect] = [.loadSources, .prewarmLint]
 
     // If a project is loaded, start the tick for any active transient.
