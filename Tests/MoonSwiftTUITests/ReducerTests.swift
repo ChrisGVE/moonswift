@@ -260,6 +260,45 @@ struct ReducerSourceLoadingTests {
         #expect(hasHighlight, "sourceLoaded must request a highlight effect")
     }
 
+    @Test("sourceLoaded auto-displays the first navigator entry (startup, no Enter)")
+    func sourceLoadedAutoSelectsFirst() {
+        var state = AppState()
+        let id = SourceID(path: "main.lua")
+        state.navigatorOrder = [id]
+        state.navigator.selectedIndex = 0
+        #expect(state.selection == nil)  // nothing displayed before load
+
+        let url = URL(fileURLWithPath: "/project/main.lua")
+        let data = Data("return 1".utf8)
+        let prov = FragmentProvenance(
+            file: url, jsonpath: nil, document: 0,
+            byteRange: 0..<data.count, lineOffset: 0, contentHash: SHA256.hash(data: data))
+        let fragment = LuaSourceFragment(code: "return 1", provenance: prov)
+
+        let (next, _) = reduce(state, .sourceLoaded(id: id, fragment: fragment))
+        #expect(next.selection == id, "the highlighted entry auto-displays once it loads")
+    }
+
+    @Test("sourceLoaded does not override an existing selection")
+    func sourceLoadedKeepsExistingSelection() {
+        var state = AppState()
+        let a = SourceID(path: "a.lua")
+        let b = SourceID(path: "b.lua")
+        state.navigatorOrder = [a, b]
+        state.navigator.selectedIndex = 0
+        state.selection = b  // user is already viewing b
+
+        let url = URL(fileURLWithPath: "/a.lua")
+        let data = Data("x".utf8)
+        let prov = FragmentProvenance(
+            file: url, jsonpath: nil, document: 0,
+            byteRange: 0..<data.count, lineOffset: 0, contentHash: SHA256.hash(data: data))
+        let fragment = LuaSourceFragment(code: "x", provenance: prov)
+
+        let (next, _) = reduce(state, .sourceLoaded(id: a, fragment: fragment))
+        #expect(next.selection == b, "auto-display must not override an existing selection")
+    }
+
     @Test("sourceFailed adds failed state to navigator")
     func sourceFailedAddsNavigatorEntry() {
         let state = AppState()

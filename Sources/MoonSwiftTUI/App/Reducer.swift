@@ -87,6 +87,17 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         }
         // Schedule syntax highlight for the newly loaded source.
         var effects: [Effect] = [.highlight(id)]
+        // Auto-display the initially-highlighted entry as soon as it loads, so
+        // the code pane shows it without a key press — the startup counterpart
+        // of auto-display-on-move (Chris UX). Seeds selection only when nothing
+        // is selected yet, and only for the entry under the navigator cursor.
+        if s.selection == nil,
+            s.navigator.selectedIndex < s.navigatorOrder.count,
+            s.navigatorOrder[s.navigator.selectedIndex] == id
+        {
+            s.selection = id
+            effects.append(.syntaxPrePass(fragment))
+        }
         if let tick = armTickIfNeeded(s) { effects.append(tick) }
         return (s, effects)
 
@@ -1241,10 +1252,11 @@ private func reduceNavigatorKey(
     switch (code, modifiers) {
 
     case (.char("j"), []):
-        return (reduceNavigatorMoveDown(s), [])
+        // Move the cursor, then auto-display the newly selected source (no Enter).
+        return autoDisplayAfterMove(reduceNavigatorMoveDown(s))
 
     case (.char("k"), []):
-        return (reduceNavigatorMoveUp(s), [])
+        return autoDisplayAfterMove(reduceNavigatorMoveUp(s))
 
     case (.char("g"), []):
         // Jump to the first entry in the filtered list (returns to the source section).
@@ -1254,7 +1266,7 @@ private func reduceNavigatorKey(
             s.navigator.selectedIndex = fullOrderIndex(
                 filteredPos: 0, filtered: filtered, order: s.navigatorOrder)
         }
-        return (s, [])
+        return autoDisplayAfterMove(s)
 
     case (.char("G"), []):
         // Jump to the last entry in the filtered list (returns to the source section).
@@ -1267,7 +1279,7 @@ private func reduceNavigatorKey(
                 order: s.navigatorOrder
             )
         }
-        return (s, [])
+        return autoDisplayAfterMove(s)
 
     case (.enter, []), (.char("o"), []), (.char(" "), []):
         return selectNavigatorEntry(s)
@@ -2260,17 +2272,38 @@ private func extractExtraModules(from project: ProjectState) -> [String] {
 /// Resets the full `CodePaneState` so scroll, cursor, colon command, and
 /// diagnostic index all start fresh for the newly selected source.
 private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
-    var s = s
     // F5.4/F5.3: in the Mock Environment section, Enter does not load a source.
     // On a live function row it opens the F5.3 invoke form (ux-spec §7.5); on a
     // declared mock row it is a no-op (add/edit/delete are the `a`/`e`/`d` keys).
     if s.navigator.inMockSection {
         return reduceOpenInvokeForm(s)
     }
+    // Enter always reloads, resetting the code pane even on the already-selected
+    // source (re-anchors scroll/cursor — the historical Enter behaviour).
+    return loadSelectedSource(s, reloadIfUnchanged: true)
+}
+
+/// Loads the currently highlighted SOURCE entry into the code pane.
+///
+/// Shared by Enter-to-load (`selectNavigatorEntry`) and auto-display-on-move
+/// (j/k/g/G): selecting a source shows it without pressing Enter. Mock-section
+/// rows are handled by the caller — this only loads source entries.
+///
+/// `reloadIfUnchanged: false` skips the work (and the code-pane reset) when the
+/// selection has not changed, so j/k at a list boundary keep the current scroll
+/// and cursor. Enter passes `true` to force a fresh reload.
+private func loadSelectedSource(
+    _ s: AppState,
+    reloadIfUnchanged: Bool
+) -> (AppState, [Effect]) {
+    var s = s
     guard s.navigator.selectedIndex < s.navigatorOrder.count else {
         return (s, [])
     }
     let id = s.navigatorOrder[s.navigator.selectedIndex]
+    if !reloadIfUnchanged, s.selection == id {
+        return (s, [])
+    }
     s.selection = id
     // Full reset: scroll offset, cursor line, colonCommand, diagnosticIndex.
     s.codePane = CodePaneState()
@@ -2285,6 +2318,16 @@ private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
         effects.append(.syntaxPrePass(fragment))
     }
     return (s, effects)
+}
+
+/// Auto-displays the newly selected source after a navigator cursor move
+/// (j/k/g/G). Mock-section rows are not files, so movement there shows nothing
+/// new — the code pane keeps the last source. (Chris UX: no Enter needed.)
+private func autoDisplayAfterMove(_ s: AppState) -> (AppState, [Effect]) {
+    if s.navigator.inMockSection {
+        return (s, [])
+    }
+    return loadSelectedSource(s, reloadIfUnchanged: false)
 }
 
 // MARK: - Navigator filter helpers

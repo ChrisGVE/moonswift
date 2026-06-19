@@ -119,10 +119,10 @@ The `<Tab>` context-sensitivity is the **only** context-sensitive key in P1. The
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Move selection down / up |
-| `g` | Jump to first entry |
-| `G` | Jump to last entry |
-| `<Enter>` | Load selected source into code pane |
+| `j` / `k` | Move selection down / up — the newly selected source is **auto-displayed** in the code pane (no `<Enter>` needed). Mock-section rows are not files, so moving onto them leaves the code pane unchanged. |
+| `g` | Jump to first entry (auto-displays it) |
+| `G` | Jump to last entry (auto-displays it) |
+| `<Enter>` | Reload the selected source into the code pane, re-anchoring scroll/cursor (selection already auto-displays on move; `<Enter>` forces a fresh reload) |
 | `o` | Same as `<Enter>` (open) |
 | `<Space>` | Same as `<Enter>` |
 | `/` | Filter navigator entries (inline search; `<Esc>` clears) |

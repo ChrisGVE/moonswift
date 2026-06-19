@@ -95,6 +95,25 @@ struct NavigatorKeyboardTests {
         #expect(next2.navigator.selectedIndex == 2)
     }
 
+    @Test("j/k/g/G auto-display the selected source without Enter")
+    func navigationAutoDisplaysSelection() {
+        let ids = [SourceID(path: "a.lua"), SourceID(path: "b.lua"), SourceID(path: "c.lua")]
+        let state = stateWithNavigator(ids: ids, selectedIndex: 0)
+
+        // j moves the cursor AND sets the selection so the code pane shows it.
+        let (afterJ, _) = reduce(state, .key(.char("j"), modifiers: []))
+        #expect(afterJ.navigator.selectedIndex == 1)
+        #expect(afterJ.selection == ids[1], "j must auto-display the selected source")
+
+        // k follows the cursor back up.
+        let (afterK, _) = reduce(afterJ, .key(.char("k"), modifiers: []))
+        #expect(afterK.selection == ids[0])
+
+        // G jumps to and displays the last source.
+        let (afterG, _) = reduce(state, .key(.char("G"), modifiers: []))
+        #expect(afterG.selection == ids[2])
+    }
+
     @Test("j does not move past last entry")
     func jClampedAtBottom() {
         let ids = [SourceID(path: "a.lua"), SourceID(path: "b.lua")]
