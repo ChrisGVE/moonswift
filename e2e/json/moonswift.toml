@@ -1,0 +1,49 @@
+## moonswift.toml — e2e/json project
+##
+## Lua fragments embedded as JSON string fields (newlines as \n). Exercises
+## structured-file loading, splice write-back, run, debug, and completions.
+
+lua_version = "5.4"
+
+[[source]]
+path = "config.json"
+
+  [[source.field]]
+  jsonpath = "$.handlers.onCreate"
+
+  [[source.field]]
+  jsonpath = "$.handlers.onDelete"
+
+[run]
+config = "sandboxed"
+
+[lint]
+extra_modules = ["iox", "http"]
+
+[settings]
+theme = "default"
+
+## --- Mock surface (shared across every e2e project) -----------------------
+
+[[mock.value]]
+namespace = "app"
+path      = "settings.verbose"
+type      = "boolean"
+value     = "true"
+writable  = false
+
+[[mock.value]]
+namespace = "app"
+path      = "limits.max"
+type      = "number"
+value     = "5"
+writable  = false
+
+[[mock.function]]
+name     = "host_log"
+behavior = "echo-args"
+
+[[mock.function]]
+name         = "fetch_count"
+behavior     = "fixed-return"
+return_value = "42"

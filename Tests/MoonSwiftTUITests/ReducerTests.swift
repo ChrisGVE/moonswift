@@ -51,6 +51,34 @@ private func extractQuit(_ effects: [Effect]) -> Int32? {
     return nil
 }
 
+/// Thread-safe line collector for a `SessionEngine` `onOutput` sink (the sink is
+/// invoked on the engine's serial executor, off the test's thread).
+private final class OutputSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+    func append(_ line: String) {
+        lock.lock()
+        storage.append(line)
+        lock.unlock()
+    }
+    var lines: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
+/// Builds a minimal standalone-`.lua` `LuaSourceFragment` for `code`.
+private func makeFragment(_ code: String) -> LuaSourceFragment {
+    let url = URL(fileURLWithPath: "/project/main.lua")
+    let data = Data(code.utf8)
+    let hash = SHA256.hash(data: data)
+    let prov = FragmentProvenance(
+        file: url, jsonpath: nil, document: 0,
+        byteRange: 0..<data.count, lineOffset: 0, contentHash: hash)
+    return LuaSourceFragment(code: code, provenance: prov)
+}
+
 // MARK: - Lifecycle tests
 
 @Suite("Reducer — Lifecycle")
@@ -72,6 +100,93 @@ struct ReducerLifecycleTests {
 
         #expect(hasLoadSources, "appStarted must return .loadSources")
         #expect(hasPrewarm, "appStarted must return .prewarmLint")
+    }
+
+    @Test("appStarted seeds mockStore from the loaded project (issue #24)")
+    func appStartedSeedsDeclaredMocks() {
+        // The startup seed (Main.swift) loads the ProjectFile into `project`
+        // directly but leaves `mockStore` at .empty; only `.projectLoaded`
+        // (C-r reload) copied declared mocks. `.appStarted` must perform the
+        // same project-derived seeding so the first run injects `app.*` etc.
+        let mocks = MockStore(
+            values: [
+                MockValueDef(
+                    namespace: "app", path: "limits.max",
+                    type: .number, value: "5", writable: false)
+            ],
+            functions: [])
+        var state = AppState()
+        state.project = .loaded(ProjectFile(luaVersion: "5.4", mocks: mocks), diagnostics: [])
+
+        let (next, _) = reduce(state, .appStarted)
+
+        #expect(next.mockStore == mocks, "appStarted must seed mockStore from file.mocks")
+    }
+
+    @Test("issue #24 full chain: appStarted-seeded mocks let a real run see app.*")
+    func appStartedSeededMocksDriveRealRun() async throws {
+        // Mirrors the e2e/lua fixture's declared mock surface: app.limits.max=5,
+        // app.settings.verbose=true, host_log (echo-args), fetch_count → 42.
+        let mocks = MockStore(
+            values: [
+                MockValueDef(
+                    namespace: "app", path: "settings.verbose",
+                    type: .boolean, value: "true", writable: false),
+                MockValueDef(
+                    namespace: "app", path: "limits.max",
+                    type: .number, value: "5", writable: false),
+            ],
+            functions: [
+                MockFunctionDef(name: "host_log", behavior: .echoArgs),
+                MockFunctionDef(name: "fetch_count", behavior: .fixedReturn, returnValue: "42"),
+            ])
+
+        // Startup seeds the project into `project` only; `.appStarted` derives mockStore.
+        var state = AppState()
+        state.project = .loaded(
+            ProjectFile(luaVersion: "5.4", run: RunConfig(config: .sandboxed), mocks: mocks),
+            diagnostics: [])
+        let (seeded, _) = reduce(state, .appStarted)
+
+        // Run the e2e/lua main.lua body through a real session engine with the
+        // seeded store — the chain that was broken before #24 (empty store → app nil).
+        let output = OutputSink()
+        let engine = SessionEngine(onOutput: { output.append($0) })
+        try await engine.startSession(config: RunConfig(config: .sandboxed), mocks: seeded.mockStore)
+        defer { Task { await engine.endSession() } }
+
+        let script = """
+            local function classify(n)
+                if n < 0 then
+                    return "negative"
+                elseif n == 0 then
+                    return "zero"
+                end
+                return "positive"
+            end
+
+            local total = 0
+            for i = 1, app.limits.max do
+                total = total + i
+            end
+
+            host_log("total", total)
+
+            if app.settings.verbose then
+                print("verbose: total=" .. tostring(total) .. " base=" .. tostring(fetch_count()))
+            end
+
+            return classify(total)
+            """
+        let outcome = await engine.sessionRun(makeFragment(script))
+        guard case .done(let value, _) = outcome else {
+            Issue.record("expected .done, got \(outcome)")
+            return
+        }
+        #expect(value == "positive", "classify(sum 1..5 = 15) must be positive; got \(value ?? "nil")")
+        #expect(
+            output.lines.contains { $0.contains("verbose: total=15 base=42") },
+            "verbose print must show total=15 base=42; got \(output.lines)")
     }
 
     @Test("quit key produces quit effect with code 0")
@@ -143,6 +258,45 @@ struct ReducerSourceLoadingTests {
             return false
         }
         #expect(hasHighlight, "sourceLoaded must request a highlight effect")
+    }
+
+    @Test("sourceLoaded auto-displays the first navigator entry (startup, no Enter)")
+    func sourceLoadedAutoSelectsFirst() {
+        var state = AppState()
+        let id = SourceID(path: "main.lua")
+        state.navigatorOrder = [id]
+        state.navigator.selectedIndex = 0
+        #expect(state.selection == nil)  // nothing displayed before load
+
+        let url = URL(fileURLWithPath: "/project/main.lua")
+        let data = Data("return 1".utf8)
+        let prov = FragmentProvenance(
+            file: url, jsonpath: nil, document: 0,
+            byteRange: 0..<data.count, lineOffset: 0, contentHash: SHA256.hash(data: data))
+        let fragment = LuaSourceFragment(code: "return 1", provenance: prov)
+
+        let (next, _) = reduce(state, .sourceLoaded(id: id, fragment: fragment))
+        #expect(next.selection == id, "the highlighted entry auto-displays once it loads")
+    }
+
+    @Test("sourceLoaded does not override an existing selection")
+    func sourceLoadedKeepsExistingSelection() {
+        var state = AppState()
+        let a = SourceID(path: "a.lua")
+        let b = SourceID(path: "b.lua")
+        state.navigatorOrder = [a, b]
+        state.navigator.selectedIndex = 0
+        state.selection = b  // user is already viewing b
+
+        let url = URL(fileURLWithPath: "/a.lua")
+        let data = Data("x".utf8)
+        let prov = FragmentProvenance(
+            file: url, jsonpath: nil, document: 0,
+            byteRange: 0..<data.count, lineOffset: 0, contentHash: SHA256.hash(data: data))
+        let fragment = LuaSourceFragment(code: "x", provenance: prov)
+
+        let (next, _) = reduce(state, .sourceLoaded(id: a, fragment: fragment))
+        #expect(next.selection == b, "auto-display must not override an existing selection")
     }
 
     @Test("sourceFailed adds failed state to navigator")

@@ -62,7 +62,23 @@ public func render(_ state: AppState, size: TerminalSize) -> [RenderCommand] {
 
     // Modal overlays (rendered on top of everything else)
     if state.focus == .helpOverlay {
-        commands += renderHelpOverlay(size: size, theme: theme)
+        commands += renderHelpOverlay(size: size, theme: theme, scrollOffset: state.helpScrollOffset)
+    }
+
+    // F7a.2 completion popup + hover overlay (ux-spec §7.6). Both float over the
+    // full terminal (not the code-pane inner rect), so they render here.
+    if case .completionPopup(let popup) = state.focus {
+        commands += renderCompletionPopup(
+            state: popup,
+            codePaneRect: layout.codePane,
+            cursorLine: state.codePane.cursorLine,
+            codeScroll: state.codePane.scrollOffset,
+            terminalSize: size,
+            theme: theme
+        )
+    }
+    if case .hoverOverlay(let hover) = state.focus {
+        commands += renderHoverOverlay(state: hover, size: size, theme: theme)
     }
 
     // P4 nvim overlay: conflict modal and diff view cover the code-pane area.
@@ -75,7 +91,8 @@ public func render(_ state: AppState, size: TerminalSize) -> [RenderCommand] {
             commands += renderConflictModal(rect: codeInner, theme: theme)
         case .diffView(let phase):
             commands += renderDiffView(phase: phase, rect: codeInner, theme: theme)
-        case .pane, .helpOverlay, .pickerModal, .initForm, .nvimPane, .nvimSpawning:
+        case .pane, .helpOverlay, .pickerModal, .initForm, .mockForm, .invokeForm,
+            .nvimPane, .nvimSpawning, .completionPopup, .hoverOverlay:
             break
         }
     }
@@ -304,12 +321,30 @@ private func renderNavigator(
     // Highlight style for the selected row depends on navigator focus.
     let highlightStyle = navFocused ? tokenStyle(.focusBg, theme: theme) : dimStyle(theme)
 
+    // F5.4: append the Mock Environment section below the source list (only for a
+    // loaded project — quick-file / malformed states have no mocks). The combined
+    // selectedIndex points into the mock section when the cursor is there.
+    var finalSelectedIndex = selectedInFiltered
+    if case .loaded = state.project {
+        let sourceItemCount = items.count
+        let mockRows = buildMockNavRows(state)
+        items.append(contentsOf: mockNavRowSpans(mockRows, theme: theme))
+        if state.navigator.inMockSection {
+            let selectable = mockSelectableRowIndices(mockRows)
+            if !selectable.isEmpty {
+                let idx = min(max(state.navigator.mockSelectedIndex, 0), selectable.count - 1)
+                finalSelectedIndex = sourceItemCount + selectable[idx]
+            }
+        }
+    }
+
     var commands: [RenderCommand] = [
         .navigatorList(
             rect: listRect,
             items: items,
-            selectedIndex: selectedInFiltered,
-            title: []
+            selectedIndex: finalSelectedIndex,
+            title: [],
+            highlightStyle: highlightStyle
         )
     ]
 
@@ -423,6 +458,14 @@ private func renderCodePane(
     // Init form modal: replace code pane with the init form (ux-spec §3.1, task 24).
     if state.focus == .initForm, let form = state.initFormState {
         return renderInitForm(form: form, rect: inner, theme: theme)
+    }
+
+    // Mock form: replace code pane with the add/edit form (F5.4, ux-spec §7.1).
+    if state.focus == .invokeForm, let form = state.invokeFormState {
+        return renderInvokeForm(form: form, rect: inner, theme: theme)
+    }
+    if state.focus == .mockForm, let form = state.mockFormState {
+        return renderMockForm(form: form, rect: inner, theme: theme)
     }
 
     // ux-spec §4.2: malformed project file overrides the code pane with a fixed
@@ -1121,6 +1164,9 @@ private func formatGutterCell(
         switch mark {
         case .error: markChar = "E"
         case .warning: markChar = "W"
+        case .breakpoint: markChar = "●"
+        case .pausedBreakpoint: markChar = "●"
+        case .debugPaused: markChar = "▶"
         }
     } else if isCursor {
         // ux-spec §6.6: ▶ truecolor/256, > NO_COLOR.
@@ -1151,6 +1197,10 @@ private func gutterCellStyle(mark: GutterMark?, isCursor: Bool, isPulseLine: Boo
         switch mark {
         case .error: return tokenStyle(.error, theme: theme)
         case .warning: return tokenStyle(.warning, theme: theme)
+        // ux-spec §6.6: breakpoint = error-token color; paused = highlight_pulse color.
+        case .breakpoint: return tokenStyle(.error, theme: theme)
+        case .pausedBreakpoint: return tokenStyle(.highlightPulse, theme: theme)
+        case .debugPaused: return tokenStyle(.highlightPulse, theme: theme)
         }
     }
     return tokenStyle(.gutterBg, theme: theme)
@@ -1260,6 +1310,8 @@ private func renderBottomPane(
         commands += renderOutputTab(state: state, rect: contentRect, theme: theme)
     case .diagnostics:
         commands += renderDiagnosticsTab(state: state, rect: contentRect, theme: theme)
+    case .debug:
+        commands += renderDebugTab(state: state, rect: contentRect, theme: theme)
     }
 
     return commands
@@ -1272,7 +1324,7 @@ private func renderBottomPane(
 /// Tab layout (ux-spec §6.1, §8.5 accessibility):
 /// - Active tab: text underlined in `focus_border` color.
 /// - Inactive tab: normal style.
-/// - Exact tab labels: `[ Output ]` and `[ Diagnostics ]` (ux-spec §6.1).
+/// - Exact tab labels: `[ Output ]`, `[ Diagnostics ]`, `[ Debug ]` (ux-spec §6.1).
 /// - Source provenance (display name) is right-justified in the same row when
 ///   a source is loaded (ux-spec §6.1).
 private func renderBottomPaneTabBar(
@@ -1283,23 +1335,31 @@ private func renderBottomPaneTabBar(
 ) -> [RenderCommand] {
     let outputLabel = "[ Output ]"
     let diagLabel = "[ Diagnostics ]"
-
-    // Build the tab line left-to-right with exact labels.
-    let activeIsOutput = state.bottomPane.activeTab == .output
-    // Two spans: active tab underlined, inactive normal.
-    let outputStyle: CellStyle
-    let diagStyle: CellStyle
-    if activeIsOutput {
-        outputStyle = tabActiveStyle(theme)
-        diagStyle = normalStyle(theme)
-    } else {
-        outputStyle = normalStyle(theme)
-        diagStyle = tabActiveStyle(theme)
-    }
-
-    // Separator between the two tab labels.
+    let debugLabel = "[ Debug ]"
     let separator = " "
-    let tabsText = outputLabel + separator + diagLabel
+
+    // Per-tab style: active = underlined focus_border; inactive = normal.
+    let activeTab = state.bottomPane.activeTab
+
+    // The `[ Debug ]` tab is present ONLY while a debug session is active or
+    // launching (ux-spec §6.1 lines 489-490, §7.2 "the tab is normally only
+    // visible during a session"). When absent, `3`/Tab still handle the no-
+    // session case with the `Debug tab not active.` transient (UX-R2-N03). The
+    // `activeTab == .debug` clause keeps the tab visible in the defensive
+    // tab-active-but-no-session case (§7.2 line 673) so its content never orphans.
+    let debugVisible =
+        state.activeDebugSessionID != nil
+        || state.debugLaunchPending
+        || activeTab == .debug
+
+    let outputStyle = activeTab == .output ? tabActiveStyle(theme) : normalStyle(theme)
+    let diagStyle = activeTab == .diagnostics ? tabActiveStyle(theme) : normalStyle(theme)
+    let debugStyle = activeTab == .debug ? tabActiveStyle(theme) : normalStyle(theme)
+
+    let tabsText =
+        debugVisible
+        ? outputLabel + separator + diagLabel + separator + debugLabel
+        : outputLabel + separator + diagLabel
 
     // Right-justified source provenance (ux-spec §6.1).
     let provenance: String?
@@ -1309,25 +1369,27 @@ private func renderBottomPaneTabBar(
         provenance = nil
     }
 
-    // Total tab row as cell runs: output tab | sep | diagnostics tab | padding | provenance.
+    // Build cell runs left-to-right: output | sep | diagnostics | sep | debug | padding | provenance.
     var commands: [RenderCommand] = []
     let row = rect.y
     let startCol = rect.x
 
     // Output tab span.
-    commands.append(
-        .cellRun(col: startCol, row: row, text: outputLabel, style: outputStyle)
-    )
-    // Separator.
-    let sepCol = startCol + UInt16(outputLabel.count)
-    commands.append(
-        .cellRun(col: sepCol, row: row, text: separator, style: normalStyle(theme))
-    )
+    commands.append(.cellRun(col: startCol, row: row, text: outputLabel, style: outputStyle))
+    let sep1Col = startCol + UInt16(outputLabel.count)
+    commands.append(.cellRun(col: sep1Col, row: row, text: separator, style: normalStyle(theme)))
     // Diagnostics tab span.
-    let diagCol = sepCol + UInt16(separator.count)
-    commands.append(
-        .cellRun(col: diagCol, row: row, text: diagLabel, style: diagStyle)
-    )
+    let diagCol = sep1Col + UInt16(separator.count)
+    commands.append(.cellRun(col: diagCol, row: row, text: diagLabel, style: diagStyle))
+    // Debug tab span — rendered only while a debug session is active/launching
+    // (see `debugVisible`); the separator before it is part of the same gate so
+    // no trailing space is left when the tab is absent.
+    if debugVisible {
+        let sep2Col = diagCol + UInt16(diagLabel.count)
+        commands.append(.cellRun(col: sep2Col, row: row, text: separator, style: normalStyle(theme)))
+        let debugCol = sep2Col + UInt16(separator.count)
+        commands.append(.cellRun(col: debugCol, row: row, text: debugLabel, style: debugStyle))
+    }
 
     // Provenance and padding fill the rest of the row.
     let usedCols = tabsText.count
@@ -1346,9 +1408,7 @@ private func renderBottomPaneTabBar(
             )
         }
         let provCol = padCol + UInt16(padCount)
-        commands.append(
-            .cellRun(col: provCol, row: row, text: truncated, style: dimStyle(theme))
-        )
+        commands.append(.cellRun(col: provCol, row: row, text: truncated, style: dimStyle(theme)))
     } else if remainingCols > 0 {
         // Fill remaining space with spaces.
         let padCol = startCol + UInt16(usedCols)
@@ -1462,6 +1522,17 @@ func buildRunHeader(runNumber: Int, startTime: Date, width: Int) -> String {
 /// The `→ jump to line N` affordance is interactive in the rendered pane:
 /// pressing Enter on that line triggers the jump (handled by the reducer's
 /// `jumpCodePaneFromBottomPane` function). Exact string per ux-spec §6.3.
+/// Split a LuaSwift #19 structured traceback (a single multi-line String, newest
+/// frame first) into one Output-tab line per frame (F6.4). `nil` or empty → `[]`.
+/// Trailing empty lines are dropped; interior blank lines are preserved so the
+/// `stack traceback:` header and its frames render faithfully.
+func tracebackLines(_ traceback: String?) -> [String] {
+    guard let traceback, !traceback.isEmpty else { return [] }
+    var lines = traceback.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    while let last = lines.last, last.isEmpty { lines.removeLast() }
+    return lines
+}
+
 func buildRunFooter(outcome: RunOutcome) -> String {
     switch outcome {
     case .done(_, let duration):
@@ -1562,6 +1633,15 @@ private func renderDiagnosticsTab(
     return [.paragraph(rect: rect, lines: lines, block: nil)]
 }
 
+/// Renders the Debug tab content (P2 F6.1, ux-spec §7.2).
+///
+/// Shows the current debug snapshot when a session is paused, or an idle message.
+/// Layout:
+///   - Idle/no-session: "No debug session." centered.
+///   - Paused:
+///       `── Paused at line N ──`
+///       One row per stack frame: `  #N  <source>:<line>  <what>`
+///       (Up to 8 frames; rest elided.)
 /// Formats one diagnostic as the ux-spec §6.5 canonical string.
 ///
 /// Format: `<E|W> <line>:<col> <message> [<code>]`
@@ -1605,8 +1685,30 @@ private func renderStatusBar(
     return [.cellRun(col: rect.x, row: rect.y, text: line, style: normalStyle(theme))]
 }
 
-/// Builds the left-zone persistent indicator string (ux-spec §5.2, §5.5).
+/// Builds the left-zone persistent indicator string (ux-spec §5.2, §5.5, §7.2).
+///
+/// F6.2: when a debug session is paused (`currentDebugSnapshot` is non-nil),
+/// the entire left zone is replaced by the paused-mode hint (PRD §1473–1474).
+/// The exact string is produced by `buildPausedStatusHint` (ux-spec binding).
 private func buildLeftIndicators(state: AppState, cols: Int) -> String {
+    // F6.2 paused-mode hint overrides all other left-zone indicators (ux-spec §7.2).
+    // Display name comes from the loaded fragment's provenance (the same source
+    // used for the renderer's navigator row label — see `renderSourceRow`).
+    if let snapshot = state.currentDebugSnapshot {
+        let displayName: String
+        if let sid = state.selection,
+            case .loaded(let fragment) = state.sources[sid]
+        {
+            displayName = fragment.provenance.displayName
+        } else {
+            displayName = "<unknown>"
+        }
+        let hint = buildPausedStatusHint(displayName: displayName, line: snapshot.fragmentLine)
+        // While a `g` globals capture is in flight, append the pending indicator
+        // (ux-spec §7.2 / UX-R2-01).
+        return state.debugGlobalsRequested ? hint + "  [globals pending…]" : hint
+    }
+
     // Full indicator strings (ux-spec §5.2 — exact literals).
     var full: [String] = []
     // Abbreviated versions for the elision ladder (ux-spec §5.5 step 3).
@@ -1666,13 +1768,16 @@ private func buildRightHints(state: AppState, cols: Int) -> String {
     case .pane(.bottomPane):
         switch state.bottomPane.activeTab {
         case .output:
-            fullHints = "j/k scroll  Enter jump  y yank  1/2 tabs  C-l clear"
-            shortHints = "j/k  Enter  1/2"
+            fullHints = "j/k scroll  Enter jump  y yank  1/2/3 tabs  C-l clear"
+            shortHints = "j/k  Enter  1/2/3"
         case .diagnostics:
             // n/N diagnostic navigation is wired to the code pane (ux-spec §2.3),
             // not the bottom pane — removed misleading hint.
-            fullHints = "j/k scroll  Enter jump  1/2 tabs"
-            shortHints = "j/k  Enter  1/2"
+            fullHints = "j/k scroll  Enter jump  1/2/3 tabs"
+            shortHints = "j/k  Enter  1/2/3"
+        case .debug:
+            fullHints = "j/k scroll  1/2/3 tabs"
+            shortHints = "j/k  1/2/3"
         }
     default:
         return ""
@@ -1701,134 +1806,6 @@ private func buildStatusBarLine(left: String, right: String, width: Int) -> Stri
     let padded = left + String(repeating: " ", count: max(0, width - left.count))
     return String(padded.prefix(width))
 }
-
-// MARK: - Help overlay (ux-spec.md §2.5)
-
-/// Renders the centered help overlay modal (ux-spec §2.5).
-///
-/// Layout: `Clear` widget behind a bordered content box, centered, max 60 × 20.
-/// Sections: global keys, navigator keys, code pane keys, bottom pane keys, then
-/// the explicit Tab context-sensitivity note (ux-spec §2.5, §2.2 — binding exact string).
-///
-/// Styling (ux-spec §8.1 token assignments):
-///   - Section headers: `dim` color (secondary labels).
-///   - Key names: `keyword` color (matches Lua keyword pink — reused for UI keys).
-///   - Descriptions: `identifier` color (Dracula foreground — readable body text).
-private func renderHelpOverlay(size: TerminalSize, theme: ThemeState) -> [RenderCommand] {
-    // Centered modal, max 60 × 20 (ux-spec §2.5).
-    let overlayW: UInt16 = min(60, size.cols)
-    let overlayH: UInt16 = min(20, size.rows)
-    let overlayX = (size.cols - overlayW) / 2
-    let overlayY = (size.rows - overlayH) / 2
-    let overlayRect = Rect(x: overlayX, y: overlayY, width: overlayW, height: overlayH)
-
-    let headerStyle = dimStyle(theme)
-    let keyStyle = tokenStyle(.keyword, theme: theme)
-    let descStyle = tokenStyle(.identifier, theme: theme)
-    let noteStyle = dimStyle(theme)
-
-    var lines: [[Span]] = []
-
-    // Each keybinding section: header, then one line per binding.
-    // A binding row is two spans: key name (keyword color) + description (identifier color).
-    lines.append([Span("Global", style: headerStyle)])
-    for (key, action) in helpGlobalKeys {
-        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
-    }
-
-    lines.append([Span("", style: headerStyle)])
-    lines.append([Span("Navigator", style: headerStyle)])
-    for (key, action) in helpNavigatorKeys {
-        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
-    }
-
-    lines.append([Span("", style: headerStyle)])
-    lines.append([Span("Code pane", style: headerStyle)])
-    for (key, action) in helpCodePaneKeys {
-        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
-    }
-
-    lines.append([Span("", style: headerStyle)])
-    lines.append([Span("Bottom pane", style: headerStyle)])
-    for (key, action) in helpBottomPaneKeys {
-        lines.append(helpRow(key: key, action: action, keyStyle: keyStyle, descStyle: descStyle))
-    }
-
-    // Explicit Tab note — exact string required by ux-spec §2.5, §2.2.
-    lines.append([Span("", style: noteStyle)])
-    lines.append(
-        [Span("<Tab>: cycles panes globally; cycles tabs when the bottom pane is focused.", style: noteStyle)]
-    )
-
-    return [
-        .clear(rect: overlayRect),
-        .paragraph(rect: overlayRect, lines: lines, block: nil),
-    ]
-}
-
-/// Builds one two-span help row: key name left-padded to 10 chars, then description.
-///
-/// The split into two `Span`s lets the production renderer apply distinct colors
-/// without any post-processing: key names use `keyword`, descriptions `identifier`.
-private func helpRow(key: String, action: String, keyStyle: CellStyle, descStyle: CellStyle) -> [Span] {
-    // Pad key name to 10 characters for column-aligned display.
-    let paddedKey = "  " + key.padding(toLength: 10, withPad: " ", startingAt: 0)
-    let description = "  " + action
-    return [Span(paddedKey, style: keyStyle), Span(description, style: descStyle)]
-}
-
-// swift-format-ignore
-/// Global keybinding rows for the help overlay (ux-spec §2.3 global table).
-private let helpGlobalKeys: [(String, String)] = [
-    ("r",       "Run selected source"),
-    ("x",       "Cancel run"),
-    ("l",       "Lint selected source"),
-    ("q",       "Quit"),
-    ("?",       "Open/close this help"),
-    ("<C-p>",   "Open project file in $EDITOR"),
-    ("<C-r>",   "Reload project file"),
-    ("<Tab>",   "Cycle panes / cycle bottom-pane tabs"),
-    ("<S-Tab>", "Reverse-cycle panes"),
-    ("<C-h>",   "Jump focus to navigator"),
-    ("<C-l>",   "Jump focus to code pane"),
-    ("<C-j>",   "Jump focus to bottom pane"),
-]
-
-// swift-format-ignore
-/// Navigator keybinding rows for the help overlay (ux-spec §2.3 navigator table).
-private let helpNavigatorKeys: [(String, String)] = [
-    ("j/k",     "Move selection down/up"),
-    ("g",       "Jump to first entry"),
-    ("G",       "Jump to last entry"),
-    ("<Enter>", "Load selected source"),
-    ("o",       "Load selected source (alias)"),
-    ("<Space>", "Load selected source (alias)"),
-    ("/",       "Filter entries"),
-    ("m",       "Open structured-file picker"),
-]
-
-// swift-format-ignore
-/// Code pane keybinding rows for the help overlay (ux-spec §2.3 code pane table).
-private let helpCodePaneKeys: [(String, String)] = [
-    ("j/k",     "Scroll down/up one line"),
-    ("d/u",     "Scroll down/up half-page"),
-    ("f/b",     "Scroll down/up full page"),
-    ("g/G",     "Jump to top/bottom"),
-    (":N",      "Jump to line N"),
-    ("n/N",     "Jump to next/previous diagnostic"),
-    ("[d",      "Jump to first diagnostic"),
-    ("]d",      "Jump to last diagnostic"),
-]
-
-// swift-format-ignore
-/// Bottom pane keybinding rows for the help overlay (ux-spec §2.3 bottom pane table).
-private let helpBottomPaneKeys: [(String, String)] = [
-    ("j/k",     "Scroll down/up"),
-    ("<Enter>", "Jump code pane to error line"),
-    ("y",       "Yank focused line to clipboard"),
-    ("1/2",     "Quick-jump to Output/Diagnostics tab"),
-    ("<C-l>",   "Clear output buffer"),
-]
 
 // MARK: - Style helpers
 

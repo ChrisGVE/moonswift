@@ -77,6 +77,14 @@ public final class AppDriver: @unchecked Sendable {
     /// when nil the skeleton no-ops.
     private let sourceStore: SourceStore?
 
+    /// The long-lived session engine for mock/debug runs (P2 F5.0/F6.1).
+    ///
+    /// When non-nil, `Effect.debugRun` dispatches to `runForDebug` and
+    /// `Effect.stopDebug` delivers stop commands. When nil the skeleton posts
+    /// a synthetic `debugFinished(.cancelled)` immediately (same skeleton pattern
+    /// as `runService`). Production code injects a live `SessionEngine`.
+    let sessionEngine: (any SessionEngineProtocol)?
+
     // MARK: Output coalescer (run-scoped)
 
     /// The active Coalescer for the current run, or nil when no run is in progress.
@@ -105,6 +113,18 @@ public final class AppDriver: @unchecked Sendable {
     /// UI-thread-only — the access modifier does not enforce this, the driver's
     /// single-threaded execution model does.
     var nvimSession: NvimSession?
+
+    // MARK: LuaLS client (P3 F7b, ARCHITECTURE.md §7.3)
+
+    /// Factory for the optional lua-language-server client. `nil` in skeleton /
+    /// test mode, so `.spawnLuaLS` / `.lualsSync` are no-ops; production
+    /// (Main.swift) injects `{ LuaLSClient() }`. A fresh client is built on each
+    /// project load (the prior one is torn down first).
+    let makeLuaLSClient: (@Sendable () -> LuaLSClient)?
+
+    /// The live lua-language-server client, or `nil` when none is running.
+    /// Read/written on the UI thread only (driver single-thread model).
+    var lualsClient: LuaLSClient?
 
     // MARK: Nvim cleanup Task handle (CR-003)
 
@@ -163,6 +183,7 @@ public final class AppDriver: @unchecked Sendable {
     ///   - runService: Optional `RunService` for real Lua execution. Nil = skeleton.
     ///   - lintService: Optional `LintService` for real linting. Nil = skeleton.
     ///   - sourceStore: Optional `SourceStore` for real file loading. Nil = skeleton.
+    ///   - sessionEngine: Optional `SessionEngineProtocol` for debug/mock runs. Nil = skeleton.
     public init(
         channel: EventChannel,
         pump: EventPump,
@@ -173,8 +194,11 @@ public final class AppDriver: @unchecked Sendable {
         seed: AppState,
         runService: (any RunServiceProtocol)? = nil,
         lintService: (any LintServiceProtocol)? = nil,
-        sourceStore: SourceStore? = nil
+        sourceStore: SourceStore? = nil,
+        sessionEngine: (any SessionEngineProtocol)? = nil,
+        makeLuaLSClient: (@Sendable () -> LuaLSClient)? = nil
     ) {
+        self.makeLuaLSClient = makeLuaLSClient
         self.channel = channel
         self.pump = pump
         self.tickSource = tickSource
@@ -185,6 +209,7 @@ public final class AppDriver: @unchecked Sendable {
         self.runService = runService
         self.lintService = lintService
         self.sourceStore = sourceStore
+        self.sessionEngine = sessionEngine
     }
 
     // MARK: Run
@@ -202,19 +227,24 @@ public final class AppDriver: @unchecked Sendable {
         while quitCode == nil {
             let events = channel.waitAndDrainAll()
             for event in events {
-                // Track terminal size from resize events so renderNow() always
-                // has the current dimensions. Updated before the reduce call so
-                // the renderer sees the new size immediately on the same frame.
+                // Track terminal size from non-degenerate resize events so
+                // renderNow() always has the current dimensions. Updated before
+                // the reduce call so the renderer sees the new size on the same
+                // frame; a 0×0 resize is ignored here (and in reduceResize) so the
+                // last good size is kept.
                 //
-                // CR-019: EventPump posts resize(0,0) as a sentinel when the
+                // CR-019 (revised): EventPump posts `.terminalClosed` when the
                 // terminal source throws (closed TTY / SIGHUP). Treat it as a
-                // clean EOF quit so the loop exits gracefully instead of
-                // looping forever on an unresponsive channel.
-                if case .resize(let size) = event {
-                    if size.cols == 0 && size.rows == 0 {
-                        quitCode = 0
-                        break
-                    }
+                // clean EOF quit so the loop exits gracefully instead of looping
+                // forever on an unresponsive channel. A genuine content resize of
+                // 0×0 is NOT fatal — it flows into reduce and is ignored there
+                // (reduceResize keeps the last good size). Conflating the two was
+                // the E2E first-keystroke-quit bug.
+                if case .terminalClosed = event {
+                    quitCode = 0
+                    break
+                }
+                if case .resize(let size) = event, size.cols > 0, size.rows > 0 {
                     currentSize = size
                 }
 
@@ -291,7 +321,8 @@ public final class AppDriver: @unchecked Sendable {
 
         case .cancelRun:
             runService?.cancel()
-        // Skeleton: no-op.
+            sessionEngine?.cancelRun()  // F5.4/#44: cancel a mock-aware session run too.
+        // Skeleton (no service): no-op.
 
         case .syntaxPrePass(let fragment):
             executeSyntaxPrePass(fragment)
@@ -319,6 +350,12 @@ public final class AppDriver: @unchecked Sendable {
 
         case .saveDesignations(let designations, let sourcePath):
             executeSaveDesignations(designations, sourcePath: sourcePath)
+
+        case .persistSplitRatios(let navigatorSplit, let bottomSplit):
+            executePersistSplitRatios(navigatorSplit: navigatorSplit, bottomSplit: bottomSplit)
+
+        case .saveMockStore(let mocks):
+            executeSaveMockStore(mocks)
 
         case .loadPickerTree(let id, let projectRoot):
             // Short: one-liner Task dispatch (CR-013 [channel] capture).
@@ -360,6 +397,9 @@ public final class AppDriver: @unchecked Sendable {
         case .nvimInput(let keyNotation):
             executeNvimInput(keyNotation)
 
+        case .nvimPaste(let text):
+            executeNvimPaste(text)
+
         case .nvimDetach:
             executeNvimDetach()
 
@@ -387,13 +427,59 @@ public final class AppDriver: @unchecked Sendable {
                 editedText: editedText,
                 fragment: fragment
             )
+
+        // MARK: Debug effects (P2 F6.1, ARCHITECTURE.md §10.9)
+        // Bodies extracted to AppDriver+DebugEffects.swift.
+
+        case .debugRun(let fragment, let breakpoints):
+            executeDebugRun(fragment, breakpoints: breakpoints)
+
+        case .stopDebug(let sessionID):
+            executeStopDebug(sessionID)
+
+        case .sendDebugCommand(let sessionID, let command):
+            executeSendDebugCommand(sessionID, command)
+
+        case .requestGlobals(let sessionID):
+            executeRequestGlobals(sessionID)
+
+        // MARK: Lua invocation effect (P2 F5.3, ARCH-R7-01)
+        // Body extracted to AppDriver+InvokeEffects.swift.
+
+        case .invokeLuaCall(let expression):
+            executeInvokeLuaCall(expression)
+
+        // MARK: Completion/hover effects (P3 F7a.2)
+        // Bodies extracted to AppDriver+CompletionEffects.swift.
+
+        case .queryCompletions(let prefix, let liveMocks, let tomlProbed):
+            executeQueryCompletions(prefix: prefix, liveMocks: liveMocks, tomlProbed: tomlProbed)
+
+        case .queryHover(let symbolName, let liveMocks, let tomlProbed):
+            executeQueryHover(symbolName: symbolName, liveMocks: liveMocks, tomlProbed: tomlProbed)
+
+        // MARK: LuaLS effects (P3 F7b)
+        // Bodies extracted to AppDriver+LuaLSEffects.swift.
+
+        case .spawnLuaLS:
+            executeSpawnLuaLS()
+
+        case .lualsSync(let fragment):
+            executeLualsSync(fragment)
         }
     }
 
     // MARK: Effect helpers — core services
 
-    /// Dispatch a run to the live `RunService`, or post a synthetic result in skeleton mode.
+    /// Dispatch a run. With a session engine present (production, F5.4/#44) the run
+    /// goes through the mock-aware `sessionRun` so declared mocks are injected and
+    /// post-run live state is available; otherwise it falls back to the P1
+    /// `RunService` (tests/skeleton).
     private func executeRun(_ fragment: LuaSourceFragment, config: RunConfig) {
+        if let engine = sessionEngine {
+            executeSessionRun(fragment, config: config, engine: engine)
+            return
+        }
         if let svc = runService {
             // Dispatch to the real RunService on a background Task.
             // Capture coalescer, channel, and svc explicitly — all Sendable.
@@ -411,6 +497,37 @@ public final class AppDriver: @unchecked Sendable {
         } else {
             // Skeleton: post a synthetic .done immediately.
             channel.post(.runFinished(.done(value: nil, duration: .zero)))
+        }
+    }
+
+    /// Run `fragment` through the mock-aware session engine (F5.4/#44).
+    ///
+    /// Lifecycle per run (RQ3 "implicit end-session on a new run"): tear down any
+    /// prior session, start a fresh one installing the current `mockStore`, run,
+    /// then snapshot `liveState()` so the navigator's Mock Environment shows the
+    /// post-run live values. Output reaches the Output tab via the engine's
+    /// `onOutput` sink (wired in Main.swift → `channel.post(.runOutput)`). The
+    /// engine enforces the instruction + wall-clock limits and honours `cancelRun`.
+    private func executeSessionRun(
+        _ fragment: LuaSourceFragment,
+        config: RunConfig,
+        engine: any SessionEngineProtocol
+    ) {
+        let mocks = state.mockStore
+        Task { [channel] in
+            await engine.endSession()
+            do {
+                try await engine.startSession(config: config, mocks: mocks)
+            } catch {
+                channel.post(
+                    .runFinished(.engineError("Failed to start session: \(error.localizedDescription)")))
+                return
+            }
+            let outcome = await engine.sessionRun(fragment)
+            channel.post(.runFinished(Self.appOutcome(from: outcome)))
+            // Post-run introspection snapshot for the Mock Environment live state.
+            let live = await engine.liveState()
+            channel.post(.mockLiveStateReady(live))
         }
     }
 
@@ -570,6 +687,68 @@ public final class AppDriver: @unchecked Sendable {
         }
     }
 
+    /// Execute `Effect.persistSplitRatios` (F5.6) — write the navigator/bottom
+    /// split ratios into `[settings]`, preserving every other key.
+    ///
+    /// Mirrors `executeSaveDesignations`: rebuild the loaded `ProjectFile` with an
+    /// updated `SettingsConfig` and `ProjectStore.save` it (decode-modify-encode,
+    /// so unknown keys survive). Fire-and-forget on success; a save failure is
+    /// logged but never disrupts the live layout (the in-memory split already
+    /// applied). No-op without a loaded project + project directory.
+    private func executePersistSplitRatios(navigatorSplit: Double, bottomSplit: Double) {
+        guard let projectDir = projectDirectoryURL(),
+            case .loaded(let projectFile, _) = state.project
+        else { return }
+
+        let updatedSettings = SettingsConfig(
+            theme: projectFile.settings.theme,
+            navigatorSplit: navigatorSplit,
+            bottomSplit: bottomSplit
+        )
+        let updatedFile = ProjectFile(
+            luaVersion: projectFile.luaVersion,
+            sources: projectFile.sources,
+            run: projectFile.run,
+            lint: projectFile.lint,
+            settings: updatedSettings,
+            mocks: projectFile.mocks
+        )
+
+        let fileURL = projectDir.appendingPathComponent(ProjectStore.fileName)
+        Task {
+            do {
+                try ProjectStore.save(updatedFile, to: fileURL)
+            } catch {
+                Logger.shared.error("Could not persist split ratios: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Execute `Effect.saveMockStore` (F5.4) — write the mock definitions into
+    /// `[[mock.*]]`, preserving every other key (mirrors `executePersistSplitRatios`).
+    private func executeSaveMockStore(_ mocks: MockStore) {
+        guard let projectDir = projectDirectoryURL(),
+            case .loaded(let projectFile, _) = state.project
+        else { return }
+
+        let updatedFile = ProjectFile(
+            luaVersion: projectFile.luaVersion,
+            sources: projectFile.sources,
+            run: projectFile.run,
+            lint: projectFile.lint,
+            settings: projectFile.settings,
+            mocks: mocks
+        )
+        let fileURL = projectDir.appendingPathComponent(ProjectStore.fileName)
+        Task {
+            do {
+                try ProjectStore.save(updatedFile, to: fileURL)
+            } catch {
+                Logger.shared.error("Could not save mock definitions: \(error.localizedDescription)")
+            }
+        }
+    }
+
     // MARK: Render
 
     /// Render the current state to the terminal.
@@ -618,6 +797,18 @@ public final class AppDriver: @unchecked Sendable {
             }
             sema.wait()
             nvimCleanupTask = nil
+        }
+        // F7b: terminate the lua-language-server child so it never orphans. Block
+        // briefly on the async teardown — the child is SIGTERM'd synchronously
+        // inside it, mirroring the nvim cleanup await above.
+        if let client = lualsClient {
+            lualsClient = nil
+            let sema = DispatchSemaphore(value: 0)
+            Task {
+                await client.teardown()
+                sema.signal()
+            }
+            sema.wait()
         }
         pump.stop()
         tickSource.stop()
@@ -857,8 +1048,10 @@ public final class AppDriver: @unchecked Sendable {
         case .done(let value, let duration):
             return .done(value: value, duration: duration)
         case .error(let diag, let traceback):
-            // CoreRunOutcome.error carries traceback as String?; RunOutcome expects [String].
-            return .error(diag, traceback: traceback.map { [$0] } ?? [])
+            // CoreRunOutcome.error carries the traceback as a single multi-line
+            // String? (newest frame first, #19); RunOutcome expects one entry per
+            // frame line for the Output tab (F6.4).
+            return .error(diag, traceback: tracebackLines(traceback))
         case .cancelled:
             return .cancelled
         case .limitExceeded(let kind):

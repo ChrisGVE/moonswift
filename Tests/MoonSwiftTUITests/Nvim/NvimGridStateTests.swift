@@ -1,8 +1,8 @@
 // File: Tests/MoonSwiftTUITests/Nvim/NvimGridStateTests.swift
 // Location: Tests/MoonSwiftTUITests/Nvim/
 // Role: Unit tests for NvimGridState direct mutation methods — applyGridLine
-//       (repeat-count expansion, row-bounds safety) and applyScroll (reference-
-//       shift semantics in both directions, vacated-row clearing, no-op guard).
+//       (repeat-count expansion, row-bounds safety) and applyScroll (region
+//       cell-copy in both directions, vacated-row clearing, no-op guard).
 //       Split from NvimRedrawHandlerTests.swift to stay within the 400-line budget.
 //
 // Relationships:

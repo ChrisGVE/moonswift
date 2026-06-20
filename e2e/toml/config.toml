@@ -1,0 +1,37 @@
+## config.toml — e2e/toml fixture
+##
+## An array-of-tables [[hooks]]; $.hooks[0].script and $.hooks[1].script hold
+## Lua fragments as multi-line basic strings.
+
+version = 3
+
+[[hooks]]
+name = "startup"
+script = """
+local function classify(n)
+    if n < 0 then
+        return "negative"
+    elseif n == 0 then
+        return "zero"
+    end
+    return "positive"
+end
+
+local total = 0
+for i = 1, app.limits.max do
+    total = total + i
+end
+
+host_log("startup", total)
+if app.settings.verbose then
+    print("startup total=" .. tostring(total))
+end
+return classify(total)
+"""
+
+[[hooks]]
+name = "shutdown"
+script = """
+host_log("shutdown", fetch_count())
+return "bye"
+"""

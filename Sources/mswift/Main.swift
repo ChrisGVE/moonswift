@@ -1,5 +1,5 @@
-// File: Sources/moonswift/Main.swift
-// Location: Sources/moonswift/
+// File: Sources/mswift/Main.swift
+// Location: Sources/mswift/
 // Role: Process entry point. Parses CLI arguments, installs signal handlers
 //       (guarded no-ops until terminal init, ARCHITECTURE.md §3a/§3f), loads
 //       the project file, initialises the terminal, constructs and starts the
@@ -57,7 +57,7 @@ struct MoonSwift {
             exit(ExitCode.success)
 
         case .usageError(let message):
-            fputs("moonswift: \(message)\n", stderr)
+            fputs("mswift: \(message)\n", stderr)
             exit(ExitCode.usage)
 
         case .projectCwd(let url):
@@ -102,7 +102,7 @@ private func run(launchMode: LaunchMode) {
     do {
         terminal = try Terminal()
     } catch {
-        fputs("moonswift: terminal init failed — \(error)\n", stderr)
+        fputs("mswift: terminal init failed — \(error)\n", stderr)
         exit(ExitCode.software)
     }
 
@@ -119,10 +119,16 @@ private func run(launchMode: LaunchMode) {
     // The suspender also wraps the terminal for $EDITOR suspend/resume.
     let suspender = LiveTerminalSuspender(terminal: terminal)
 
+    // Resolve the color theme from the live terminal environment. Without this
+    // the AppState defaults to an empty token table, so every `tokenStyle(...)`
+    // falls back to `CellStyle.default` and the whole UI renders monochrome —
+    // no syntax colors, no focus border, no navigator selection highlight.
+    // Env-reading belongs at bootstrap, not in the pure reducer.
     let seed = AppState(
         launch: launchMode,
         project: projectState,
-        lintState: .initializing
+        lintState: .initializing,
+        theme: ThemeEngine.resolve()
     )
 
     // ── Engine services ───────────────────────────────────────────────────────
@@ -133,6 +139,13 @@ private func run(launchMode: LaunchMode) {
         channel.post(.transient(message))
     })
     let lintService = LintService()
+    // Long-lived mock-aware engine for debug runs (F6) and mock sessions (F5).
+    // Without this the AppDriver's `sessionEngine` is nil and those features fall
+    // through to their skeleton no-op guards in the real binary. Its output sink
+    // posts run/print lines to the same channel the RunService uses.
+    let sessionEngine = SessionEngine(onOutput: { line in
+        channel.post(.runOutput([line]))
+    })
     let sourceStore = SourceStore(callback: { event in
         switch event {
         case .loaded(let id, let fragment):
@@ -151,8 +164,24 @@ private func run(launchMode: LaunchMode) {
         seed: seed,
         runService: runService,
         lintService: lintService,
-        sourceStore: sourceStore
+        sourceStore: sourceStore,
+        sessionEngine: sessionEngine,
+        // F7b: build a fresh lua-language-server client per project load. The
+        // client degrades silently when the binary is absent from PATH.
+        makeLuaLSClient: { LuaLSClient() }
     )
+
+    // Seed the real terminal size before the loop starts. The EventPump only
+    // posts a `.resize` when crossterm emits one (on SIGWINCH), and a terminal
+    // launched directly at its final size sends no startup SIGWINCH — so without
+    // this seed the opening frames render at the AppDriver's 80×24 default (a
+    // tiny box inside a larger window). Querying the live size here (a
+    // render-class call on this UI thread) and posting it as an event makes
+    // run() drain the resize ahead of the .appStarted render, so the first
+    // frame fills the screen. If the query fails we keep the 80×24 fallback.
+    if let initialSize = try? terminal.size() {
+        channel.post(.resize(initialSize))
+    }
 
     // ── 6. Enter the loop ─────────────────────────────────────────────────────
     // AppDriver.run() blocks until Effect.quit is processed. The returned code

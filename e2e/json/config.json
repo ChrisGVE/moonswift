@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "handlers": {
+    "onCreate": "local function classify(n)\n    if n < 0 then\n        return \"negative\"\n    elseif n == 0 then\n        return \"zero\"\n    end\n    return \"positive\"\nend\n\nlocal total = 0\nfor i = 1, app.limits.max do\n    total = total + i\nend\n\nhost_log(\"create\", total)\nif app.settings.verbose then\n    print(\"create total=\" .. tostring(total))\nend\nreturn classify(total)",
+    "onDelete": "host_log(\"delete\", fetch_count())\nreturn \"deleted\""
+  }
+}

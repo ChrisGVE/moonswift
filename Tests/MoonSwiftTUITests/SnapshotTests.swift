@@ -94,7 +94,9 @@ private final class CellGridBackend: RenderBackend {
         try grid.writeCells(col: rect.x, row: rect.y, text: line, style: style)
     }
 
-    func navigatorList(rect: Rect, items: [Span], selectedIndex: Int?, title: [Span]) throws {
+    func navigatorList(
+        rect: Rect, items: [Span], selectedIndex: Int?, title: [Span], highlightStyle: CellStyle
+    ) throws {
         let innerWidth = Int(rect.width)
         for (idx, span) in items.enumerated() {
             guard idx < Int(rect.height) else { break }
@@ -105,12 +107,38 @@ private final class CellGridBackend: RenderBackend {
     }
 
     func paragraph(rect: Rect, lines: [[Span]], block: BlockConfig?) throws {
+        // When the paragraph carries a block, render it faithfully — draw the
+        // border + title and inset the content into the inner area — mirroring
+        // ratatui's `Paragraph::block`. Without this the block was silently
+        // dropped, so a bordered modal (the `?` help overlay) rendered as bare
+        // text with no box (the 2026-06-17 UX-H1 "broken overlay" was largely
+        // this backend gap, not the real render). The overlay is the only
+        // paragraph that passes a non-nil block.
+        var contentRect = rect
+        if let block {
+            try self.block(rect: rect, config: block, borderStyle: .default)
+            // Title is drawn over the top border row, one cell past the corner.
+            var titleCol = Int(rect.x) + 1
+            for span in block.titleSpans {
+                try grid.writeCells(
+                    col: UInt16(titleCol), row: rect.y, text: span.text, style: span.style)
+                titleCol += span.text.count
+            }
+            // Inset content by the 1-cell border on each side, plus any padding.
+            let innerX = Int(rect.x) + 1 + Int(block.padLeft)
+            let innerY = Int(rect.y) + 1 + Int(block.padTop)
+            let innerW = max(0, Int(rect.width) - 2 - Int(block.padLeft) - Int(block.padRight))
+            let innerH = max(0, Int(rect.height) - 2 - Int(block.padTop) - Int(block.padBottom))
+            contentRect = Rect(
+                x: UInt16(innerX), y: UInt16(innerY),
+                width: UInt16(innerW), height: UInt16(innerH))
+        }
         for (idx, spans) in lines.enumerated() {
-            guard idx < Int(rect.height) else { break }
-            let row = UInt16(Int(rect.y) + idx)
-            var col = Int(rect.x)
+            guard idx < Int(contentRect.height) else { break }
+            let row = UInt16(Int(contentRect.y) + idx)
+            var col = Int(contentRect.x)
             for span in spans {
-                let available = Int(rect.width) - (col - Int(rect.x))
+                let available = Int(contentRect.width) - (col - Int(contentRect.x))
                 guard available > 0 else { break }
                 let text = String(span.text.prefix(available))
                 try grid.writeCells(col: UInt16(col), row: row, text: text, style: span.style)

@@ -162,6 +162,18 @@ struct CodePaneScrollTests {
         #expect(next.codePane.cursorLine > 100)
     }
 
+    @Test("G with the redundant Shift modifier still jumps to bottom (crossterm decode)")
+    func gCapitalWithShiftJumpsToBottom() {
+        // Real terminals (crossterm) deliver Shift+g as .char("G") with .shift
+        // SET — the scalar already encodes case, so the modifier is redundant.
+        // The reducer must treat it identically to a bare .char("G").
+        var (state, _) = codePaneState(code: "a\nb\nc")
+        state.codePane.scrollOffset = 0
+        let (next, _) = reduce(state, .key(.char("G"), modifiers: [.shift]))
+        #expect(next.codePane.scrollOffset > 100, "Shift+G must set a large scroll offset")
+        #expect(next.codePane.cursorLine > 100)
+    }
+
     @Test("Renderer clamps scroll beyond content length to last line")
     func rendererClampsScrollBeyondContent() {
         // 5-line source; scroll and cursor both set way beyond content.
@@ -205,12 +217,12 @@ struct CodePaneScrollTests {
         #expect(next.codePane.scrollOffset == 20, "f must scroll down fullPageSize (20)")
     }
 
-    @Test("b scrolls up by fullPageSize, clamped to 0")
-    func bScrollsFullPageUp() {
+    @Test("C-b scrolls up by fullPageSize, clamped to 0 (UX-01: b moved to breakpoint-toggle)")
+    func ctrlBScrollsFullPageUp() {
         var (state, _) = codePaneState(code: (1...50).map { "\($0)" }.joined(separator: "\n"))
         state.codePane.scrollOffset = 10
-        let (next, _) = reduce(state, .key(.char("b"), modifiers: []))
-        #expect(next.codePane.scrollOffset == 0, "b from offset 10 clamped to 0 (fullPage=20)")
+        let (next, _) = reduce(state, .key(.char("b"), modifiers: .ctrl))
+        #expect(next.codePane.scrollOffset == 0, "C-b from offset 10 clamped to 0 (fullPage=20)")
     }
 }
 

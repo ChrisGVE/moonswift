@@ -3,10 +3,11 @@
 //       of a project file. All fields map directly to the normative schema
 //       (PRD §4.2). Encoding/decoding lives in ProjectFileCodec.swift;
 //       validation rules live in ProjectValidation.swift.
-// Upstream: (none — pure data model)
+// Upstream: MockStore (mock field type)
 // Downstream: ProjectFileCodec (decode target), ProjectValidation (validates),
 //             AppState (holds ProjectFile after load), RunService (RunConfig),
-//             LintService (LintConfig.extraModules)
+//             LintService (LintConfig.extraModules),
+//             SessionEngine.startSession(config:mocks:) (MockStore)
 
 import Foundation
 
@@ -37,18 +38,24 @@ public struct ProjectFile: Sendable, Equatable {
     /// User-visible settings (theme). Nil means `[settings]` was absent.
     public let settings: SettingsConfig
 
+    /// Mock environment definitions. Empty means no mocks are declared for this
+    /// project; the session engine runs with no injected mock values or functions.
+    public let mocks: MockStore
+
     public init(
         luaVersion: String,
         sources: [SourceEntry] = [],
         run: RunConfig = RunConfig(),
         lint: LintConfig = LintConfig(),
-        settings: SettingsConfig = SettingsConfig()
+        settings: SettingsConfig = SettingsConfig(),
+        mocks: MockStore = .empty
     ) {
         self.luaVersion = luaVersion
         self.sources = sources
         self.run = run
         self.lint = lint
         self.settings = settings
+        self.mocks = mocks
     }
 }
 
@@ -164,7 +171,46 @@ public struct SettingsConfig: Sendable, Equatable {
     /// Active UI theme. P1 valid value: `"default"`. P2 will add more.
     public let theme: String
 
-    public init(theme: String = "default") {
+    /// Navigator/main split as a fraction of total columns (F5.6). The TUI works
+    /// in absolute cells; this ratio is the persisted form (`navigator_split`).
+    /// Stored verbatim as decoded — out-of-range values are flagged by
+    /// `ProjectValidation` and clamped only when applied to the layout
+    /// (`clampedNavigatorSplit`), so the file round-trips byte-stably.
+    public let navigatorSplit: Double
+
+    /// Bottom-pane/main split as a fraction of total rows (`bottom_split`, F5.6).
+    public let bottomSplit: Double
+
+    // MARK: F5.6 split-ratio bounds (§4.2)
+
+    /// Default navigator split when `[settings]` omits `navigator_split`.
+    public static let navigatorSplitDefault = 0.25
+    /// Default bottom split when `[settings]` omits `bottom_split`.
+    public static let bottomSplitDefault = 0.30
+    /// Valid `navigator_split` range (inclusive); outside → Rule-9 diagnostic + clamp.
+    public static let navigatorSplitRange = 0.10...0.50
+    /// Valid `bottom_split` range (inclusive); outside → Rule-9 diagnostic + clamp.
+    public static let bottomSplitRange = 0.10...0.60
+
+    public init(
+        theme: String = "default",
+        navigatorSplit: Double = navigatorSplitDefault,
+        bottomSplit: Double = bottomSplitDefault
+    ) {
         self.theme = theme
+        self.navigatorSplit = navigatorSplit
+        self.bottomSplit = bottomSplit
+    }
+
+    /// `navigatorSplit` clamped into its valid range — the value actually applied
+    /// to the layout (an out-of-range stored value is surfaced as a diagnostic but
+    /// never produces an unusable layout).
+    public var clampedNavigatorSplit: Double {
+        min(max(navigatorSplit, Self.navigatorSplitRange.lowerBound), Self.navigatorSplitRange.upperBound)
+    }
+
+    /// `bottomSplit` clamped into its valid range.
+    public var clampedBottomSplit: Double {
+        min(max(bottomSplit, Self.bottomSplitRange.lowerBound), Self.bottomSplitRange.upperBound)
     }
 }

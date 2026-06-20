@@ -872,3 +872,53 @@ struct TabSwitchingTests {
         #expect(next.bottomPane.scrollOffset == 0)
     }
 }
+
+// MARK: - Conditional [ Debug ] tab (ux-spec §6.1)
+
+/// The `[ Debug ]` tab is rendered ONLY while a debug session is active or
+/// launching (ux-spec §6.1 lines 489-490: "[ Debug ] — present only when the
+/// P2 debugger is active"; §7.2 line 673). Regression guard for the E2E finding
+/// that the tab was always shown (a dead-end: `3`/Tab decline with `Debug tab
+/// not active.` when there is no session — UX-R2-N03).
+@Suite("BottomPane — conditional [ Debug ] tab (ux-spec §6.1)")
+struct ConditionalDebugTabTests {
+
+    /// Joined text of every `.cellRun` command in the frame (the tab bar is
+    /// rendered as cell runs, not a paragraph).
+    private func cellRunText(_ commands: [RenderCommand]) -> String {
+        commands.compactMap { cmd -> String? in
+            if case .cellRun(_, _, let text, _) = cmd { return text }
+            return nil
+        }.joined()
+    }
+
+    @Test("no debug session: [ Debug ] tab is absent")
+    func debugTabHiddenWithoutSession() {
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.bottomPane.activeTab = .output
+        let text = cellRunText(render(state, size: termSize(120, 40)))
+        #expect(text.contains("[ Output ]"))
+        #expect(text.contains("[ Diagnostics ]"))
+        #expect(!text.contains("[ Debug ]"), "Debug tab must be hidden with no active session")
+    }
+
+    @Test("active debug session: [ Debug ] tab is present")
+    func debugTabShownWithActiveSession() {
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.activeDebugSessionID = DebugSessionID()
+        state.bottomPane.activeTab = .debug
+        let text = cellRunText(render(state, size: termSize(120, 40)))
+        #expect(text.contains("[ Debug ]"), "Debug tab must appear while a session is active")
+    }
+
+    @Test("launching debug run (pre-pause): [ Debug ] tab is present")
+    func debugTabShownWhileLaunching() {
+        var state = AppState()
+        state.focus = .pane(.bottomPane)
+        state.debugLaunchPending = true
+        let text = cellRunText(render(state, size: termSize(120, 40)))
+        #expect(text.contains("[ Debug ]"), "Debug tab must appear on <C-g> launch, before first pause")
+    }
+}

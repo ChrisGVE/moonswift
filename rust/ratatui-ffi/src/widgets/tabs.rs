@@ -200,16 +200,9 @@ pub extern "C" fn rffi_tabs_draw(
             width: rect.width,
             height: rect.height,
         };
-        match term
-            .terminal
-            .draw(|frame| frame.render_widget(widget, area))
-        {
-            Ok(_) => 0,
-            Err(e) => {
-                set_last_error(format!("rffi_tabs_draw: {e}"));
-                crate::error::RFFI_ERR_IO
-            }
-        }
+        // Accumulate into the scratch buffer; rffi_flush presents the frame.
+        term.render_to_scratch(widget, area);
+        0
     })
 }
 

@@ -19,7 +19,24 @@ include = [
   "FfiClearType", "FfiViewport", "FfiSymbolsLineSet", "FfiSymbolsBorderSet", "FfiSymbolsBlockSet", "FfiSymbolsBarSet", "FfiSymbolsScrollbarSet"
   , "FfiU16Slice"
   , "FfiAccentedPaletteU32", "FfiNonAccentedPaletteU32", "FfiTailwindPaletteU32"
+  # Event discriminant enums: referenced only via the u32 fields of RffiEvent
+  # (never in a function signature), so cbindgen will not emit them unless
+  # force-listed here. Without their constants in the header the Swift RatatuiKit
+  # overlay had no ABI contract and its hand-written discriminant tables silently
+  # drifted from these Rust values (the 2026-06-17 "every keystroke decodes as
+  # resize(0,0)" input bug). List them so the header carries the authoritative
+  # discriminant values for RatatuiKit's decode to verify against.
+  , "RffiEventKind", "RffiKeyCode", "RffiMouseKind", "RffiMouseButton"
 ]
+
+[enum]
+# Prefix each C enum constant with its enum name (e.g. RffiEventKind_Key,
+# RffiMouseButton_None). Required because several variants are bare words
+# (None, Left, Up, Char, Tab, …) that collide with each other across enums,
+# with the key-modifier `NONE`/`SHIFT` #defines, and with system headers when
+# emitted unqualified. Qualified names give RatatuiKit an unambiguous ABI
+# contract to verify its discriminant tables against.
+prefix_with_name = true
 
 [parse]
 parse_deps = false

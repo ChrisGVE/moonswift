@@ -1,8 +1,8 @@
 moonswift                                                                       
 +----------------++------------------------------------------------------------+
 |hello.lua       ||   1-- A sample Lua module                                  |
-|                ||   2local M = {}                                            |
-|                ||   3                                                        |
+|─── Mock Environ||   2local M = {}                                            |
+|(run to populate||   3                                                        |
 |                ||▶  4function M.greet(name)                                  |
 |                ||   5    print("Hello, " .. name)                            |
 |                ||   6end                                                     |
@@ -231,6 +231,22 @@ moonswift
 2,44 fg=F8F8F2 bg=282A36 mods=0
 2,79 fg=BD93F9 bg=default mods=0
 3,0 fg=6272A4 bg=default mods=0
+3,1 fg=6272A4 bg=default mods=0
+3,2 fg=6272A4 bg=default mods=0
+3,3 fg=6272A4 bg=default mods=0
+3,4 fg=6272A4 bg=default mods=0
+3,5 fg=6272A4 bg=default mods=0
+3,6 fg=6272A4 bg=default mods=0
+3,7 fg=6272A4 bg=default mods=0
+3,8 fg=6272A4 bg=default mods=0
+3,9 fg=6272A4 bg=default mods=0
+3,10 fg=6272A4 bg=default mods=0
+3,11 fg=6272A4 bg=default mods=0
+3,12 fg=6272A4 bg=default mods=0
+3,13 fg=6272A4 bg=default mods=0
+3,14 fg=6272A4 bg=default mods=0
+3,15 fg=6272A4 bg=default mods=0
+3,16 fg=6272A4 bg=default mods=0
 3,17 fg=6272A4 bg=default mods=0
 3,18 fg=BD93F9 bg=default mods=0
 3,19 fg=default bg=282A36 mods=0
@@ -251,6 +267,22 @@ moonswift
 3,34 fg=F8F8F2 bg=282A36 mods=0
 3,79 fg=BD93F9 bg=default mods=0
 4,0 fg=6272A4 bg=default mods=0
+4,1 fg=6272A4 bg=default mods=0
+4,2 fg=6272A4 bg=default mods=0
+4,3 fg=6272A4 bg=default mods=0
+4,4 fg=6272A4 bg=default mods=0
+4,5 fg=6272A4 bg=default mods=0
+4,6 fg=6272A4 bg=default mods=0
+4,7 fg=6272A4 bg=default mods=0
+4,8 fg=6272A4 bg=default mods=0
+4,9 fg=6272A4 bg=default mods=0
+4,10 fg=6272A4 bg=default mods=0
+4,11 fg=6272A4 bg=default mods=0
+4,12 fg=6272A4 bg=default mods=0
+4,13 fg=6272A4 bg=default mods=0
+4,14 fg=6272A4 bg=default mods=0
+4,15 fg=6272A4 bg=default mods=0
+4,16 fg=6272A4 bg=default mods=0
 4,17 fg=6272A4 bg=default mods=0
 4,18 fg=BD93F9 bg=default mods=0
 4,19 fg=default bg=282A36 mods=0

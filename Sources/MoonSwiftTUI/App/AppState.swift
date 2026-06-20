@@ -53,6 +53,12 @@ public enum FocusState: Sendable, Equatable {
     case pickerModal
     /// The project-initialisation form is open.
     case initForm
+    /// The Mock Environment add/edit form is open (F5.4); state in
+    /// `AppState.mockFormState`.
+    case mockForm
+    /// The Lua-invocation form is open (F5.3); state in
+    /// `AppState.invokeFormState`.
+    case invokeForm
 
     // MARK: P4 nvim focus cases (ARCHITECTURE.md §10.4.3)
 
@@ -77,6 +83,71 @@ public enum FocusState: Sendable, Equatable {
     /// Key handling (scroll, `[c]ancel`) is wired in Inc-9
     /// (ARCHITECTURE.md §10.8 Inc-9).
     case diffView(DiffViewPhase)
+
+    // MARK: P3 completion focus cases (F7a.2, ARCHITECTURE.md §4.7)
+
+    /// The completion popup is open over the code pane (F7a.2, ux-spec §7.6).
+    ///
+    /// State is carried inline — items, selection, and scroll offset are small
+    /// and only meaningful while the popup is open, the same rationale as
+    /// `.nvimPane(NvimPaneState)`. Keeping it in the case (rather than a
+    /// top-level optional on `AppState`) preserves the "state implies focus"
+    /// invariant the modal switch relies on.
+    case completionPopup(CompletionPopupState)
+
+    /// The hover overlay is open (F7a.2, ux-spec §7.6).
+    ///
+    /// `HoverOverlayState.item` is `nil` for the no-doc case (UX-R3-01): the
+    /// overlay STILL opens and renders the symbol name above
+    /// `(no documentation available)` — `K` is never a silent no-op.
+    case hoverOverlay(HoverOverlayState)
+}
+
+// MARK: - CompletionPopupState
+
+/// State of the open completion popup (F7a.2, ux-spec §7.6).
+///
+/// `items` is the full list returned by the completion query (already capped by
+/// the catalog); the renderer shows a scrolling window of at most
+/// `completionPopupMaxVisible` rows around `selectedIndex`. Lives inline in
+/// `FocusState.completionPopup`.
+public struct CompletionPopupState: Sendable, Equatable {
+    /// All items offered by the query, in catalog-then-live-mock order.
+    public var items: [CompletionItem]
+    /// The highlighted item (0-based index into `items`).
+    public var selectedIndex: Int
+    /// First visible item index — the renderer's scroll window starts here.
+    public var scrollOffset: Int
+
+    public init(items: [CompletionItem], selectedIndex: Int = 0, scrollOffset: Int = 0) {
+        self.items = items
+        self.selectedIndex = selectedIndex
+        self.scrollOffset = scrollOffset
+    }
+}
+
+// MARK: - HoverOverlayState
+
+/// State of the open hover overlay (F7a.2, ux-spec §7.6).
+///
+/// `item` is `nil` when the symbol under the cursor resolves to no catalog
+/// entry (UX-R3-01) — the overlay still opens and renders `symbolName` above the
+/// dimmed `(no documentation available)` line. Lives inline in
+/// `FocusState.hoverOverlay`.
+public struct HoverOverlayState: Sendable, Equatable {
+    /// The resolved completion item, or `nil` for the no-doc case (UX-R3-01).
+    public var item: CompletionItem?
+    /// The symbol name shown as the overlay title — used as the heading in the
+    /// no-doc case, where `item` carries no label.
+    public var symbolName: String
+    /// Scroll offset (content lines) for doc strings that overflow the box.
+    public var scrollOffset: Int
+
+    public init(item: CompletionItem?, symbolName: String, scrollOffset: Int = 0) {
+        self.item = item
+        self.symbolName = symbolName
+        self.scrollOffset = scrollOffset
+    }
 }
 
 // MARK: - LaunchMode
@@ -198,10 +269,20 @@ public struct CodePaneState: Sendable, Equatable {
     }
 }
 
-/// A gutter mark indicating a lint/run diagnostic at a specific line.
+/// A gutter mark in the code pane gutter column.
+///
+/// Diagnostic marks (`error`, `warning`) come from lint/run. Breakpoint and
+/// pause marks come from the F6.1 debugger. Precedence when two marks land on
+/// the same line: debugger marks win; within diagnostics, error wins (ux-spec §6.6).
 public enum GutterMark: Sendable, Equatable {
     case error
     case warning
+    /// A user-set breakpoint (`●`, `error` token — ux-spec §6.6).
+    case breakpoint
+    /// Breakpoint AND current debug-pause location (`●`, `highlight_pulse` — ux-spec §6.6).
+    case pausedBreakpoint
+    /// Current debug-pause location without a breakpoint (`▶`, `highlight_pulse` — ux-spec §6.6).
+    case debugPaused
 }
 
 // MARK: - BottomPaneState
@@ -210,16 +291,30 @@ public enum GutterMark: Sendable, Equatable {
 public struct BottomPaneState: Sendable, Equatable {
 
     /// The active tab in the bottom pane.
+    ///
+    /// The `debug` tab is present only while a debug session is active
+    /// (ux-spec §6.1); it auto-appears when `<C-g>` starts a debug run.
     public enum Tab: Sendable, Equatable {
         case output
         case diagnostics
+        case debug
     }
 
     public var activeTab: Tab
     /// Output lines from the current/last run (capped at 1000 — ARCH §3c).
     public var outputBuffer: [String]
-    /// Diagnostics from the most recent pre-pass or luacheck run.
+    /// Diagnostics shown in the Diagnostics tab: the merged display list the
+    /// renderer reads. It is recomputed by the reducer's `remergeDiagnostics`
+    /// helper from the three independent source fields below — never assigned
+    /// directly — so the merge is uniform across every event that touches a
+    /// source (F7b). Order: pre-pass, then luacheck, then LuaLS.
     public var diagnostics: [Diagnostic]
+    /// The most recent luacheck batch (`.luacheck` source), held separately so a
+    /// LuaLS push (or a syntax pre-pass) never drops it (F7b).
+    public var luacheckDiagnostics: [Diagnostic]
+    /// The most recent LuaLS-published diagnostics (`.luals` source), held
+    /// separately so a luacheck pass never drops them (F7b).
+    public var lualsDiagnostics: [Diagnostic]
     /// Diagnostic from the most recent syntax pre-pass (nil = clean).
     public var prePassDiagnostic: Diagnostic?
     /// Scroll position for the active tab (0 = top).
@@ -243,6 +338,8 @@ public struct BottomPaneState: Sendable, Equatable {
         activeTab: Tab = .output,
         outputBuffer: [String] = [],
         diagnostics: [Diagnostic] = [],
+        luacheckDiagnostics: [Diagnostic] = [],
+        lualsDiagnostics: [Diagnostic] = [],
         prePassDiagnostic: Diagnostic? = nil,
         scrollOffset: Int = 0,
         runNumber: Int = 0,
@@ -251,6 +348,8 @@ public struct BottomPaneState: Sendable, Equatable {
         self.activeTab = activeTab
         self.outputBuffer = outputBuffer
         self.diagnostics = diagnostics
+        self.luacheckDiagnostics = luacheckDiagnostics
+        self.lualsDiagnostics = lualsDiagnostics
         self.prePassDiagnostic = prePassDiagnostic
         self.scrollOffset = scrollOffset
         self.runNumber = runNumber
@@ -302,13 +401,19 @@ public struct BottomPaneState: Sendable, Equatable {
 
 // MARK: - TransientMessage
 
-/// A time-limited status-bar message with an expiry date.
+/// A status-bar message, normally time-limited by an expiry date.
 ///
-/// The TickSource is armed at 1.5 s while a transient is active; on each
-/// `.tick` the reducer checks whether the expiry has passed and clears it.
+/// The TickSource is armed at 1.5 s while an *expiring* transient is active; on
+/// each `.tick` the reducer checks whether the expiry has passed and clears it.
+/// A message built with `init(persistentText:)` has no expiry (`expiry == nil`)
+/// and stays until a reducer clears it explicitly — used for the nvim
+/// write-block error, which must remain visible until the next `:w` or edit
+/// rather than vanishing after the 1.5 s window (ux-spec §7.3).
 public struct TransientMessage: Sendable, Equatable {
     public let text: String
-    public let expiry: Date
+    /// When the message auto-clears, or `nil` if it persists until a reducer
+    /// clears it explicitly.
+    public let expiry: Date?
 
     public init(text: String, duration: Duration = TickInterval.transientExpiry) {
         self.text = text
@@ -316,6 +421,12 @@ public struct TransientMessage: Sendable, Equatable {
             Double(duration.components.seconds)
             + Double(duration.components.attoseconds) / 1e18
         self.expiry = Date(timeIntervalSinceNow: seconds)
+    }
+
+    /// A message with no expiry — it persists until a reducer clears it.
+    public init(persistentText text: String) {
+        self.text = text
+        self.expiry = nil
     }
 }
 
@@ -427,14 +538,31 @@ public struct NavigatorState: Sendable, Equatable {
     /// Spinner animation phase (0-based, advanced on each .tick).
     public var spinnerPhase: Int
 
+    // MARK: F5.4 Mock Environment section
+
+    /// `true` when the navigator cursor is in the Mock Environment section
+    /// (below the divider) rather than the source list. `j`/`k` cross the divider
+    /// to flip this; the source selection (`selectedIndex`) is preserved while in
+    /// the mock section so returning lands back where it left.
+    public var inMockSection: Bool
+
+    /// The cursor index within the Mock Environment section's SELECTABLE rows
+    /// (declared values/functions — see `mockSelectableRows`). Only meaningful
+    /// when `inMockSection` is true.
+    public var mockSelectedIndex: Int
+
     public init(
         selectedIndex: Int = 0,
         filterText: String? = nil,
-        spinnerPhase: Int = 0
+        spinnerPhase: Int = 0,
+        inMockSection: Bool = false,
+        mockSelectedIndex: Int = 0
     ) {
         self.selectedIndex = selectedIndex
         self.filterText = filterText
         self.spinnerPhase = spinnerPhase
+        self.inMockSection = inMockSection
+        self.mockSelectedIndex = mockSelectedIndex
     }
 }
 
@@ -608,6 +736,30 @@ public struct AppState: Sendable {
     /// Current project file state.
     public var project: ProjectState
 
+    // MARK: Mock environment (F5.4)
+
+    /// Declared mock definitions for the loaded project (from `ProjectFile.mocks`).
+    /// Holds ONLY definitions — never engine value-state, which is read live via
+    /// introspection into `mockLiveState` (DATA-01). Reset on each project load.
+    public var mockStore: MockStore
+
+    /// The most recent post-run introspection snapshot of live mock/global state,
+    /// or `nil` before the first run / during the no-cache window (the navigator
+    /// then shows `(run to populate live state)`, DATA-09).
+    public var mockLiveState: MockLiveState?
+
+    /// The Mock Environment add/edit form, or `nil` when closed (F5.4). Non-nil
+    /// iff `focus == .mockForm`.
+    public var mockFormState: MockFormState?
+
+    /// `true` while awaiting `Delete this mock? [y/N]` confirmation (F5.4).
+    public var mockDeletePending: Bool
+
+    /// The Lua-invocation form, or `nil` when closed (F5.3). Non-nil iff
+    /// `focus == .invokeForm`. Opened by `<Enter>` on a live function row in the
+    /// Mock Environment section (ux-spec §7.5).
+    public var invokeFormState: InvokeFormState?
+
     // MARK: Sources
 
     /// Per-source loading and content state, keyed by `SourceID`.
@@ -653,10 +805,27 @@ public struct AppState: Sendable {
     /// Set after the one-shot startup probe (`.catalogProbed`).
     public var tomlModuleAvailable: Bool?
 
+    /// Whether the one-time "lua-language-server not found" status note has
+    /// already been shown this session (F7b). Latches on the first
+    /// `.lualsUnavailable` so a reload does not re-nag.
+    public var lualsUnavailableNoticeShown: Bool = false
+
     // MARK: Focus
 
     /// The current focus — which pane or modal receives keyboard input.
     public var focus: FocusState
+
+    /// Scroll offset (in content lines) of the `?` help overlay. The overlay's
+    /// keybinding list overflows its 60×20 box, so it scrolls (ux-spec §2.5).
+    /// Reset to 0 each time the overlay opens; clamped to the valid range by the
+    /// reducer (see `helpOverlayMaxScrollOffset`).
+    public var helpScrollOffset: Int
+
+    /// Symbol name of the in-flight `K`-hover query (F7a.2). Set when the code
+    /// pane emits `Effect.queryHover`; read by `reduceHoverReady` to title the
+    /// no-doc overlay (UX-R3-01) when the resolved `CompletionItem?` is `nil`.
+    /// Empty between queries. Defaulted inline so the explicit init is untouched.
+    public var hoverPendingSymbol: String = ""
 
     // MARK: Theme
 
@@ -746,6 +915,69 @@ public struct AppState: Sendable {
     /// so the reducer always has a valid fallback before the first resize event.
     public var terminalSize: TerminalSize
 
+    // MARK: Debug session state (P2 F6.1, ARCHITECTURE.md §10.9)
+
+    /// Fragment-relative breakpoint lines (1-based) keyed by `SourceID`.
+    ///
+    /// Stored per-source so switching between sources preserves each set.
+    /// The reducer stores breakpoints fragment-relative; the AppDriver translates
+    /// them to engine lines via `lineOffset` when building the `debugRun` effect.
+    public var breakpoints: [SourceID: Set<Int>]
+
+    /// The opaque handle for the active debug session, or `nil` when no debug
+    /// run is in progress (IMPL-02 / ARCH-04: only the ID, never the mailbox).
+    public var activeDebugSessionID: DebugSessionID?
+
+    /// The most recent snapshot from the active debug session. Updated on each
+    /// `AppEvent.debugPaused`; cleared when the session ends (`debugFinished`).
+    public var currentDebugSnapshot: DebugSnapshot?
+
+    /// When `true`, the reducer is waiting for the user to confirm a debug
+    /// restart (`Restart debug session? [y/N]` — ux-spec §7.2 precondition (c)).
+    public var debugRestartPending: Bool
+
+    /// When `true`, a debug run has been launched (`Effect.debugRun` emitted) but
+    /// has not yet hit its first pause — so `activeDebugSessionID` is still nil.
+    /// This flag closes that window: `tryRun` and `tryDebugRun` both treat it as
+    /// "a debug session is live" so a second `<C-g>` cannot double-launch and a
+    /// plain `r` cannot deadlock the engine (CR-001/CR-002). Cleared on the first
+    /// pause (`applyPauseInspection`), on `debugFinished`, and on `x` stop.
+    public var debugLaunchPending: Bool
+
+    // MARK: Debug-tab inspection state (P2 F6.3, ux-spec §7.2)
+
+    /// The retained last-pause snapshot, kept across a resume so the Debug tab
+    /// can render §6.9 Case-2 ("VM running… (showing last pause)") with the prior
+    /// frame data dimmed. Distinct from `currentDebugSnapshot`, which is `nil`
+    /// whenever the VM is NOT paused: the pair lets the tab tell apart the three
+    /// states — paused (`currentDebugSnapshot != nil`), Case-1 fresh-open
+    /// (`lastPauseSnapshot == nil`), Case-2 after-pause (`lastPauseSnapshot != nil`).
+    /// Cleared only when the session ends (`debugFinished` / `x` stop).
+    public var lastPauseSnapshot: DebugSnapshot?
+
+    /// The selected call-stack frame level (0 = current/innermost). `<Enter>` on
+    /// a Call-Stack row sets this; the Locals/Upvalues sections then render
+    /// `frameVars[debugSelectedFrame]` (pure UI nav, no engine re-entry — F6.3).
+    /// Reset to 0 on every new pause.
+    public var debugSelectedFrame: Int
+
+    /// Row index of the Debug-tab selection cursor over the flattened row list
+    /// (`buildDebugRows`). `j`/`k` move it; `<Enter>` acts on the row it lands on
+    /// (select frame or toggle table expansion). Reset to 0 on every new pause.
+    public var debugSelectedRow: Int
+
+    /// The set of expanded inline-table value paths in the Debug tab. A path is
+    /// the section tag + name chain (e.g. `local:t` / `local:t/child`), so the
+    /// same key under Locals vs Globals never collides. `<Enter>` on an
+    /// expandable value toggles membership. Cleared on every new pause.
+    public var debugExpandedPaths: Set<String>
+
+    /// `true` while a `g` globals capture is in flight (between the `g` press and
+    /// the republished snapshot). Drives the `(globals pending…)` Globals-section
+    /// line and the `[globals pending…]` status indicator (UX-R2-01). Cleared
+    /// when the globals-bearing snapshot arrives, on resume, and on session end.
+    public var debugGlobalsRequested: Bool
+
     // MARK: Initialiser
 
     /// Seed state: constructed by the AppDriver before the first `reduce` call.
@@ -755,6 +987,11 @@ public struct AppState: Sendable {
     public init(
         launch: LaunchMode = .empty,
         project: ProjectState = .none,
+        mockStore: MockStore = .empty,
+        mockLiveState: MockLiveState? = nil,
+        mockFormState: MockFormState? = nil,
+        mockDeletePending: Bool = false,
+        invokeFormState: InvokeFormState? = nil,
         sources: [SourceID: SourceState] = [:],
         navigatorOrder: [SourceID] = [],
         selection: SourceID? = nil,
@@ -765,6 +1002,7 @@ public struct AppState: Sendable {
         highlight: [SourceID: [HighlightSpan]] = [:],
         tomlModuleAvailable: Bool? = nil,
         focus: FocusState = .pane(.navigator),
+        helpScrollOffset: Int = 0,
         theme: ThemeState = ThemeState(),
         transient: TransientMessage? = nil,
         navigator: NavigatorState = NavigatorState(),
@@ -778,10 +1016,25 @@ public struct AppState: Sendable {
         nvimFallbackNotedThisSession: Bool = false,
         nvimPendingResize: TerminalSize? = nil,
         nvimResizeDeadline: Date? = nil,
-        terminalSize: TerminalSize = TerminalSize(cols: 80, rows: 24)
+        terminalSize: TerminalSize = TerminalSize(cols: 80, rows: 24),
+        breakpoints: [SourceID: Set<Int>] = [:],
+        activeDebugSessionID: DebugSessionID? = nil,
+        currentDebugSnapshot: DebugSnapshot? = nil,
+        debugRestartPending: Bool = false,
+        debugLaunchPending: Bool = false,
+        lastPauseSnapshot: DebugSnapshot? = nil,
+        debugSelectedFrame: Int = 0,
+        debugSelectedRow: Int = 0,
+        debugExpandedPaths: Set<String> = [],
+        debugGlobalsRequested: Bool = false
     ) {
         self.launch = launch
         self.project = project
+        self.mockStore = mockStore
+        self.mockLiveState = mockLiveState
+        self.mockFormState = mockFormState
+        self.mockDeletePending = mockDeletePending
+        self.invokeFormState = invokeFormState
         self.sources = sources
         self.navigatorOrder = navigatorOrder
         self.selection = selection
@@ -792,6 +1045,7 @@ public struct AppState: Sendable {
         self.highlight = highlight
         self.tomlModuleAvailable = tomlModuleAvailable
         self.focus = focus
+        self.helpScrollOffset = helpScrollOffset
         self.theme = theme
         self.transient = transient
         self.navigator = navigator
@@ -806,5 +1060,15 @@ public struct AppState: Sendable {
         self.nvimPendingResize = nvimPendingResize
         self.nvimResizeDeadline = nvimResizeDeadline
         self.terminalSize = terminalSize
+        self.breakpoints = breakpoints
+        self.activeDebugSessionID = activeDebugSessionID
+        self.currentDebugSnapshot = currentDebugSnapshot
+        self.debugRestartPending = debugRestartPending
+        self.debugLaunchPending = debugLaunchPending
+        self.lastPauseSnapshot = lastPauseSnapshot
+        self.debugSelectedFrame = debugSelectedFrame
+        self.debugSelectedRow = debugSelectedRow
+        self.debugExpandedPaths = debugExpandedPaths
+        self.debugGlobalsRequested = debugGlobalsRequested
     }
 }

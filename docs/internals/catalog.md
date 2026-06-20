@@ -100,25 +100,106 @@ and are automatically nested one level deeper by `luacheckGlobals`.
 for `ProjectValidation.validate(_:extraModulesAllowList:)` and all
 `ProjectStore.load` variants. Tests that need isolation pass explicit closures.
 
-### completionItems (P3a stub)
+### completionItems (P3a)
 
-`LuaModuleCatalog.v0.completionItems(prefix:)` returns `[]` in P1. P3a replaces
-the body with filtered completion construction from the catalog data.
+`LuaModuleCatalog.v0.completionItems(prefix:liveMocks:tomlProbed:)`
+(`Catalog/CatalogConsumers+Completion.swift`) builds the completion list for a
+known prefix from the catalog data, merged with post-run live-mock names. The
+query is pure (no engine call, PERF-03). See `docs/user/completions.md` for the
+user-facing behaviour.
 
-### luaLSMetaFiles (P3b stub)
+### luaLSMetaFiles (P3b)
 
-`LuaModuleCatalog.v0.luaLSMetaFiles()` returns `[]` in P1. P3b generates
-`.luarc/meta/luaswift.*.lua` files from the catalog data.
+`LuaModuleCatalog.v0.luaLSMetaFiles()` (`Catalog/CatalogConsumers+Meta.swift`)
+delegates to the pure `MetaFileGenerator` (`MoonSwiftCore/LuaLS/`) to produce one
+`meta/<qualified>.lua` `---@meta` file per module plus a `.luarc.json`
+(`runtime.version`, `workspace.library`, `diagnostics.globals`). The output is
+deterministic, which lets a stable hash of it back the `meta-version` sentinel
+that triggers regeneration when the catalog changes. The TUI-side `LuaLSClient`
+writes these files into the per-project cache and points
+`lua-language-server` at them — see `docs/internals/luals.md`.
+
+## Signature authoring (F7a.0, task #17)
+
+Starting with P3a (task #17), every `CatalogFunction` entry is enriched with
+`params`, `returns`, and `doc` sourced directly from the LuaSwift module source
+files. This section documents the authoring rules.
+
+### Rules
+
+1. **Evidence-based only.** Every signature must be traceable to a real LuaSwift
+   source file. The `Source:` comment inside each `CatalogFunction(…)` block
+   names the Swift file and callback or Lua block that defines the behaviour.
+   Never invent a signature.
+
+2. **Exact param names.** Use the parameter names from the LuaSwift callback
+   implementation or its Lua API doc comment — not abbreviations or aliases.
+
+3. **Optional flag.** Mark a `CatalogParam` as `isOptional: true` if and only if
+   the LuaSwift source explicitly skips or defaults it when absent (e.g. `args[1]`
+   checked with `if args.count > 1`).
+
+4. **Return type.** Use Lua type strings: `"string"`, `"number"`, `"boolean"`,
+   `"table"`, `"function"`, `"any"`, `"nil"`. Use `|` for unions:
+   `"number|table"`. Use `"X, Y"` for multiple return values.
+   Use Swift `nil` (not the string `"nil"`) when the function returns nothing.
+
+5. **Doc string.** Every function must carry a `doc` string — even void helpers
+   like `import()`. The string is one to three sentences describing what the
+   function does, key parameters, and any caveats. Match the level of detail in
+   the LuaSwift module-level Lua API doc comment.
+
+6. **DATA-07 invariant.** `luacheckGlobals` reads only `CatalogFunction.name`.
+   Signature fields (`params`, `returns`, `doc`) are invisible to it. Adding or
+   changing these fields must never alter the luacheckGlobals output.
+   `Tests/MoonSwiftCoreTests/Catalog/CatalogSignatureTests.swift` asserts this
+   byte-stability; run it after every signature edit.
+
+### Where to find LuaSwift signatures
+
+The canonical source is `.build/checkouts/LuaSwift/Sources/LuaSwift/Modules/Swift/`:
+
+| Module file         | Catalog file         |
+|---------------------|----------------------|
+| `JSONModule.swift`  | `Module+JSON.swift`  |
+| `YAMLModule.swift`  | `Module+YAML.swift`  |
+| `RegexModule.swift` | `Module+Regex.swift` |
+| `MathXModule.swift` | `Module+MathX.swift` |
+| `StringXModule.swift`| `Module+StringX.swift`|
+| `TableXModule.swift`| `Module+TableX.swift`|
+| `TypesModule.swift` | `Module+Types.swift` |
+| `UTF8XModule.swift` | `Module+UTF8X.swift` |
+| `SVGModule.swift`   | `Module+SVG.swift`   |
+| `TOMLModule.swift`  | `Module+TOML.swift`  |
+| `IOModule.swift`    | `Module+IOx.swift`   |
+| `HTTPModule.swift`  | `Module+HTTP.swift`  |
+| `UIModule.swift`    | `Module+UI.swift`    |
+| `ModuleRegistry.swift`| `Module+Root.swift`|
+
+For each module, look at:
+- The `install(in:)` method's `engine.run("""…""")` Lua block for the exact
+  function table shape and parameter names.
+- The `// MARK: - Callbacks` section for argument parsing details (which
+  `args[N]` are optional, what types are expected).
+- The module-level `/// ## Lua API` doc comment for usage examples.
 
 ## Maintenance
+
+**Current LuaSwift minimum: the 1.12 minor** (`Package.swift`,
+`.upToNextMinor(from: "1.12.0")`). P2 depends on this line for two engine
+features: #19 structured runtime errors (`LuaError.runtimeFailure` —
+message/line/traceback, F6.4) and #23 `chunkName` on `evaluate`/`runDebug` for
+faithful traceback frame names (F6.4). The earlier `LuaErrorLineParser` regex
+seam was deleted once #19 landed (see `docs/internals/debugger.md`).
 
 Every LuaSwift minimum-version bump **must** include a catalog review:
 
 1. Check `LuaSwift/Sources/LuaSwift/Modules/Swift/*.swift` for added or
    removed functions in each module's `install(in:)` method.
-2. Update the relevant `Module+<Name>.swift` file.
+2. Update the relevant `Module+<Name>.swift` file — function list AND signatures.
 3. Update the fixture list in `Tests/MoonSwiftCoreTests/Catalog/LuaModuleCatalogTests.swift`.
-4. Run `swift test --filter LuaModuleCatalog` to confirm.
+4. Run `swift test --filter LuaModuleCatalog` and
+   `swift test --filter CatalogSignature` to confirm both suites pass.
 
 Each `Module+<Name>.swift` header cites the LuaSwift source file it was
 verified against, making review diffs straightforward.

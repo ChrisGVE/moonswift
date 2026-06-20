@@ -1,5 +1,5 @@
-// File: Sources/moonswift/CLIArguments.swift
-// Location: Sources/moonswift/
+// File: Sources/mswift/CLIArguments.swift
+// Location: Sources/mswift/
 // Role: Pure CLI argument parser. Maps the raw `CommandLine.arguments` array
 //       to a typed `ParseResult` that Main.swift dispatches on. No I/O here —
 //       all output (version string, usage text) is constructed here as `String`
@@ -14,7 +14,7 @@ import Foundation
 
 /// Exit codes aligned with sysexits(3) (PRD §4.7).
 ///
-/// These are the only four valid exit codes for the moonswift binary.
+/// These are the only four valid exit codes for the mswift binary.
 /// The numeric values are fixed and must not change — they are documented
 /// in `--help` and the user documentation.
 enum ExitCode {
@@ -78,22 +78,22 @@ enum CLIParser {
 
     /// The version string printed by `--version`.
     ///
-    /// Format: `moonswift 0.1.0` (SemVer, updated in sync with the git tag).
-    static let versionString: String = "moonswift 0.1.0"
+    /// Format: `mswift 0.1.0` (SemVer, updated in sync with the git tag).
+    static let versionString: String = "mswift 0.1.0"
 
     /// The usage text printed by `--help`.
     ///
     /// Uses a man-style compact layout: synopsis first, then flagged options,
     /// then the exit-code table. Fits in 80 columns.
     static let helpText: String = """
-        moonswift — Lua script workbench for LuaSwift embeddings
+        mswift — Lua script workbench for LuaSwift embeddings
 
         USAGE
-          moonswift                   open current directory as a project
-          moonswift <dir>             open <dir> as a project root
-          moonswift <file.lua>        quick one-off: run/lint a single .lua file
-          moonswift --version         print version and exit
-          moonswift --help            print this help and exit
+          mswift                   open current directory as a project
+          mswift <dir>             open <dir> as a project root
+          mswift <file.lua>        quick one-off: run/lint a single .lua file
+          mswift --version         print version and exit
+          mswift --help            print this help and exit
 
         EXIT CODES
           0   normal exit
@@ -107,7 +107,7 @@ enum CLIParser {
 
         NOTES
           A project directory must contain a moonswift.toml file.
-          If one is not found, moonswift offers to create it.
+          If one is not found, mswift offers to create it.
         """
 
     // MARK: - Private parsing

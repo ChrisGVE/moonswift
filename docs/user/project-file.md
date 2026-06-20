@@ -171,6 +171,154 @@ values are rejected at load time.
 theme = "default"
 ```
 
+### `navigator_split` (float, default `0.25`) and `bottom_split` (float, default `0.30`)
+
+The navigator/main and bottom-pane/main split ratios, as fractions of the
+terminal. They persist the pane layout across sessions: resizing a split in the
+TUI (`<`/`>` for the navigator, `{`/`}` for the bottom pane) auto-saves the new
+ratio here, and the saved ratio is reapplied to the layout when the project is
+loaded.
+
+- `navigator_split` must be in `[0.10, 0.50]`.
+- `bottom_split` must be in `[0.10, 0.60]`.
+
+A value outside its range produces a validation diagnostic
+(`settings.navigator_split <v> out of range [0.10, 0.50]`) and is clamped to the
+nearest bound when applied to the layout. Both keys are optional — a `[settings]`
+table with only `theme` loads with the defaults.
+
+```toml
+[settings]
+theme = "default"
+navigator_split = 0.25
+bottom_split = 0.30
+```
+
+---
+
+## `[[mock.value]]` — mock value definitions
+
+Each `[[mock.value]]` entry injects a named Lua value into the engine's global
+table at session start. Scripts can read (and optionally write) the value
+without a real host implementation.
+
+```toml
+[[mock.value]]
+namespace = "myapp"         # required, non-empty; must not collide with catalog
+path = "settings.debug"     # required key path within the namespace
+type = "boolean"            # "string" | "number" | "boolean" | "table" | "expr"
+value = "true"              # required Lua value expression (see below)
+writable = true             # required boolean: whether scripts may write this path
+```
+
+### `namespace` (required, string)
+
+The top-level Lua table name for the mock. Must not be empty and must not
+equal a known catalog symbol name (e.g. `"luaswift"`, `"json"`, `"yaml"`).
+
+### `path` (required, string)
+
+The dotted key path within the namespace (e.g. `"settings.debug"` for
+`myapp.settings.debug`). Must not be empty.
+
+### `type` (required, string)
+
+Informational label for the mock value. Does not restrict what the `value`
+expression produces. Valid values:
+
+| Value | Meaning |
+|-------|---------|
+| `"string"` | The value is expected to be a Lua string |
+| `"number"` | The value is expected to be a Lua number |
+| `"boolean"` | The value is expected to be a Lua boolean |
+| `"table"` | The value is expected to be a Lua table constructor |
+| `"expr"` | An arbitrary Lua value expression (function literal, computed value, etc.) |
+
+### `value` (required, string)
+
+A Lua value expression that is syntax-checked at load time and evaluated at
+session start via `evaluate("return <value>")`. Any syntactically valid Lua
+value expression is accepted: scalar literals, table constructors, function
+literals (`function() return os.time() end`), or computed expressions.
+
+### `writable` (required, boolean)
+
+When `true`, Lua scripts may write to the mock path during a run and the
+post-run navigator reflects the written value.
+
+### Runtime behaviour
+
+At session start, MoonSwift evaluates each `value` expression with
+`evaluate("return <value>")` under the project's configured engine mode.
+The result is served to Lua through a value server registered as the
+`namespace` global — before the stdlib baseline is captured, so mock
+namespaces are excluded from the navigator's user-globals view. A write to
+a non-writable path raises a Lua runtime error surfaced as a structured
+diagnostic. See [docs/user/mocking.md](mocking.md) for the full runtime
+contract.
+
+### Duplicate detection
+
+Two `[[mock.value]]` entries with the same `namespace` and `path` are a
+load-time error. Each `(namespace, path)` pair must be unique.
+
+---
+
+## `[[mock.function]]` — mock function definitions
+
+Each `[[mock.function]]` entry registers a callable Lua function that scripts
+can invoke without a real host implementation.
+
+```toml
+[[mock.function]]
+name = "host_log"           # required; no catalog or __moonswift_ collision
+behavior = "echo-args"      # "echo-args" | "fixed-return" | "raise-error"
+```
+
+### `name` (required, string)
+
+The bare Lua function name (no dots). Must not be empty, must not begin with
+`__moonswift_`, and must not equal a catalog symbol name.
+
+### `behavior` (required, string)
+
+Controls what the function does when called:
+
+| Value | Behaviour | Conditional field |
+|-------|-----------|-------------------|
+| `"echo-args"` | Returns all arguments as a single Lua table | (none) |
+| `"fixed-return"` | Returns a fixed Lua value expression | `return_value` (required) |
+| `"raise-error"` | Raises a Lua error with a given message | `error_message` (required) |
+
+### `return_value` (string, conditional)
+
+Present only when `behavior = "fixed-return"`. A Lua value expression
+syntax-checked and materialized the same way as `[[mock.value]].value`.
+Omit for all other behaviors.
+
+```toml
+[[mock.function]]
+name = "get_count"
+behavior = "fixed-return"
+return_value = "42"
+```
+
+### `error_message` (string, conditional)
+
+Present only when `behavior = "raise-error"`. The error string raised into
+the Lua environment. Omit for all other behaviors.
+
+```toml
+[[mock.function]]
+name = "fail_now"
+behavior = "raise-error"
+error_message = "simulated failure"
+```
+
+### Duplicate detection
+
+Two `[[mock.function]]` entries with the same `name` are a load-time error.
+
 ---
 
 ## Forward compatibility

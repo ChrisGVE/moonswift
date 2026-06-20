@@ -6,6 +6,8 @@
 //
 //       Verified against: LuaSwift/Sources/LuaSwift/Modules/ModuleRegistry.swift
 //       (installExtendStdlib — defines luaswift.extend_stdlib).
+//       Signatures sourced from ModuleRegistry.swift inline Lua code block and
+//       the Swift doc comment on extend_stdlib.
 //
 // Upstream: CatalogTypes
 // Downstream: LuaModuleCatalog.v0
@@ -22,7 +24,14 @@ extension CatalogModule {
         functions: [
             // Imports all module extensions into the standard library tables
             // (string, math, table, utf8). Defined by ModuleRegistry.installExtendStdlib.
-            CatalogFunction(name: "extend_stdlib")
+            // Source: ModuleRegistry.swift — `luaswift.extend_stdlib = function() … end`
+            CatalogFunction(
+                name: "extend_stdlib",
+                params: [],
+                returns: nil,
+                doc:
+                    "Inject all luaswift extensions into the standard Lua libraries (string, math, table, utf8). Call once at startup to enable convenient shorthand access."
+            )
         ],
         availability: .base
     )

@@ -41,6 +41,12 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
     case .appStarted:
         return reduceAppStarted(s)
 
+    case .terminalClosed:
+        // Fatal-terminal signal. The AppDriver intercepts this before reduce and
+        // exits the loop (clean EOF quit), so the reducer never normally sees it;
+        // handled here as a defensive no-op for switch exhaustiveness.
+        return (s, [])
+
     // MARK: Terminal input
 
     case .key(let code, let modifiers):
@@ -57,8 +63,13 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // Mouse events are no-op in P1 (vim-flavored keyboard-only navigation).
         return (s, [])
 
-    case .paste:
-        // Paste is no-op in P1 (read-only code pane; picker uses key events).
+    case .paste(let text):
+        // Forward pasted text to nvim while its pane is focused (via nvim_paste,
+        // not nvim_input, so the payload is inserted verbatim). Elsewhere paste
+        // is a no-op: the code pane is read-only and the picker uses key events.
+        if case .nvimPane = s.focus {
+            return (s, [.nvimPaste(text)])
+        }
         return (s, [])
 
     // MARK: Tick
@@ -76,6 +87,17 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         }
         // Schedule syntax highlight for the newly loaded source.
         var effects: [Effect] = [.highlight(id)]
+        // Auto-display the initially-highlighted entry as soon as it loads, so
+        // the code pane shows it without a key press — the startup counterpart
+        // of auto-display-on-move (Chris UX). Seeds selection only when nothing
+        // is selected yet, and only for the entry under the navigator cursor.
+        if s.selection == nil,
+            s.navigator.selectedIndex < s.navigatorOrder.count,
+            s.navigatorOrder[s.navigator.selectedIndex] == id
+        {
+            s.selection = id
+            effects.append(.syntaxPrePass(fragment))
+        }
         if let tick = armTickIfNeeded(s) { effects.append(tick) }
         return (s, effects)
 
@@ -93,8 +115,22 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         s.sources = [:]
         s.navigatorOrder = []
         s.selection = nil
-        // Re-load sources from the freshly loaded project.
-        return (s, [.loadSources])
+        // F5.4: load declared mocks; reset the mock-section cursor + live cache
+        // (stale on reload — repopulated on the next run).
+        s.mockStore = file.mocks
+        s.mockLiveState = nil
+        s.navigator.inMockSection = false
+        s.navigator.mockSelectedIndex = 0
+        // F5.6: restore the saved navigator/bottom split ratios into the layout.
+        applySplitRatios(&s, settings: file.settings)
+        // F7b: every diagnostic source belongs to the previous project file —
+        // clear all three and re-merge so the tab/gutter reflect the new project.
+        s.bottomPane.luacheckDiagnostics = []
+        s.bottomPane.lualsDiagnostics = []
+        s.bottomPane.prePassDiagnostic = nil
+        remergeDiagnostics(&s)
+        // Re-load sources and (re)start the optional lua-language-server.
+        return (s, [.loadSources, .spawnLuaLS])
 
     case .projectMalformed(let diag):
         s.project = .malformed(diag)
@@ -140,6 +176,11 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
             s.bottomPane.appendOutputLines(["→ \(v)"])
         }
         s.bottomPane.appendOutputLines([buildRunFooter(outcome: outcome)])
+        // F6.4: append the structured traceback frames (newest first) below the
+        // error footer so the Output tab shows where the error occurred.
+        if case .error(_, let traceback) = outcome, !traceback.isEmpty {
+            s.bottomPane.appendOutputLines(traceback)
+        }
         return (s, tickEffectsAfterRunEnds(s))
 
     case .transient(let message):
@@ -164,21 +205,38 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         return (s, [])
 
     case .prePassResult(let diag):
+        // Record the new syntax-pre-pass state (nil = clean) and re-merge. A
+        // clean pass now correctly drops the stale syntax-error gutter mark; an
+        // error pass keeps luacheck and LuaLS findings alongside it (F7b).
         s.bottomPane.prePassDiagnostic = diag
-        if let diag {
-            // Propagate to diagnostics list and gutter marks.
-            s.bottomPane.diagnostics = [diag]
-            s.codePane.gutterMarks = gutterMarks(from: [diag])
-        } else {
-            // Clean pre-pass clears the syntax-error gutter marks while
-            // preserving any luacheck diagnostics that may still be showing.
-        }
+        remergeDiagnostics(&s)
         return (s, [])
 
     case .lintFinished(let diagnostics):
         s.lintState = .idle
-        s.bottomPane.diagnostics = diagnostics
-        s.codePane.gutterMarks = gutterMarks(from: diagnostics)
+        // Replace the luacheck batch and re-merge; the pre-pass and LuaLS
+        // findings are preserved by the uniform merge (F7b).
+        s.bottomPane.luacheckDiagnostics = diagnostics
+        remergeDiagnostics(&s)
+        return (s, [])
+
+    // MARK: LuaLS (F7b)
+
+    case .lualsDiagnostics(let lualsDiags):
+        // Replace the LuaLS batch and re-merge; the pre-pass and luacheck
+        // findings are preserved by the uniform merge (F7b). No per-push filter.
+        s.bottomPane.lualsDiagnostics = lualsDiags
+        remergeDiagnostics(&s)
+        return (s, [])
+
+    case .lualsUnavailable:
+        // One-time status-bar note; latch so a reload does not re-nag (F7b).
+        if !s.lualsUnavailableNoticeShown {
+            s.lualsUnavailableNoticeShown = true
+            s.transient = TransientMessage(
+                text: "lua-language-server not found — using native catalog.")
+            return (s, [armTickIfNeeded(s)].compactMap { $0 })
+        }
         return (s, [])
 
     // MARK: Highlight
@@ -247,10 +305,14 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         return reduceWriteBackFailed(s, outcome: outcome)
 
     case .writeBackBlocked(let diagnostic):
-        // Syntax error blocked the write. AppDriver injected the comment block
-        // into the nvim buffer; reducer surfaces the diagnostic in the status bar.
+        // A syntax pre-pass blocked the write. The nvim buffer stays open with
+        // the user's edits intact; surface the diagnostic as a *persistent*
+        // status-bar message (no 1.5 s expiry) so the reason stays visible until
+        // the next `:w` or edit clears it. (Decision: no buffer comment-injection
+        // on the nvim path — the buffer is still open, unlike the $EDITOR
+        // fallback. ux-spec §7.3, P4 audit gap #5.)
         s.transient = TransientMessage(
-            text: "Syntax error: \(diagnostic.message) (line \(diagnostic.line))"
+            persistentText: "Syntax error: \(diagnostic.message) (line \(diagnostic.line))"
         )
         return (s, [armTickIfNeeded(s)].compactMap { $0 })
 
@@ -262,6 +324,49 @@ public func reduce(_ state: AppState, _ event: AppEvent) -> (AppState, [Effect])
         // Off-thread build complete: transition to .diffView(.ready).
         s.focus = .diffView(.ready(diffState))
         return (s, [])
+
+    // MARK: Debug (P2 F6.1, ARCHITECTURE.md §10.9)
+
+    case .debugPaused(let snapshot):
+        return reduceDebugPaused(s, snapshot: snapshot)
+
+    case .debugFinished(let sessionID, let outcome):
+        return reduceDebugFinished(s, sessionID: sessionID, outcome: outcome)
+
+    case .debugResumed(let sessionID):
+        // VM resumed after a step/continue command — §6.9 Case-2 transition.
+        // Clears the paused snapshot so the Debug tab enters "VM running between
+        // pauses" state. Stale session ID is a silent no-op (ARCH-06).
+        return reduceDebugResumed(s, sessionID: sessionID)
+
+    case .mockLiveStateReady(let liveState):
+        // F5.4: store the introspection snapshot so the Mock Environment section
+        // shows live values. `isEmpty` snapshots keep the
+        // `(run to populate live state)` hint (DATA-09, handled by buildMockNavRows).
+        s.mockLiveState = liveState
+        return (s, [])
+
+    // MARK: Lua invocation (F5.3 — handlers in InvokeFormReducer.swift)
+
+    case .luaInvocationResult(let display):
+        return reduceLuaInvocationResult(s, display: display)
+
+    case .luaInvocationLintFailed(let detail):
+        return reduceLuaInvocationLintFailed(s, detail: detail)
+
+    case .luaInvocationTargetInvalid:
+        return reduceLuaInvocationTargetInvalid(s)
+
+    case .luaInvocationFailed(let message):
+        return reduceLuaInvocationFailed(s, message: message)
+
+    // MARK: Completions & hover (F7a.2 — handlers in CompletionReducer.swift)
+
+    case .completionsReady(let items):
+        return reduceCompletionsReady(s, items: items)
+
+    case .hoverReady(let item):
+        return reduceHoverReady(s, item: item)
     }
 }
 
@@ -456,6 +561,16 @@ private func reduceNvimCleanupFocus(
     s.nvimPendingResize = nil
     s.nvimResizeDeadline = nil
 
+    // A persistent (nvim-session-scoped) write-block message has no meaning once
+    // the session is gone. Clear it here — it has no expiry, so neither the tick
+    // handler nor a code-pane keystroke would ever clear it, and it would freeze
+    // in the status bar after an exit that did not pass through the nvim-pane key
+    // handler (process crash, `:q` via a mapping). Done before any replacement
+    // transient is set below.
+    if let t = s.transient, t.expiry == nil {
+        s.transient = nil
+    }
+
     if let text = transientText {
         s.transient = TransientMessage(text: text)
         if let tick = armTickIfNeeded(s) { effects.append(tick) }
@@ -479,6 +594,11 @@ private func reduceNvimWriteRequested(_ s: AppState) -> (AppState, [Effect]) {
     else {
         return (s, [])
     }
+    // A fresh `:w` supersedes a persistent write-block message; clear it so a
+    // stale error does not linger while the new write runs (gap #5). A
+    // re-blocked write re-posts it via `.writeBackBlocked`.
+    var s = s
+    if let t = s.transient, t.expiry == nil { s.transient = nil }
     return (s, [.writeBack(fragment, editedText: "", force: false)])
 }
 
@@ -536,14 +656,37 @@ private func reduceConflictDetected(
         case .loaded(let fragment) = s.sources[sid]
     else { return (s, []) }
 
+    // Capture the origin so resolution returns to the right surface. A `:w`
+    // conflict arrives while the nvim pane is focused (a live session is
+    // attached); the $EDITOR-suspend fallback posts the same event from the
+    // code pane (its editor process has already exited — no nvim session). The
+    // resolution arms must not send the fallback case back to `.nvimPane`, which
+    // has no session behind it (P4 audit gap #1).
+    let returnsToNvim: Bool
+    if case .nvimPane = s.focus {
+        returnsToNvim = true
+    } else {
+        returnsToNvim = false
+    }
+
     let modalState = ConflictModalState(
         fileURL: fileURL,
         expectedHash: expectedHash,
         editedText: editedText,
-        fragment: fragment
+        fragment: fragment,
+        returnsToNvim: returnsToNvim
     )
     s.focus = .conflictModal(modalState)
     return (s, [])
+}
+
+/// The focus to restore when a conflict modal is resolved with `[o]` or `[c]`.
+/// See `ConflictModalState.returnsToNvim` for the two-path origin semantics and
+/// why the fallback case must land on the code pane.
+private func conflictReturnFocus(_ s: AppState, returnsToNvim: Bool) -> FocusState {
+    guard returnsToNvim else { return .pane(.codePane) }
+    let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
+    return .nvimPane(NvimPaneState(attachedRect: rect))
 }
 
 /// Handle key events while `FocusState.conflictModal` is active.
@@ -576,10 +719,11 @@ private func reduceConflictModalKey(
 
     case (.char("o"), []):
         // Overwrite: force write-back with the user's edited text (skip conflict check).
-        // Return to the nvim pane while the write completes in the background.
+        // Return to the originating surface while the write completes in the
+        // background — the nvim pane only when a live session is attached; the
+        // $EDITOR fallback returns to the code pane (gap #1).
         var s = s
-        let overwriteRect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
-        s.focus = .nvimPane(NvimPaneState(attachedRect: overwriteRect))
+        s.focus = conflictReturnFocus(s, returnsToNvim: modal.returnsToNvim)
         return (s, [.writeBack(modal.fragment, editedText: modal.editedText, force: true)])
 
     case (.char("d"), []):
@@ -602,10 +746,11 @@ private func reduceConflictModalKey(
         )
 
     case (.char("c"), []):
-        // Cancel: return to the nvim buffer without any changes.
+        // Cancel: return to the originating surface without any changes — the
+        // nvim buffer when a live session is attached, otherwise the code pane
+        // (the $EDITOR fallback has no nvim session to return to — gap #1).
         var s = s
-        let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
-        s.focus = .nvimPane(NvimPaneState(attachedRect: rect))
+        s.focus = conflictReturnFocus(s, returnsToNvim: modal.returnsToNvim)
         return (s, [])
 
     default:
@@ -639,14 +784,15 @@ private func reduceDiffViewKey(
         // Cancel: restore to the conflict modal with state preserved (§10.3d, CR-022).
         // `pendingConflictModal` was set when [d] transitioned to the diff view; if
         // it is non-nil we can restore .conflictModal exactly. If it is nil (unexpected
-        // path) fall back to the nvim pane so the user is not stranded.
+        // path) fall back to the always-valid code pane — fabricating an `.nvimPane`
+        // would strand a `$EDITOR`-fallback-origin conflict on a dead session, the
+        // same hazard the conflict-modal arms guard against (P4 audit gap #1).
         var s = s
         if let pending = s.pendingConflictModal {
             s.pendingConflictModal = nil
             s.focus = .conflictModal(pending)
         } else {
-            let rect = computeLayout(size: s.terminalSize, paneLayout: s.paneLayout).codePane
-            s.focus = .nvimPane(NvimPaneState(attachedRect: rect))
+            s.focus = .pane(.codePane)
         }
         return (s, [])
 
@@ -679,6 +825,12 @@ private func reduceNvimPaneKey(
     modifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
 
+    var s = s
+    // Any keystroke in the nvim pane counts as the "next edit" that dismisses a
+    // persistent write-block message — this also covers typing `:w` (its keys
+    // are forwarded here) and `<C-e>` (gap #5).
+    if let t = s.transient, t.expiry == nil { s.transient = nil }
+
     // <C-e> exits the nvim pane (ux-spec §7.4; symmetric with the enter binding).
     if code == .char("e"), modifiers == .ctrl {
         return (s, [.nvimDetach])
@@ -699,10 +851,14 @@ private func reduceNvimPaneKey(
 ///   stores the pending size, sets the deadline, and arms the tick.
 private func reduceResize(_ s: AppState, size: TerminalSize) -> (AppState, [Effect]) {
     var s = s
-    s.terminalSize = size
 
-    // Only debounce for nvim pane; ignore 0×0 sentinel (AppDriver CR-019).
+    // Ignore a degenerate 0×0 resize entirely: keep the last good terminalSize so
+    // the renderer always has valid dimensions. crossterm can emit a transient
+    // 0×0 on the first input event in some terminals/multiplexers (CR-019
+    // revision; E2E first-keystroke-quit fix). Only after this guard do we adopt
+    // the new size.
     guard size.cols > 0 && size.rows > 0 else { return (s, []) }
+    s.terminalSize = size
 
     switch s.focus {
     case .nvimPane, .nvimSpawning:
@@ -721,6 +877,18 @@ private func reduceResize(_ s: AppState, size: TerminalSize) -> (AppState, [Effe
 // MARK: - Lifecycle handler
 
 private func reduceAppStarted(_ s: AppState) -> (AppState, [Effect]) {
+    var s = s
+    // Seed project-derived runtime state that the startup seed (Main.swift)
+    // does not establish — it loads the ProjectFile into `project` directly
+    // but leaves mock store and layout at their defaults. This mirrors the
+    // derivation half of `.projectLoaded` (the C-r reload path); the reload-
+    // only stale-state clears are omitted because the seed starts empty
+    // (issue #24).
+    if case .loaded(let file, _) = s.project {
+        s.mockStore = file.mocks
+        applySplitRatios(&s, settings: file.settings)
+    }
+
     var effects: [Effect] = [.loadSources, .prewarmLint]
 
     // If a project is loaded, start the tick for any active transient.
@@ -736,8 +904,10 @@ private func reduceTick(_ s: AppState) -> (AppState, [Effect]) {
     var s = s
     var effects: [Effect] = []
 
-    // Expire the transient message if its deadline has passed.
-    if let t = s.transient, Date() >= t.expiry {
+    // Expire the transient message if it has a deadline and the deadline has
+    // passed. A persistent message (expiry == nil) is left for a reducer to
+    // clear explicitly.
+    if let t = s.transient, let expiry = t.expiry, Date() >= expiry {
         s.transient = nil
     }
 
@@ -777,11 +947,42 @@ private func reduceTick(_ s: AppState) -> (AppState, [Effect]) {
 
 // MARK: - Key dispatch
 
+/// Drops a `.shift` modifier that a terminal decoder leaves set on an
+/// already-shifted printable scalar (e.g. `.char("G")` + `.shift` for Shift+g).
+///
+/// The case of a printable is carried by the scalar itself, so the modifier is
+/// redundant there and only a plain printable is normalized: when Ctrl or Alt is
+/// also held the shift distinguishes a real chord (`<C-S-x>` ≠ `<C-x>`) and is
+/// kept, and non-`.char` keys (arrows, Tab, …) are returned untouched. This lets
+/// the `(.char("G"), [])`-style bindings match live crossterm events as they
+/// already match the synthetic `[]`-modifier events in the unit tests.
+private func normalizingRedundantShift(code: KeyCode, modifiers: KeyModifiers) -> KeyModifiers {
+    guard case .char = code,
+        modifiers.contains(.shift),
+        !modifiers.contains(.ctrl),
+        !modifiers.contains(.alt)
+    else { return modifiers }
+    return modifiers.subtracting(.shift)
+}
+
 private func reduceKey(
     _ s: AppState,
     code: KeyCode,
-    modifiers: KeyModifiers
+    modifiers rawModifiers: KeyModifiers
 ) -> (AppState, [Effect]) {
+
+    // Terminal key decoders (crossterm) deliver a shifted printable as the
+    // already-uppercased scalar with `.shift` STILL set — e.g. Shift+g arrives
+    // as `.char("G")` + `.shift`. There the shift is redundant (the scalar
+    // encodes the case), yet every pane/global binding is written against the
+    // bare scalar (`(.char("G"), [])`, `(.char("K"), [])`, `(.char("N"), [])`).
+    // Strip that redundant shift so the bindings fire on a real terminal exactly
+    // as they do for the synthetic-event unit tests. Only a plain printable is
+    // normalized: when Ctrl or Alt is also held the shift is meaningful (e.g.
+    // `<C-S-x>`) and is preserved, and the nvim translator already ignores a
+    // bare shift on printables (NvimKeyTranslator §translateChar), so the
+    // forwarded notation is unchanged.
+    let modifiers = normalizingRedundantShift(code: code, modifiers: rawModifiers)
 
     // Modal states capture all keys before global/pane dispatch.
     // No `default:` arm — every FocusState case must be handled here.
@@ -793,6 +994,10 @@ private func reduceKey(
         return reducePickerKey(s, code: code, modifiers: modifiers)
     case .initForm:
         return reduceInitFormKey(s, code: code, modifiers: modifiers)
+    case .mockForm:
+        return reduceMockFormKey(s, code: code, modifiers: modifiers)
+    case .invokeForm:
+        return reduceInvokeFormKey(s, code: code, modifiers: modifiers)
     case .nvimPane:
         return reduceNvimPaneKey(s, code: code, modifiers: modifiers)
     case .nvimSpawning:
@@ -802,8 +1007,25 @@ private func reduceKey(
         return reduceConflictModalKey(s, code: code, modifiers: modifiers)
     case .diffView:
         return reduceDiffViewKey(s, code: code, modifiers: modifiers)
+    case .completionPopup:
+        return reduceCompletionPopupKey(s, code: code, modifiers: modifiers)
+    case .hoverOverlay:
+        return reduceHoverOverlayKey(s, code: code, modifiers: modifiers)
     case .pane:
         break
+    }
+
+    // Debug restart confirmation gate: when `debugRestartPending` is true, the
+    // very next key (y or anything else) resolves the `[y/N]` prompt regardless
+    // of pane focus (ARCH §F6.1). Runs before all other dispatch.
+    if s.debugRestartPending {
+        return reduceDebugRestartKey(s, code: code, modifiers: modifiers)
+    }
+
+    // F5.4 mock delete confirmation gate: `Delete this mock? [y/N]` — the next
+    // key resolves it (navigator focus, form closed). Runs before pane dispatch.
+    if s.mockDeletePending {
+        return reduceMockDeleteConfirm(s, code: code)
     }
 
     // Colon command interception: when the code pane is actively collecting a
@@ -887,8 +1109,21 @@ private func reduceGlobalKey(
     case (.char("r"), []):
         return tryRun(s)
 
-    // x — cancel run
+    // <C-g> — start (or restart-confirm) a debug run (ux-spec §7.2)
+    case (.char("g"), .ctrl):
+        return tryDebugRun(s)
+
+    // x — stop debug session when one is active (F6.2 override); else cancel run.
+    //
+    // When a debug session is active `x` delivers `.stop` to the session (the
+    // user ends debugging intentionally). This overrides the global cancel-run
+    // binding so the same key works consistently in both debug and run contexts
+    // (ux-spec §7.2, PRD F6.2). When no debug session is active `x` falls
+    // through to the normal `.cancelRun` path.
     case (.char("x"), []):
+        if let activeID = s.activeDebugSessionID {
+            return reduceDebugStop(s, sessionID: activeID)
+        }
         return (s, [.cancelRun])
 
     // l — lint selected source
@@ -899,9 +1134,10 @@ private func reduceGlobalKey(
     case (.char("q"), []):
         return (s, [.cancelRun, .quit(exitCode: 0)])
 
-    // ? — open help overlay
+    // ? — open help overlay (always from the top — ux-spec §2.5)
     case (.char("?"), []):
         s.focus = .helpOverlay
+        s.helpScrollOffset = 0
         return (s, [])
 
     // <C-p> — open project file in $EDITOR
@@ -947,33 +1183,43 @@ private func reduceGlobalKey(
         return (s, [])
 
     // < / > — narrow / widen navigator (ux-spec.md §1.3)
+    // F5.6: each resize auto-saves the new ratio to [settings] (splitPersistEffects).
     case (.char("<"), []):
         s.paneLayout.navigatorWidth = max(
             PaneLayout.navigatorMin,
             s.paneLayout.navigatorWidth - 2
         )
-        return (s, [])
+        return (s, splitPersistEffects(s))
 
     case (.char(">"), []):
         s.paneLayout.navigatorWidth = min(
             PaneLayout.navigatorMax,
             s.paneLayout.navigatorWidth + 2
         )
-        return (s, [])
+        return (s, splitPersistEffects(s))
 
     // { / } — shrink / grow bottom pane (ux-spec.md §1.3)
     case (.char("{"), []):
         let current = s.paneLayout.bottomPaneHeight ?? PaneLayout.defaultBottomRows
         s.paneLayout.bottomPaneHeight = max(PaneLayout.bottomPaneMin, current - 1)
-        return (s, [])
+        return (s, splitPersistEffects(s))
 
     case (.char("}"), []):
         let current = s.paneLayout.bottomPaneHeight ?? PaneLayout.defaultBottomRows
         s.paneLayout.bottomPaneHeight = min(PaneLayout.bottomPaneMaxRatio, current + 1)
-        return (s, [])
+        return (s, splitPersistEffects(s))
 
-    // i — open init form in empty state; transient no-op in quick-file mode
+    // i — open init form in empty state; transient no-op in quick-file mode.
+    //
+    // While a debug session is active, `i` is step-into (F6.2) and is routed
+    // per focus by the pane handlers (code pane / Debug tab → stepInto;
+    // navigator → "press 3" transient; VM running → "VM running…"). Defer to
+    // pane routing in that case so the global init-form binding does not shadow
+    // it — the same precedence the `x` stop override uses above.
     case (.char("i"), []):
+        if s.activeDebugSessionID != nil {
+            return nil
+        }
         return reduceInitFormOpen(s)
 
     default:
@@ -990,42 +1236,41 @@ private func reduceNavigatorKey(
 ) -> (AppState, [Effect]) {
     var s = s
 
+    // F6.2 navigator interception: while a debug session is paused, s/i/o/c
+    // show a transient directing the user to the Debug tab (PRD §2566).
+    // These keys have no navigator meaning, so interception does not shadow any
+    // existing binding. The check is pre-switch so it takes priority.
+    if s.activeDebugSessionID != nil, s.currentDebugSnapshot != nil {
+        switch (code, modifiers) {
+        case (.char("s"), []), (.char("i"), []), (.char("o"), []), (.char("c"), []):
+            return reduceNavigatorDebugKeyTransient(s)
+        default:
+            break
+        }
+    }
+
     switch (code, modifiers) {
 
     case (.char("j"), []):
-        // Navigate within the filtered list, then map back to the full order index.
-        let filtered = filteredIDs(from: s)
-        if !filtered.isEmpty {
-            let currentPos = filteredPosition(
-                selectedIndex: s.navigator.selectedIndex, filtered: filtered, order: s.navigatorOrder)
-            let nextPos = min((currentPos ?? 0) + 1, filtered.count - 1)
-            s.navigator.selectedIndex = fullOrderIndex(
-                filteredPos: nextPos, filtered: filtered, order: s.navigatorOrder)
-        }
-        return (s, [])
+        // Move the cursor, then auto-display the newly selected source (no Enter).
+        return autoDisplayAfterMove(reduceNavigatorMoveDown(s))
 
     case (.char("k"), []):
-        let filtered = filteredIDs(from: s)
-        if !filtered.isEmpty {
-            let currentPos = filteredPosition(
-                selectedIndex: s.navigator.selectedIndex, filtered: filtered, order: s.navigatorOrder)
-            let prevPos = max((currentPos ?? 0) - 1, 0)
-            s.navigator.selectedIndex = fullOrderIndex(
-                filteredPos: prevPos, filtered: filtered, order: s.navigatorOrder)
-        }
-        return (s, [])
+        return autoDisplayAfterMove(reduceNavigatorMoveUp(s))
 
     case (.char("g"), []):
-        // Jump to the first entry in the filtered list.
+        // Jump to the first entry in the filtered list (returns to the source section).
+        s.navigator.inMockSection = false
         let filtered = filteredIDs(from: s)
         if !filtered.isEmpty {
             s.navigator.selectedIndex = fullOrderIndex(
                 filteredPos: 0, filtered: filtered, order: s.navigatorOrder)
         }
-        return (s, [])
+        return autoDisplayAfterMove(s)
 
     case (.char("G"), []):
-        // Jump to the last entry in the filtered list.
+        // Jump to the last entry in the filtered list (returns to the source section).
+        s.navigator.inMockSection = false
         let filtered = filteredIDs(from: s)
         if !filtered.isEmpty {
             s.navigator.selectedIndex = fullOrderIndex(
@@ -1034,10 +1279,24 @@ private func reduceNavigatorKey(
                 order: s.navigatorOrder
             )
         }
-        return (s, [])
+        return autoDisplayAfterMove(s)
 
     case (.enter, []), (.char("o"), []), (.char(" "), []):
         return selectNavigatorEntry(s)
+
+    // F5.4 Mock Environment: `a` add (always, so the first mock can be created),
+    // `e` edit / `d` delete (only on a selected mock in the section).
+    case (.char("a"), []):
+        guard case .loaded = s.project else { return (s, []) }
+        return reduceMockAddForm(s)
+
+    case (.char("e"), []):
+        guard s.navigator.inMockSection else { return (s, []) }
+        return reduceMockEditForm(s)
+
+    case (.char("d"), []):
+        guard s.navigator.inMockSection else { return (s, []) }
+        return reduceMockDeleteRequest(s)
 
     case (.char("/"), []):
         // Activate inline filter mode with an empty query. Pressing / again
@@ -1154,7 +1413,13 @@ private func reduceCodePaneKey(
         s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
 
+    // b — toggle breakpoint on cursor line (UX-01 collision resolution: formerly
+    // scroll-up-full-page; that binding moves to <C-b> per ux-spec §2.3 amendment).
     case (.char("b"), []):
+        return reduceBreakpointToggle(s)
+
+    // <C-b> — scroll up full page (replaces the retired plain `b` binding).
+    case (.char("b"), .ctrl):
         s.codePane.scrollOffset = max(0, s.codePane.scrollOffset - fullPageSize)
         s.codePane.cursorLine = s.codePane.scrollOffset
         return (s, [])
@@ -1192,6 +1457,27 @@ private func reduceCodePaneKey(
     // <C-e> — open current source in nvim (P4b, ux-spec §7.4).
     case (.char("e"), .ctrl):
         return reduceCodePaneSpawnNvim(s)
+
+    // s/i/o/c — step over / into / out / continue (F6.2 paused-mode keys).
+    // Active only while a debug session is paused (snapshot present); otherwise
+    // a disabled transient (ux-spec §7.2, §6.9). The `x` stop key is handled
+    // globally (see reduceGlobalKey) so it does not appear here.
+    case (.char("s"), []):
+        return reduceDebugStepKey(s, command: .stepOver)
+    case (.char("i"), []):
+        return reduceDebugStepKey(s, command: .stepInto)
+    case (.char("o"), []):
+        return reduceDebugStepKey(s, command: .stepOut)
+    case (.char("c"), []):
+        return reduceDebugStepKey(s, command: .continueRun)
+
+    // <C-space> — open the completion popup (F7a.2, ux-spec §7.6).
+    case (.char(" "), .ctrl):
+        return reduceCodePaneOpenCompletion(s)
+
+    // K — open the hover overlay for the symbol under the cursor (F7a.2).
+    case (.char("K"), []):
+        return reduceCodePaneOpenHover(s)
 
     default:
         return (s, [])
@@ -1262,14 +1548,26 @@ private func reduceBottomPaneKey(
     switch (code, modifiers) {
 
     case (.char("j"), []):
+        // In the Debug tab while paused, j/k drive the row-selection cursor
+        // (frames + expandable values, F6.3); elsewhere they scroll.
+        if s.bottomPane.activeTab == .debug, s.currentDebugSnapshot != nil {
+            return reduceDebugRowMove(s, delta: 1)
+        }
         s.bottomPane.scrollOffset += 1
         return (s, [])
 
     case (.char("k"), []):
+        if s.bottomPane.activeTab == .debug, s.currentDebugSnapshot != nil {
+            return reduceDebugRowMove(s, delta: -1)
+        }
         s.bottomPane.scrollOffset = max(0, s.bottomPane.scrollOffset - 1)
         return (s, [])
 
     case (.enter, []):
+        // Debug tab while paused: select a frame / toggle inline expansion (F6.3).
+        if s.bottomPane.activeTab == .debug, s.currentDebugSnapshot != nil {
+            return reduceDebugTabEnter(s)
+        }
         // Jump code pane to the error line of the focused diagnostic.
         return jumpCodePaneFromBottomPane(s)
 
@@ -1290,12 +1588,30 @@ private func reduceBottomPaneKey(
         s.bottomPane.scrollOffset = 0
         return (s, [])
 
+    case (.char("3"), []):
+        // Quick-jump to the Debug tab — but it exists only during a debug session
+        // (UX-R2-N03). With no session, decline with the bound transient.
+        guard s.activeDebugSessionID != nil else {
+            s.transient = TransientMessage(text: "Debug tab not active.")
+            return (s, [.startTick(interval: TickInterval.transientExpiry)])
+        }
+        s.bottomPane.activeTab = .debug
+        s.bottomPane.scrollOffset = 0
+        return (s, [])
+
     case (.tab, []):
         // Cycle tabs within the bottom pane (context-sensitive Tab).
+        // Debug tab is included when a debug session is active (ux-spec §6.2).
         switch s.bottomPane.activeTab {
         case .output:
             s.bottomPane.activeTab = .diagnostics
         case .diagnostics:
+            if s.activeDebugSessionID != nil {
+                s.bottomPane.activeTab = .debug
+            } else {
+                s.bottomPane.activeTab = .output
+            }
+        case .debug:
             s.bottomPane.activeTab = .output
         }
         s.bottomPane.scrollOffset = 0
@@ -1309,30 +1625,33 @@ private func reduceBottomPaneKey(
         s.bottomPane.clearOutputWithNotice()
         return (s, [])
 
+    // s/i/o/c — step over / into / out / continue while Debug tab active (F6.2).
+    // Active only while the Debug tab is shown AND the session is paused. When the
+    // VM is running (snapshot nil, session active) they produce a "VM running…"
+    // disabled transient. Routing matches the code-pane paused-mode keys so the
+    // user can step from either focused pane (ux-spec §7.2).
+    case (.char("s"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugStepKey(s, command: .stepOver)
+    case (.char("i"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugStepKey(s, command: .stepInto)
+    case (.char("o"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugStepKey(s, command: .stepOut)
+    case (.char("c"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugStepKey(s, command: .continueRun)
+
+    // g — request the bounded/filtered globals slice while paused in the Debug
+    // tab (F6.3). Scoped to the Debug tab; a no-op outside a paused session.
+    case (.char("g"), []):
+        guard s.bottomPane.activeTab == .debug else { return (s, []) }
+        return reduceDebugGlobalsRequest(s)
+
     default:
         return (s, [])
     }
-}
-
-// MARK: - Modal key handlers (stubs for P1)
-
-private func reduceHelpOverlayKey(
-    _ s: AppState,
-    code: KeyCode,
-    modifiers: KeyModifiers
-) -> (AppState, [Effect]) {
-    var s = s
-    switch (code, modifiers) {
-    case (.escape, []), (.char("?"), []):
-        s.focus = .pane(.navigator)
-    case (.char("q"), []):
-        // `q` quits from the help overlay (ux-spec §2.5 — overlay must not
-        // trap the global quit shortcut).
-        return (s, [.quit(exitCode: 0)])
-    default:
-        break
-    }
-    return (s, [])
 }
 
 // MARK: - Picker key dispatch (ux-spec §3.6, §2.3 picker table)
@@ -1706,12 +2025,21 @@ private func reduceCycleFocus(
     }
 
     // Context-sensitive Tab: when the bottom pane is focused, cycle its tabs.
+    // Includes the Debug tab when a debug session is active (ux-spec §6.1, §6.2).
     if forward && current == .bottomPane {
         switch s.bottomPane.activeTab {
         case .output:
             s.bottomPane.activeTab = .diagnostics
         case .diagnostics:
-            // Tab at the last tab cycles back to navigator.
+            if s.activeDebugSessionID != nil {
+                // Debug tab is present — cycle into it.
+                s.bottomPane.activeTab = .debug
+            } else {
+                // No debug session: last tab, wrap back to navigator.
+                s.focus = .pane(.navigator)
+            }
+        case .debug:
+            // Last tab in debug mode — wrap back to navigator.
             s.focus = .pane(.navigator)
         }
         s.bottomPane.scrollOffset = 0
@@ -1739,6 +2067,15 @@ private func tryRun(_ s: AppState) -> (AppState, [Effect]) {
     // Guard: a run must not be already in progress.
     if case .running = s.runState {
         s.transient = TransientMessage(text: "Run in progress")
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
+    }
+
+    // Guard: a debug session must not be live (CR-001). Debug runs do NOT set
+    // `runState`, so without this guard a plain `r` during a paused (or
+    // launching) debug session starts a normal run whose `endSession` deadlocks
+    // behind the VM thread parked in the mailbox. Stop the debugger first.
+    if s.activeDebugSessionID != nil || s.debugLaunchPending {
+        s.transient = TransientMessage(text: "Debug session active — press x to stop first.")
         return (s, [armTickIfNeeded(s)].compactMap { $0 })
     }
 
@@ -1808,7 +2145,9 @@ private func tryLint(_ s: AppState) -> (AppState, [Effect]) {
     s.lintState = .running
     s.bottomPane.activeTab = .diagnostics
     let extraModules = extractExtraModules(from: s.project)
-    return (s, [.lint(fragment, extraModules: extraModules)])
+    // F7b: feed the same fragment to lua-language-server (no-op when absent), so
+    // a LuaLS pass accompanies each luacheck pass.
+    return (s, [.lint(fragment, extraModules: extraModules), .lualsSync(fragment)])
 }
 
 // MARK: - Helpers
@@ -1839,8 +2178,10 @@ private func armTickIfNeeded(_ s: AppState) -> Effect? {
         }
     }
 
-    // Transient expiry (1.5 s) while a transient message is showing.
-    if s.transient != nil {
+    // Transient expiry (1.5 s) while an *expiring* transient message is showing.
+    // A persistent message (expiry == nil) needs no tick — it is cleared by a
+    // reducer, not by deadline — so it must not spin the timer forever.
+    if let t = s.transient, t.expiry != nil {
         let candidate = TickInterval.transientExpiry
         if let m = minimum {
             minimum = m < candidate ? m : candidate
@@ -1882,8 +2223,27 @@ private func tickEffectsAfterRunEnds(_ s: AppState) -> [Effect] {
     return [.stopTick]
 }
 
+/// Recompute the merged diagnostics display list and gutter marks from the three
+/// independent sources MoonSwift maintains: the syntax pre-pass (0 or 1), the
+/// luacheck batch, and the LuaLS batch (F7b). Every reducer arm that mutates one
+/// source calls this so the merge stays uniform — no arm reconstructs the list
+/// from a partial set, which previously dropped luacheck on a syntax error and
+/// dropped the pre-pass on a lint pass. Order (pre-pass → luacheck → LuaLS)
+/// matches the Diagnostics-tab reading order.
+func remergeDiagnostics(_ s: inout AppState) {
+    var merged: [Diagnostic] = []
+    if let pre = s.bottomPane.prePassDiagnostic { merged.append(pre) }
+    merged.append(contentsOf: s.bottomPane.luacheckDiagnostics)
+    merged.append(contentsOf: s.bottomPane.lualsDiagnostics)
+    s.bottomPane.diagnostics = merged
+    s.codePane.gutterMarks = gutterMarks(from: merged)
+}
+
 /// Build gutter marks from a diagnostic array.
-private func gutterMarks(from diagnostics: [Diagnostic]) -> [Int: GutterMark] {
+///
+/// Module-internal (CR-042) so `DebugReducer` recomputes the merged mark set
+/// through this one definition rather than a duplicate.
+func gutterMarks(from diagnostics: [Diagnostic]) -> [Int: GutterMark] {
     var marks: [Int: GutterMark] = [:]
     for d in diagnostics {
         let line = max(0, d.line - 1)  // convert 1-based to 0-based
@@ -1912,11 +2272,38 @@ private func extractExtraModules(from project: ProjectState) -> [String] {
 /// Resets the full `CodePaneState` so scroll, cursor, colon command, and
 /// diagnostic index all start fresh for the newly selected source.
 private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
+    // F5.4/F5.3: in the Mock Environment section, Enter does not load a source.
+    // On a live function row it opens the F5.3 invoke form (ux-spec §7.5); on a
+    // declared mock row it is a no-op (add/edit/delete are the `a`/`e`/`d` keys).
+    if s.navigator.inMockSection {
+        return reduceOpenInvokeForm(s)
+    }
+    // Enter always reloads, resetting the code pane even on the already-selected
+    // source (re-anchors scroll/cursor — the historical Enter behaviour).
+    return loadSelectedSource(s, reloadIfUnchanged: true)
+}
+
+/// Loads the currently highlighted SOURCE entry into the code pane.
+///
+/// Shared by Enter-to-load (`selectNavigatorEntry`) and auto-display-on-move
+/// (j/k/g/G): selecting a source shows it without pressing Enter. Mock-section
+/// rows are handled by the caller — this only loads source entries.
+///
+/// `reloadIfUnchanged: false` skips the work (and the code-pane reset) when the
+/// selection has not changed, so j/k at a list boundary keep the current scroll
+/// and cursor. Enter passes `true` to force a fresh reload.
+private func loadSelectedSource(
+    _ s: AppState,
+    reloadIfUnchanged: Bool
+) -> (AppState, [Effect]) {
     var s = s
     guard s.navigator.selectedIndex < s.navigatorOrder.count else {
         return (s, [])
     }
     let id = s.navigatorOrder[s.navigator.selectedIndex]
+    if !reloadIfUnchanged, s.selection == id {
+        return (s, [])
+    }
     s.selection = id
     // Full reset: scroll offset, cursor line, colonCommand, diagnosticIndex.
     s.codePane = CodePaneState()
@@ -1933,19 +2320,29 @@ private func selectNavigatorEntry(_ s: AppState) -> (AppState, [Effect]) {
     return (s, effects)
 }
 
+/// Auto-displays the newly selected source after a navigator cursor move
+/// (j/k/g/G). Mock-section rows are not files, so movement there shows nothing
+/// new — the code pane keeps the last source. (Chris UX: no Enter needed.)
+private func autoDisplayAfterMove(_ s: AppState) -> (AppState, [Effect]) {
+    if s.navigator.inMockSection {
+        return (s, [])
+    }
+    return loadSelectedSource(s, reloadIfUnchanged: false)
+}
+
 // MARK: - Navigator filter helpers
 
 /// Returns the filtered source IDs using the navigator's current filter text.
 ///
 /// Delegates to `filteredNavigatorIDs` in Renderer.swift (the same logic drives
 /// both the display list and navigation so the two stay in sync).
-private func filteredIDs(from s: AppState) -> [SourceID] {
+func filteredIDs(from s: AppState) -> [SourceID] {
     filteredNavigatorIDs(order: s.navigatorOrder, filterText: s.navigator.filterText)
 }
 
 /// Returns the position of the selected entry within the filtered list, or nil
 /// if the currently selected source ID is not present in `filtered`.
-private func filteredPosition(
+func filteredPosition(
     selectedIndex: Int,
     filtered: [SourceID],
     order: [SourceID]
@@ -1958,7 +2355,7 @@ private func filteredPosition(
 /// Maps a position in the filtered list back to an index in the full `order` array.
 ///
 /// Returns the last valid index as a fallback so `selectedIndex` never goes out of range.
-private func fullOrderIndex(filteredPos: Int, filtered: [SourceID], order: [SourceID]) -> Int {
+func fullOrderIndex(filteredPos: Int, filtered: [SourceID], order: [SourceID]) -> Int {
     guard filtered.indices.contains(filteredPos) else { return max(0, order.count - 1) }
     let id = filtered[filteredPos]
     return order.firstIndex(of: id) ?? max(0, order.count - 1)
@@ -2094,6 +2491,13 @@ private func jumpCodePaneFromBottomPane(_ s: AppState) -> (AppState, [Effect]) {
         diagIdx = min(adjusted, diags.count - 1)
     case .output:
         diagIdx = min(rawOffset, diags.count - 1)
+    case .debug:
+        // Debug tab Enter: jump code pane to the paused debug line if available.
+        guard let snapshot = s.currentDebugSnapshot else { return (s, []) }
+        let targetLine = max(0, snapshot.fragmentLine - 1)
+        s.codePane.cursorLine = targetLine
+        s.codePane.scrollOffset = max(0, targetLine - halfPageSize)
+        return (s, [armTickIfNeeded(s)].compactMap { $0 })
     }
 
     let line = diags[diagIdx].line
@@ -2142,6 +2546,9 @@ private func yankFocusedLine(from s: AppState) -> String? {
         let colStr = d.column.map { ":\($0)" } ?? ""
         let codeStr = d.code.map { " [\($0)]" } ?? ""
         return "\(prefix) \(d.line)\(colStr) \(d.message)\(codeStr)"
+    case .debug:
+        // Debug tab yank: no structured data to copy in F6.1; no-op.
+        return nil
     }
 }
 

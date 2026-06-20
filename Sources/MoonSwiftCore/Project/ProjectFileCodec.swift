@@ -36,9 +36,13 @@ public enum ProjectFileCodec {
 
     // MARK: - Known top-level keys
 
-    /// P1-recognised top-level keys. Unknown keys trigger one warn diagnostic.
+    /// P2-recognised top-level keys. Unknown keys trigger one warn diagnostic.
+    ///
+    /// `"mock"` was added in P2 (F5.5). Older binaries that do not list `"mock"`
+    /// here will warn and preserve the section — that is forward-compat. A P2
+    /// binary adds `"mock"` so NO warning fires when loading a P2 project file.
     private static let knownTopLevelKeys: Set<String> = [
-        "lua_version", "source", "run", "lint", "settings",
+        "lua_version", "source", "run", "lint", "settings", "mock",
     ]
 
     // MARK: - Decode
@@ -78,14 +82,22 @@ public enum ProjectFileCodec {
         let lint = decodeLintConfig(from: table)
         let settings = decodeSettingsConfig(from: table)
 
+        // Mock tables (F5.5): codec emits diagnostics for raw-string violations
+        // (unknown type/behavior, writable not-boolean) alongside the decoded store.
+        let (mocks, mockCodecDiagnostics) = ProjectFileCodecMock.decodeMockStore(from: table)
+
         let projectFile = ProjectFile(
             luaVersion: luaVersion,
             sources: sources,
             run: run,
             lint: lint,
-            settings: settings
+            settings: settings,
+            mocks: mocks
         )
-        return (projectFile, unknownDiagnostics)
+        // Merge the unknown-key warnings and mock codec diagnostics.
+        // Both sets are produced at decode time from raw TOML evidence.
+        let allCodecDiagnostics = unknownDiagnostics + mockCodecDiagnostics
+        return (projectFile, allCodecDiagnostics)
     }
 
     // MARK: - Save (decode-modify-encode)
@@ -133,6 +145,10 @@ public enum ProjectFileCodec {
 
         // Write [settings] table.
         table["settings"] = TOMLValue(buildSettingsTable(projectFile.settings))
+
+        // Write [[mock.value]] and [[mock.function]] arrays-of-tables (F5.5).
+        // Delegates to the mock-codec extension to keep this file lean.
+        ProjectFileCodecMock.encodeMockStore(projectFile.mocks, into: table)
 
         return table.convert(to: .toml)
     }
@@ -210,7 +226,12 @@ public enum ProjectFileCodec {
             return SettingsConfig()
         }
         let theme = settingsTable["theme"]?.string ?? "default"
-        return SettingsConfig(theme: theme)
+        // F5.6: split ratios are stored verbatim (no clamp here) so validation can
+        // flag out-of-range values and the file round-trips byte-stably. Absent
+        // keys fall back to the defaults (back-compat with theme-only [settings]).
+        let navigatorSplit = settingsTable["navigator_split"]?.double ?? SettingsConfig.navigatorSplitDefault
+        let bottomSplit = settingsTable["bottom_split"]?.double ?? SettingsConfig.bottomSplitDefault
+        return SettingsConfig(theme: theme, navigatorSplit: navigatorSplit, bottomSplit: bottomSplit)
     }
 
     // MARK: - Private save helpers
@@ -262,6 +283,9 @@ public enum ProjectFileCodec {
     private static func buildSettingsTable(_ settings: SettingsConfig) -> TOMLTable {
         let t = TOMLTable()
         t["theme"] = TOMLValue(stringLiteral: settings.theme)
+        // F5.6: persist both split ratios (verbatim — see decodeSettingsConfig).
+        t["navigator_split"] = TOMLValue(floatLiteral: settings.navigatorSplit)
+        t["bottom_split"] = TOMLValue(floatLiteral: settings.bottomSplit)
         return t
     }
 }

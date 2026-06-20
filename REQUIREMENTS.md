@@ -9,7 +9,7 @@ Status: **final** — converged after 3 audit rounds (req-collection,
 code written against the **LuaSwift** library
 ([`ChrisGVE/LuaSwift`](https://github.com/ChrisGVE/LuaSwift)). The name is the
 literal translation of LuaSwift (*lua* = "moon" in Portuguese); it is a
-LuaSwift-specific tool, not a general Lua utility. Binary: `moonswift`;
+LuaSwift-specific tool, not a general Lua utility. Binary: `mswift`;
 Swift package: `MoonSwift`; repo: `ChrisGVE/moonswift`.
 
 **Problem.** Applications embedding LuaSwift host Lua scripts in `.lua` files
@@ -97,8 +97,8 @@ Delivery is phased. P1 is the MVP; each phase is independently shippable.
   Architecture), sharing-area mock definitions (P2), and tool settings
   (optional run limits, theme).
 - Human-editable, diff-friendly, committed to the user's repo.
-- `moonswift` launched without a project file offers to create one;
-  `moonswift <file.lua>` works without a project for quick one-offs.
+- `mswift` launched without a project file offers to create one;
+  `mswift <file.lua>` works without a project for quick one-offs.
 - Unsupported-version UX: the project still loads (non-blocking) — sources
   are browsable, but run and lint actions are disabled with a clear
   diagnostic in the bottom pane naming the supported version(s).
@@ -257,7 +257,11 @@ Full interactive debugging in the TUI:
   reopened with error comment; fix → file updated, all comments/format
   preserved per the validation contract; externally-touched file triggers the
   conflict prompt; (4b): nvim renders in-pane, `:w` triggers the same
-  write-back.
+  write-back. On a `:w` syntax error the nvim buffer stays open with the user's
+  edits intact, so the diagnostic surfaces as a persistent status-bar message
+  (cleared by the next `:w` or edit) rather than being injected into the buffer
+  as comments — the comment-injection of 4a applies only where the editor has
+  closed.
 
 ### User Experience
 
@@ -300,7 +304,7 @@ launching the host app.
 ### Technical Architecture
 
 - **Language/runtime**: Swift (Swift 6 mode), macOS only. SPM executable
-  package; binary `moonswift`.
+  package; binary `mswift`.
 - **TUI stack**: **ratatui via a Rust cdylib shim, forked/vendored from
   [`holo-q/ratatui-ffi`](https://github.com/holo-q/ratatui-ffi)** (v0.2.x,
   `MIT OR Apache-2.0` per its Cargo.toml — repo lacks LICENSE text files;
@@ -341,7 +345,7 @@ launching the host app.
     `Artifacts/` precedent) attached to releases so end users and plain
     `swift build` consumers don't need a Rust toolchain — exact mechanism
     decided at PRD/architecture time. The static lib links into the signed
-    `moonswift` binary (no separate dylib signature needed).
+    `mswift` binary (no separate dylib signature needed).
   - The fork starts as an internal component; extraction as a standalone
     open-source package is a deferred idea.
 - **Syntax highlighting** (P1): SwiftTreeSitter + tree-sitter-lua (both
@@ -409,7 +413,7 @@ launching the host app.
    Context: LuaSwift's version selection is compile-time per build of the C
    target; a fat binary means five `CLua` builds linked under distinct module
    names (feasibility unverified — symbol-collision risk in one process).
-   Current thinking: five binaries + `moonswift` shim reading the project
+   Current thinking: five binaries + `mswift` shim reading the project
    file's version. Impact: packaging, CI matrix. Decide when distribution
    phase is planned; P1 unaffected (single 5.4 binary).
 2. **Debugger pause concurrency model** — hook blocks engine thread awaiting
@@ -464,7 +468,7 @@ launching the host app.
   LuaSwift; catalog generator should be designed not to preclude it.
   Complexity S–M. Promote post-P3.
 - **Distribution polish** — Homebrew formula, notarized release binaries,
-  five-Lua-version delivery (Open Question 1), `moonswift init` scaffolding.
+  five-Lua-version delivery (Open Question 1), `mswift init` scaffolding.
   Promote when the tool is publicly useful (post-P2 realistically).
 - **REPL pane** (interactive Lua prompt against the mocked environment) —
   high value but new UI surface; revisit at P2 review. Complexity M.

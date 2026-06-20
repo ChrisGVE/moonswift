@@ -16,6 +16,20 @@ A terminal (TUI) workbench for testing Lua code written against
   Output tab with return-value display and wall-clock timing
 - **Lint** — two-layer analysis with `l`: a fast syntax pre-pass on every load
   plus a full embedded luacheck pass on demand
+- **Completions & hover** — `<C-space>` opens a completion popup for the
+  `luaswift.*` namespace plus post-run live-mock names; `K` (or `<Enter>` from
+  the popup) shows a hover overlay with the symbol's signature and docs.
+  Optionally, when [`lua-language-server`][luals] is on `PATH`, its type-aware
+  diagnostics are merged into the Diagnostics tab (silent degrade to the native
+  catalog when absent)
+- **Mocking** — stub the sharing-area boundary in `moonswift.toml`: serve Swift
+  values (`[[mock.value]]`) and Swift-backed functions (`[[mock.function]]`) to
+  the script, edit them live in the navigator (`a`/`e`/`d`), and invoke a
+  script-defined Lua function from the UI with a full call expression
+- **Debugger** — `<C-g>` starts a debug run; toggle line breakpoints with `b`,
+  step with `s`/`i`/`o`/`c`, stop with `x`. The `[ Debug ]` tab (`3`) shows
+  locals, upvalues, on-demand globals (`g`), and the call stack, with structured
+  tracebacks on error
 - **LuaSwift globals** — the full `luaswift.*` namespace (json, yaml, regex,
   mathx, stringx, tablex, types, utf8x, svg, and optional iox/http/ui) is
   known to the linter; no spurious undefined-global warnings
@@ -51,7 +65,7 @@ A terminal (TUI) workbench for testing Lua code written against
 3. Launch MoonSwift in the project directory:
 
    ```sh
-   moonswift
+   mswift
    ```
 
 4. Press `r` to run, `l` to lint. Press `?` for the full keybinding reference.
@@ -80,6 +94,39 @@ With a `config.json` containing:
 
 MoonSwift loads the string value at `$.scripts.init` as a Lua fragment.
 
+### Mock example
+
+Stub the sharing-area boundary so a fragment can run against controlled inputs:
+
+```toml
+lua_version = "5.4"
+
+[[source]]
+path = "handler.lua"
+
+[[mock.value]]
+namespace = "env"
+path = "user.name"
+type = "string"
+value = '"Ada"'
+writable = false
+
+[[mock.function]]
+name = "now"
+behavior = "fixed-return"
+return_value = "1718000000"
+```
+
+With `handler.lua`:
+
+```lua
+return ("hello " .. env.user.name .. " at " .. now())
+```
+
+Run with `r`. After a run, the Mock Environment section of the navigator shows
+the live values; press `<Enter>` on a script-defined function to invoke it with
+a typed call expression.
+
 ## Keybindings
 
 | Key | Action |
@@ -89,6 +136,7 @@ MoonSwift loads the string value at `$.scripts.init` as a Lua fragment.
 | `x` | Cancel run |
 | `q` | Quit |
 | `?` | Help overlay (full keybinding list) |
+| `<C-g>` | Start a debug run (breakpoints, stepping, variable inspection) |
 | `<C-e>` | Open selected fragment in embedded Neovim (or `$EDITOR` fallback) |
 | `<C-p>` | Open project file in `$EDITOR` |
 | `<C-r>` | Reload project file |
@@ -107,7 +155,12 @@ Press `?` inside MoonSwift for the complete per-pane reference.
 - [Sources](docs/user/sources.md) — loading .lua files, field designations, JSONPath subset
 - [Running](docs/user/running.md) — execution, output capture, limits, sandbox
 - [Linting](docs/user/linting.md) — two-layer lint, catalog modules, extra_modules
+- [Completions](docs/user/completions.md) — completion popup, hover overlay, live-mock items, optional `lua-language-server`
+- [Mocking](docs/user/mocking.md) — mock values/functions, the navigator section, Lua invocation, mock sessions
+- [Debugging](docs/user/debugging.md) — debug run, breakpoints, stepping, variable inspection, tracebacks
 - [Editing and write-back](docs/user/editing-and-write-back.md) — embedded Neovim, `$EDITOR` fallback, write-back contract, conflict handling
+
+[luals]: https://github.com/LuaLS/lua-language-server
 
 ## Building from source
 

@@ -51,10 +51,21 @@ pub struct RffiSpan {
 // ---------------------------------------------------------------------------
 
 /// Decode a packed colour word into a ratatui `Color`.
-/// 0xFFFFFFFF = terminal default (Color::Reset); 0x00RRGGBB = RGB.
+///
+/// Encoding (the canonical `CellStyle` convention, shared with `cells.rs`):
+///   0xFFFFFFFF        = terminal default (`Color::Reset`)
+///   0x0100_00NN       = 256-palette index NN (top byte 0x01) — emitted by the
+///                       256-color theme tier (`TerminalColor.index`)
+///   0x00RRGGBB        = RGB truecolor
+///
+/// The indexed branch is essential: without it an `.index(237)` colour decodes
+/// as `Rgb(1, 0, 237)` (near-black), collapsing the whole 256-color theme to
+/// monochrome.
 pub(super) fn decode_color(packed: u32) -> Color {
     if packed == 0xFFFF_FFFF {
         Color::Reset
+    } else if (packed >> 24) == 0x01 {
+        Color::Indexed((packed & 0xFF) as u8)
     } else {
         let r = ((packed >> 16) & 0xFF) as u8;
         let g = ((packed >> 8) & 0xFF) as u8;
@@ -199,6 +210,15 @@ mod tests {
     #[test]
     fn decode_color_rgb() {
         assert_eq!(decode_color(0x00FF_0080), Color::Rgb(0xFF, 0x00, 0x80));
+    }
+
+    #[test]
+    fn decode_color_indexed() {
+        // 0x0100_00NN encodes 256-palette index NN (the 256-color theme tier).
+        // Regression: previously decoded as Rgb(1, 0, 237), collapsing the
+        // theme to near-black monochrome.
+        assert_eq!(decode_color(0x0100_00ED), Color::Indexed(237));
+        assert_eq!(decode_color(0x0100_0000), Color::Indexed(0));
     }
 
     #[test]

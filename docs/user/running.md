@@ -126,3 +126,62 @@ Use it only when the script genuinely needs the removed globals.
 Each run creates a fresh Lua engine and discards it when the run completes.
 State does not persist between runs. This ensures each run is reproducible
 regardless of what previous runs produced.
+
+## Running against mocks
+
+When a `moonswift.toml` declares `[[mock.value]]` or `[[mock.function]]`
+entries, MoonSwift installs them into the engine before the run starts. From
+the script's perspective there is no difference between a mock and a real
+host implementation — the globals are present and accessible with ordinary
+Lua dot notation.
+
+**Session start order:**
+
+1. Engine created under the configured mode (sandboxed or unrestricted).
+2. Each `[[mock.value]]` expression is evaluated (`evaluate("return <value>")`);
+   the result is served through a `LuaValueServer` for its namespace.
+3. Each `[[mock.function]]` is registered as a Lua global function.
+4. The stdlib baseline is captured (mock globals are included, so they are
+   never shown in the user-globals column of the navigator).
+5. The script runs.
+
+**Writable paths:** a script may assign to a path declared `writable = true`.
+The new value is stored in the mock server's in-memory state. After the run,
+the navigator's live-state view shows the written value. Writes do not persist
+across sessions.
+
+**Non-writable paths:** assigning to a path declared `writable = false` raises
+a Lua runtime error, producing a structured error diagnostic in the output
+pane.
+
+**Sandbox and function literals:** a mock `value` that is a function literal
+(type `expr`) is compiled when the session starts. If the function body calls
+a sandbox-stripped API (such as `os.execute`), compilation succeeds but the
+script's call of the function raises a sandbox error at runtime. This matches
+how any other Lua code behaves under the configured engine mode.
+
+For the full mock schema, see the [project file reference](project-file.md).
+For worked examples, see [mocking.md](mocking.md).
+
+## Debug run (`<C-g>`)
+
+A debug run lets you pause execution at breakpoints and inspect the call
+stack. See [debugging.md](debugging.md) for the full guide.
+
+**Quick start:**
+
+1. Press `b` with the code pane focused to toggle a breakpoint on the cursor
+   line (gutter shows `●`).
+2. Press `<C-g>` to start a debug run. The bottom pane switches to the Debug
+   tab automatically.
+3. When the VM hits a breakpoint the Debug tab shows the call stack. Press
+   `<C-g>` again to restart, or wait for the run to finish.
+
+**Preconditions for `<C-g>`:**
+
+| Situation | Transient message |
+|-----------|-------------------|
+| No source loaded | `No source to debug.` |
+| A run is already in progress | `A run is already in progress.` |
+| Debug session already active | `Restart debug session? [y/N]` |
+| Unsupported Lua version | `Debugging unavailable for this Lua version.` |

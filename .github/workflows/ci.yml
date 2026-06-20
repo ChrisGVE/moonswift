@@ -50,6 +50,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── job 0: documentation currency ───────────────────────────────────────────
+  # First Principle 3 gate (§10 layer 8): if a change-set touches production code
+  # under Sources/ but none of the documentation artifacts in
+  # docs/DOC-CURRENCY.md changed, fail — surfacing likely documentation drift.
+  # Pure git check, no build; needs full history for the merge-base diff. Bypass
+  # with `[skip doc-currency]` in a commit message for no-doc-impact changes.
+  doc-currency:
+    name: Documentation currency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce documentation-currency gate (FP-3)
+        run: bash scripts/check-doc-currency.sh --base origin/main
+
   # ── job 1: shim ─────────────────────────────────────────────────────────────
   # Validate and test the Rust shim (rust/ratatui-ffi/).
   # Steps mirror `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`

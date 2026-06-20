@@ -71,7 +71,7 @@ Why this shape:
 
 ```mermaid
 flowchart TB
-    subgraph exe["moonswift (executable)"]
+    subgraph exe["mswift (executable)"]
         CLI["Main / CLI<br/>arg parse · exit codes"]
     end
 
@@ -159,7 +159,7 @@ above — *input-class* (called only from the pump thread) and
 *render/terminal-class* (called only from the UI thread) — and asserts the
 calling thread in debug builds (§5.2).
 
-Dependency rule (binding, from PRD §4.1): `moonswift → MoonSwiftTUI →
+Dependency rule (binding, from PRD §4.1): `mswift → MoonSwiftTUI →
 MoonSwiftCore`; `MoonSwiftTUI → RatatuiKit → CRatatuiFFI`. `MoonSwiftCore`
 never imports `MoonSwiftTUI` or `RatatuiKit`. Only `RatatuiKit` contains FFI
 calls.
@@ -768,6 +768,8 @@ enum Effect: Sendable {
   case spawnNvim(LuaSourceFragment, rect: Rect)
                                    // → EditorBridge.spawn → AppEvent.nvimReady
   case nvimInput(String)           // → rpc.notify nvim_input(string)
+  case nvimPaste(String)           // → rpc.notify nvim_paste(data, crlf:false, phase:-1)
+                                   //   (verbatim; one undo block — not nvim_input)
   case nvimDetach                  // → rpc.notify nvim_command(":qa!")
                                    //   → AppEvent.nvimDetached
   case nvimResize(TerminalSize)    // → rpc.notify nvim_ui_try_resize (debounced)
@@ -943,6 +945,39 @@ thread-class partition detail).
 
 ### 5.3 LuaSwift consumed surface (verified against the tag)
 
+**P2 update (2026-06-14) — gate cleared, pinned `1.12.4`.** Every API that
+§5.3 originally listed as a *gate* (a release MoonSwift was waiting on) has
+shipped and is now consumed. LuaSwift is pinned to the **1.12 minor**
+(`.upToNextMinor(from: "1.12.0")`, `Package.swift`; `Package.resolved` →
+`1.12.4`). The minor-lock (not `.upToNextMajor`) is deliberate: LuaSwift does
+not follow strict semver — `v1.12.0` introduced a BREAKING `CoroutineResult`
+change in a *minor* bump — so `.upToNextMinor` accepts hardening patches inside
+`1.12.x` but stops before `1.13.0`. The P2 surface now consumed:
+
+| P2 API (was a gate) | Issue | Where consumed |
+|---|---|---|
+| `LuaEngine.evaluate(_:chunkName:)` / `run(_:chunkName:)` | #23 chunk-name control | `SessionEngine.swift` (invoke + run paths) — faithful in-engine frame names for tracebacks |
+| `LuaEngine.runDebug(_:chunkName:)` + `setDebugHandler(_:)` | #20 debug hooks | `SessionEngine.swift`, `DebugHookAdapter.swift` — LINE/CALL/RET-masked debug run |
+| `LuaInspector` — `.callStack`, `.locals(frameLevel:)`, `.upvalues(frameLevel:)`, `.globals()` | #21 introspection | `DebugHookAdapter.swift` — eager all-frame snapshot inside the paused handler |
+| `LuaRuntimeFailure { message, line, traceback, frames }` + `LuaError.runtimeFailure` | #19 structured errors | `LuaErrorDiagnostics.swift`, `SessionEngine.swift` — replaces the deleted `LuaErrorLineParser` |
+| `LuaEngine.requestCancellation()` / `resetCancellation()` / `LuaError.cancelled` | #22 cooperative cancellation | `RunService.swift`, `SessionEngine.swift` — **wired but flag-gated, see below** |
+
+**#22 cooperative cancellation — wired, NOT yet activated.** The
+`requestCancellation()` / `resetCancellation()` / `LuaError.cancelled` call sites
+exist in `RunService.swift` and `SessionEngine.swift`, but every one is wrapped in
+`#if MOONSWIFT_LUASWIFT_22 … #else … #endif`, and that compile flag is **not
+defined** in `Package.swift` (`swiftSettings` carries only `.swiftLanguageMode(.v6)`
+and `.enableUpcomingFeature("StrictConcurrency")`). So in every shipped binary the
+cancellation branch compiles OUT: `x` stop / cancel-run currently rely on the
+SEC-01 watchdog and natural run completion, NOT on an immediate engine cancel.
+Activating the flag (and validating the cancellation path against pinned LuaSwift
+1.12.4) is tracked as a separate task — GitHub issue #15.
+
+With #23 released, **`LuaErrorLineParser` is deleted** (F6.4 / task #13;
+structured `frames` carry faithful names, so the heuristic line-parser is gone).
+The P1-era verification narrative below is retained as the historical record of
+the P1 gate decision.
+
 Verified 2026-06-07 against the latest **tagged release `v1.9.1`**
 (`git -C …/LuaSwift show v1.9.1:…`) plus the working-tree
 `CHANGELOG.md [Unreleased]` section — *not* the working tree's code state.
@@ -1047,7 +1082,7 @@ via `ProcessInfo` (established SPM pattern).
   root; verified at F0.3. A `.systemLibrary` target takes
   **no** `linkerSettings` — hence the stub-C-target design.
   **Flagged consequence:** `unsafeFlags` makes a package unconsumable as a
-  dependency of other packages; harmless for the `moonswift` executable,
+  dependency of other packages; harmless for the `mswift` executable,
   but it means the deferred "SwiftRatatui" extraction (§14 PRD) must be
   **binaryTarget-only for consumers** — source mode can never be its
   public face.
@@ -1197,6 +1232,22 @@ on `exit(70)` paths.
   path containing spaces needs a wrapper script (documented). A failed
   exec restores the terminal and shows a graceful transient message —
   never a crash or a stranded screen.
+- **LuaLS spawn + environment (P3b F7b, SEC-05/SEC-06):** when
+  `lua-language-server` is on `PATH`, `LuaLSProcess` spawns it with the same
+  hardening as nvim — absolute-path + `isExecutableFile` checks, an explicit
+  (empty) argument vector, no shell — but with the **opposite environment
+  policy**. nvim inherits the full parent environment (it is trusted, vendored
+  config); LuaLS gets a **curated allow-list built from scratch**
+  (`LuaLSEnvironment`): only `PATH`, `HOME`, `TMPDIR`, `LANG`, and the `LC_*` /
+  `XDG_*` prefixes pass through. Because it is a **pass-list, not a deny-list**,
+  every credential a developer shell carries (`AWS_*`, `GITHUB_TOKEN`,
+  `*_TOKEN`, `*_API_KEY`, `*_SECRET*`, …) is dropped by default — including
+  newly-invented variables. The child's working directory is the per-project
+  cache (`~/Library/Caches/moonswift/luals/<sha256-of-realpath'd-toml>/`, mode
+  0700) holding generated `---@meta`/`.luarc.json`; orphaned caches are evicted
+  only when their source path no longer resolves AND the entry is >30 days old.
+  Teardown is idempotent and SIGTERMs the child on clean exit and reload, so it
+  never orphans. Full design: `docs/internals/luals.md`.
 - **nvim spawn (P4 F8b):** nvim is located via `NVIM_PATH` env override
   or `PATH` search. When `NVIM_PATH` is set it **must** satisfy
   `hasPrefix("/")` AND `isExecutableFile` — rejection is logged and
@@ -1208,7 +1259,7 @@ on `exit(70)` paths.
   nvim home/data/cache dirs are redirected to a 0700 temp directory
   created per-session; this prevents nvim plugins from loading and
   eliminates cross-session state. `signal(SIGPIPE, SIG_IGN)` is
-  installed at process startup (`Sources/moonswift/main.swift`) so a
+  installed at process startup (`Sources/mswift/main.swift`) so a
   write to a dead nvim pipe surfaces as `EPIPE` / `.ioFailure` rather
   than SIGPIPE termination.
 - **Temp files** (`$EDITOR` fallback path, P4): created atomically with
@@ -1244,7 +1295,7 @@ on `exit(70)` paths.
 
 Highest wins; each layer overrides only the keys it sets:
 
-1. CLI arguments (`moonswift <path>`, future flags)
+1. CLI arguments (`mswift <path>`, future flags)
 2. Project file `moonswift.toml`
 3. User config `~/Library/Application Support/moonswift/config.toml`
 4. Built-in defaults
@@ -1279,7 +1330,7 @@ audited against the tree.
 ### Swift targets
 
 ```
-Sources/moonswift/
+Sources/mswift/
   Main.swift                 ~120  entry, signal handlers, AppDriver bootstrap, exit codes
   CLIArguments.swift          ~80  --version/--help/path parsing
 
@@ -1628,7 +1679,7 @@ sequenceDiagram
     AD->>CB: write(col:row:char:style:) per cell, flush(to:writer) once per frame (UI thread)
 ```
 
-`--clean` and the unconditional hardening options prevent the user's full plugin stack from running inside MoonSwift's process. XDG_CONFIG_HOME, XDG_DATA_HOME, and XDG_STATE_HOME are set to a per-session temporary directory (a `UUID`-named subdirectory under `FileManager.default.temporaryDirectory`, created mode 0700) so nvim's runtime state is fully isolated. `signal(SIGPIPE, SIG_IGN)` is installed once at process startup in `Sources/moonswift/main.swift`.
+`--clean` and the unconditional hardening options prevent the user's full plugin stack from running inside MoonSwift's process. XDG_CONFIG_HOME, XDG_DATA_HOME, and XDG_STATE_HOME are set to a per-session temporary directory (a `UUID`-named subdirectory under `FileManager.default.temporaryDirectory`, created mode 0700) so nvim's runtime state is fully isolated. `signal(SIGPIPE, SIG_IGN)` is installed once at process startup in `Sources/mswift/main.swift`.
 
 #### 10.3b. Key forwarding (nvim pane active)
 
@@ -1683,8 +1734,8 @@ sequenceDiagram
     WB->>LS: lintService.syntaxPrePass(LuaSourceFragment(code: editedText, provenance: fragment.provenance))
     alt syntax error
         LS-->>WB: Diagnostic
-        WB->>RPC: await rpc.notify nvim_buf_set_lines — inject error comment block (ux-spec §7.3 step 7)
         WB->>CH: AppEvent.writeBackBlocked(Diagnostic)
+        Note over CH: nvim buffer stays open with the user's edits; the reducer surfaces a persistent status-bar message (no buffer injection — gap #5). The $EDITOR fallback, where the editor has closed, injects the comment instead (§10.3e).
     end
     WB->>SRC: SourceStore.validateReadable(at: fragment.provenance.file, projectRoot:, sizeLimit:)
     alt validateReadable rejection
@@ -1751,8 +1802,8 @@ sequenceDiagram
     Note over AD: Task { re-read fresh data, re-locate span → DiffViewState; channel.post(.diffViewReady(state)) }
 
     U->>CH: AppEvent.key(.c, [])
-    RED-->>AD: (state focus=.nvimPane(…)), []
-    Note over AD: returns to nvim buffer unchanged
+    RED-->>AD: (state focus=conflictReturnFocus(returnsToNvim)), []
+    Note over AD: returns to the originating surface unchanged — the nvim buffer when a live `:w` session raised the conflict (returnsToNvim=true), else the code pane ($EDITOR fallback, no session). The same conditional applies to the [o] arm. If [c] is pressed in the diff view with no pending modal, the safe fallback is the code pane.
 ```
 
 #### 10.3e. `$EDITOR` fallback path (nvim absent)
@@ -1780,6 +1831,8 @@ sequenceDiagram
 ```
 
 The `$EDITOR` fallback uses `AppDriver`'s existing private `spawnEditorAndWait`, which already holds the correct `pump`/`suspender` references and implements the CR-011 absolute-path + executable guard. There is no separate `EditorBridge` instance for the fallback path; `WriteBackCoordinator.write` is called directly after the synchronous editor session.
+
+**Test seam.** `spawnEditorFallbackAndWait` accepts a `runEditor: ((URL) -> Void)?` parameter (default `nil` → the real `spawnEditorAndWait`). When non-nil it replaces the per-iteration editor-open step, so tests can drive the reopen loop — introduce a syntax error, observe the injected comment block, fix, write — without a real `$EDITOR` or TTY (`EditorFallbackRoundTripTests`). It is test-only and UI-thread-only; production callers pass nothing. This mirrors the `EditorBridge` `SessionOverride?` seam.
 
 ### 10.4 Interfaces and Contracts
 
@@ -1828,7 +1881,7 @@ case nvimReady(NvimSession)                       // spawn + handshake complete;
 case nvimDetached                                 // nvim_command :qa! acknowledged
 case writeBackSucceeded(SourceID)                 // reload the source
 case writeBackFailed(WriteBackResult.Outcome)     // SpliceError/IO/validation error
-case writeBackBlocked(Diagnostic)                 // syntax error; comment injected
+case writeBackBlocked(Diagnostic)                 // syntax error; persistent status-bar message (nvim buffer stays open — gap #5)
 case conflictDetected(fileURL: URL,
                       expectedHash: SHA256Digest,
                       editedText: String)         // conflict modal
@@ -1951,7 +2004,7 @@ final class NvimProcessSupervisor: @unchecked Sendable {
 }
 ```
 
-**Note on `signal(SIGPIPE, SIG_IGN)`:** This is called once at process startup in `Sources/moonswift/main.swift`, not per-spawn. It is process-global and must be in place before any pipe is opened.
+**Note on `signal(SIGPIPE, SIG_IGN)`:** This is called once at process startup in `Sources/mswift/main.swift`, not per-spawn. It is process-global and must be in place before any pipe is opened.
 
 **Note on controlling-TTY isolation:** `nvim --embed` does not require a controlling TTY. As defence-in-depth, `posix_spawn` attributes or `setsid()` may be used to ensure the child has no controlling terminal, preventing any inherited TTY from interfering with nvim's raw-mode state. This is optional and not required for correctness.
 
@@ -2028,10 +2081,11 @@ enum NvimRedrawEvent: Sendable {
 
     case gridCursorGoto(grid: Int, row: Int, col: Int)
 
-    // grid_scroll: implemented as a reference-shift (not a cell-copy loop).
-    // NvimGridState.cells is re-indexed by offsetting the row slice, then
-    // the vacated rows are cleared. This is O(1) in the row-slice sense and
-    // avoids moving cell data in memory.
+    // grid_scroll: applied by copying cells within the scroll region. Each row
+    // in top..<bot has its left..<right columns copied to the destination row,
+    // then the vacated rows are cleared — O((bot-top) × (right-left)). A true
+    // reference-shift cannot honor the left..<right column sub-region, so a
+    // cell copy is required (NvimGridState.applyScroll).
     case gridScroll(grid: Int, top: Int, bot: Int,
                     left: Int, right: Int, rows: Int)
 
@@ -2060,7 +2114,7 @@ struct NvimGridState: Sendable, Equatable {
 struct NvimCellState: Sendable, Equatable { var text: String; var hlId: Int }
 ```
 
-The reducer applies all events in a `redraw` batch before `AppDriver` renders, so one render per batch is guaranteed (no partial-batch flicker). **Flush invariant (binding):** every nvim `redraw` notification in `ext_linegrid` mode terminates with a `flush` sub-event; `NvimRedrawHandler` posts `AppEvent.nvimRedrawBatch` only when it observes that terminating `flush`, and `AppDriver` issues `CellBuffer.flush(to:)` only after reducing a batch that ended in `.flush`. The renderer never flushes a partially-applied batch — a batch without a trailing `flush` is a protocol error, logged at `debug` and held until the next `flush` arrives. `grid_scroll` is applied as a reference-shift: the affected row slice is re-indexed by `rows`, and the vacated rows are reset to empty cells. `grid_line` rows are pre-sized to `width` before `colStart`-relative cell writes so out-of-bounds writes are impossible.
+The reducer applies all events in a `redraw` batch before `AppDriver` renders, so one render per batch is guaranteed (no partial-batch flicker). **Flush invariant (binding):** every nvim `redraw` notification in `ext_linegrid` mode terminates with a `flush` sub-event; `NvimRedrawHandler` posts `AppEvent.nvimRedrawBatch` only when it observes that terminating `flush`, and `AppDriver` issues `CellBuffer.flush(to:)` only after reducing a batch that ended in `.flush`. The renderer never flushes a partially-applied batch — a batch without a trailing `flush` is a protocol error, logged at `debug` and held until the next `flush` arrives. `grid_scroll` is applied by copying cells within the scroll region (each `top..<bot` row's `left..<right` columns are copied to the destination row), then resetting the vacated rows to empty cells — a cell copy rather than a reference-shift, because the `left..<right` column sub-region cannot be honored by re-indexing a whole row slice. `grid_line` rows are pre-sized to `width` before `colStart`-relative cell writes so out-of-bounds writes are impossible.
 
 #### 10.4.9 Write-back shared contract (format dispatch)
 
@@ -2165,6 +2219,11 @@ struct ConflictModalState: Sendable, Equatable {
     let expectedHash: SHA256Digest     // hash captured at load, for conflict re-check
     let editedText: String             // the edited buffer content
     let fragment: LuaSourceFragment    // provenance for re-location
+    let returnsToNvim: Bool            // [o]/[c] restore target: nvim pane (live :w
+                                       // session) vs code pane ($EDITOR fallback, no
+                                       // session). Captured from pre-modal focus in
+                                       // reduceConflictDetected; default false (the
+                                       // always-valid code pane). See §10.3d.
 }
 ```
 
@@ -2245,7 +2304,7 @@ NvimDiffView.swift      ~182  DiffViewState → [RenderCommand] (side-by-side hi
 
 `Renderer.swift` gains only delegation calls at the appropriate `FocusState` branches — no new content logic.
 
-**Tests:** `Tests/MoonSwiftTUITests/Nvim/` — 21 test files totalling ~7,035 lines. Key files: `NvimKeyTranslatorTests` (~309), `NvimRedrawHandlerTests` (~327), `WriteBackCoordinatorTests` (~351, includes mock `LintServiceProtocol`), `WriteBackIntegrationTests` (~595), `NvimRenderSnapshotTests` (~596), `NvimRPCClientTests` (~579), `EditorBridgeTests` (~389), `NvimProcessSupervisorTests` (~299). Perf bench lives in `Tests/MoonSwiftPerfTests/PerfTests.swift` (NvimRedrawPerfTests suite, §3b).
+**Tests:** `Tests/MoonSwiftTUITests/Nvim/` — 23 test files totalling ~7,300 lines. Key files: `NvimKeyTranslatorTests` (~309), `NvimRedrawHandlerTests` (~327), `WriteBackCoordinatorTests` (~351, includes mock `LintServiceProtocol`), `WriteBackIntegrationTests` (~595), `NvimRenderSnapshotTests` (~596), `NvimRPCClientTests` (~579), `EditorBridgeTests` (~389), `NvimProcessSupervisorTests` (~299), `NvimConflictFallbackOriginTests` (~190, conflict resolution origin), `EditorFallbackRoundTripTests` (~135, 4a reopen loop via the `runEditor` seam). Perf bench lives in `Tests/MoonSwiftPerfTests/PerfTests.swift` (NvimRedrawPerfTests suite, §3b).
 
 **Rust crate:** no changes (`cells.rs` already documents the P4 nvim grid blit).
 
@@ -2261,7 +2320,7 @@ Each increment is independently testable, committable, TDD-first. Ordering respe
 
 3. **Inc-3: `NvimRPCClient` (actor)** — actor owns stdin `FileHandle`; `request`/`notify`/`deliver` on actor executor; `onNotification` registry; reader loop (blocking `read(2)` on named Thread); continuation resume from actor; `Task { await client.deliver(msg) }` enqueue pattern. Tests: request/response over a fake pipe pair; `notify` encodes and writes on actor (not UI thread); notification handler invoked by actor; concurrent ordering; reader-thread stop + join.
 
-4. **Inc-4: `NvimRedrawHandler` + `NvimGridState`** — handler, grid state (`grid_scroll` as reference-shift, `grid_line` with row pre-sizing from width), conflict/modal state types, `DiffViewPhase`/`DiffViewState`, `NvimSession`. Reducer: `.nvimRedrawBatch` → `nvimGrid`. Tests: `grid_line` run expansion; `grid_scroll` shift; `hl_attr_define` cache; `flush`; reducer snapshot.
+4. **Inc-4: `NvimRedrawHandler` + `NvimGridState`** — handler, grid state (`grid_scroll` as a region cell-copy, `grid_line` with row pre-sizing from width), conflict/modal state types, `DiffViewPhase`/`DiffViewState`, `NvimSession`. Reducer: `.nvimRedrawBatch` → `nvimGrid`. Tests: `grid_line` run expansion; `grid_scroll` shift; `hl_attr_define` cache; `flush`; reducer snapshot.
 
 5. **Inc-5: `NvimKeyTranslator`** — complete table. Tests: printable, `<CR>`/`<Esc>`/`<BS>`/`<Tab>`, F-keys, `<C-x>`/`<S-x>`/`<M-x>`, `<` → `<lt>`.
 
@@ -2277,7 +2336,7 @@ Each increment is independently testable, committable, TDD-first. Ordering respe
 
 11. **Inc-11: Renderer (mandatory split)** — `NvimGridView.swift`, `NvimConflictView.swift`, `NvimDiffView.swift` created as new files (day-one pre-condition). `Renderer.swift` gains delegation only. `.nvimPane`: walk `nvimGrid.cells`, call `CellBuffer.write(col:row:char:style:)` per cell, `CellBuffer.flush(to: writer)` once per frame (UI thread). `.conflictModal`: exact §7.4 string. `.diffView`: side-by-side highlight. Status/tab bars stay; nvim `laststatus=0` suppresses nvim's own status bar. Tests: cell-grid snapshots for all three via `CellGrid` mock writer.
 
-12. **Inc-12: Integration + acceptance** — PRD §F8: YAML fragment syntax error → comment injected; fix → file updated, outside-span bytes identical; external change → conflict prompt; `:w` triggers write-back; per-format property tests. `signal(SIGPIPE, SIG_IGN)` confirmed in `Sources/moonswift/main.swift`. Docs: merge §10 into `ARCHITECTURE.md`; user docs "Editing & write-back"; internals doc for the `EditorBridge`/`WriteBackCoordinator` seam.
+12. **Inc-12: Integration + acceptance** — PRD §F8: YAML fragment syntax error → comment injected; fix → file updated, outside-span bytes identical; external change → conflict prompt; `:w` triggers write-back; per-format property tests. `signal(SIGPIPE, SIG_IGN)` confirmed in `Sources/mswift/main.swift`. Docs: merge §10 into `ARCHITECTURE.md`; user docs "Editing & write-back"; internals doc for the `EditorBridge`/`WriteBackCoordinator` seam.
 
 ### 10.9 Edits to Existing Sections (checklist for merge)
 
@@ -2302,3 +2361,187 @@ Each increment is independently testable, committable, TDD-first. Ordering respe
 - **OQ-nvim-1:** `BufWriteCmd` + `rpcnotify` ordering — confirm the autocmd fires synchronously before the write completes on nvim 0.9, 0.10, and 0.11-nightly. If async on any version, fall back to polling `b:changedtick`. Inc-7 acceptance criterion includes a version-matrix test. — applied (Inc-12)
 
 - **OQ-nvim-2:** `ext_linegrid` grid-1 assumption — confirm `nvim_ui_attach` with `ext_linegrid:true` and no splits delivers all output on grid 1. If nvim allocates extra grids (floating windows, completion popups), the `NvimRedrawHandler` must suppress or composite them. Tracked as an Inc-4 acceptance criterion. — applied (Inc-12)
+
+---
+
+## 11. Mocking + debugger subsystem (P2 — sharing-area mocks, in-engine debugger)
+
+> As-built record of the P2 features (F5 mocking, F6 debugger). The deep
+> reference lives in `docs/internals/session-engine.md` (lifecycle, executor
+> confinement) and `docs/internals/debugger.md` (hook adapter, pause model,
+> mailbox). This section is the subsystem-level map; it does not restate those.
+
+### 11.1 Overview
+
+P2 adds two capabilities on a shared foundation: **mocks** (Lua reads
+Swift-served values and calls Swift-backed functions, and Swift invokes
+script-defined Lua functions) and an **in-engine debugger** (breakpoints,
+stepping, variable/call-stack inspection, structured tracebacks). Both need a
+Lua engine that **survives across calls** — to serve live mock state, to be
+re-entered for invocation, and to park on a debug pause. That foundation is the
+new **`SessionEngine`** (F5.0): a long-lived, serial-executor engine distinct
+from the P1 `RunService` run-and-discard model (it follows the `LintService`
+long-lived pattern, ARCH A2). The session is created on a mock-aware or debug
+run and ended on stop / new run / reload (RQ3 implicit lifecycle).
+
+**OQ2 (debugger pause concurrency) is resolved here.** The VM thread runs the
+synchronous LuaSwift debug handler; on each event the adapter eagerly snapshots
+all-frame locals/upvalues + call stack into `Sendable` value models, posts
+`AppEvent.debugPaused`, then BLOCKS the VM thread on a single-slot `NSCondition`
+mailbox awaiting the user's command. The reducer never blocks; the UI thread
+stays responsive. Full spec: PRD §F6.0 / OQ2; `docs/internals/debugger.md`.
+
+### 11.2 Component map
+
+**MoonSwiftCore — engine side (no TUI deps):**
+
+| File | Role |
+|---|---|
+| `Run/SessionEngine.swift` + `SessionEngineProtocol.swift` | Long-lived serial-executor engine; run/debug-run/invoke entry points; owns the live engine and the active `DebugSession`. Foundation for F5 + F6. |
+| `Mock/MockValue.swift`, `MockFunction.swift` | Decoded mock definitions (value + function). |
+| `Mock/MockStore.swift` | In-memory store of mock definitions handed to a session. |
+| `Mock/MockValueServer.swift` | `LuaValueServer` implementation per mock namespace (F5.1) — Lua reads a Swift-served value. |
+| `Mock/MockLiveState.swift` | Post-run introspection snapshot of the live engine; backs the navigator live-state (`(run to populate live state)` until populated, DATA-09). |
+| `Debug/DebugHookAdapter.swift` | Bridges the LuaSwift synchronous debug handler to the mailbox; eager all-frame inspector snapshot; in-place `g` globals capture. |
+| `Debug/DebugCommandMailbox.swift` | The one blocking primitive: single-slot `NSCondition` mailbox; two-predicate wake (command, then globals latch); SEC-01 watchdog ceiling. |
+| `Debug/DebugSession.swift` | One live debug session, owned by `SessionEngine` (not `AppState`, IMPL-02); holds the mailbox and the last published snapshot. |
+| `Debug/DebugSnapshot.swift` | The `Sendable` value models crossing the service→loop boundary (snapshot, frames, variables). |
+| `Project/ProjectFileCodec+Mock.swift`, `ProjectValidation+Mock.swift` | `[[mock.*]]` decode (F5.5) + validation diagnostics (ux-spec §6.9). |
+
+**MoonSwiftTUI — Elm side (depends on Core + RatatuiKit):**
+
+| File | Role |
+|---|---|
+| `App/Reducers/MockNavigatorReducer.swift` | Navigator mock section: `a` add / `e` edit / `d` delete; `<Enter>` on a live function row opens invoke. |
+| `App/MockFormState.swift`, `App/Reducers/MockFormReducer.swift`, `Render/MockFormView.swift` | The add/edit mock form (`Add mock — Value / Function / Namespace`). |
+| `App/InvokeFormState.swift`, `App/Reducers/InvokeFormReducer.swift`, `Render/InvokeFormView.swift`, `App/AppDriver+InvokeEffects.swift` | F5.3 invoke: single call-expression line; the three side-effecting controls (lint → no-dots target → `evaluate("return …")`) run in the AppDriver. |
+| `App/Reducers/DebugReducer.swift`, `DebugInspectionReducer.swift`, `App/AppDriver+DebugEffects.swift` | Debug-run start (`<C-g>`), breakpoint toggle (`b`), stepping (`s`/`i`/`o`/`c`), stop (`x`), globals request (`g`), frame selection / table expansion. |
+| `Render/DebugTabView.swift` | The `[ Debug ]` tab: Locals/Upvalues/Globals/Call-Stack sections, the §6.9 VM-running states, the `(no globals defined)`/`(… N more globals)`/`(cycle)`/`(…)` markers. |
+| `Render/MockNavigatorView.swift` | Sectioned navigator with the `─── Mock Environment ───` divider + live-state rows. |
+
+Per §4.7 / R6, **no feature logic lands in `Reducer.swift` or `Renderer.swift`** —
+both carry only minimal exhaustive-switch dispatch lines into the files above.
+
+### 11.3 Mocking data flow
+
+1. **Load:** `ProjectFileCodec+Mock` decodes `[[mock.value]]` / `[[mock.function]]`
+   from `moonswift.toml`; `ProjectValidation+Mock` validates (duplicate keys,
+   unknown types/behaviors, reserved prefixes, literal syntax via
+   `syntaxPrePass`) emitting the ux-spec §6.9 diagnostics. Valid mocks land in a
+   `MockStore`.
+2. **Run:** on a mock-aware run, `SessionEngine` registers one `MockValueServer`
+   per namespace and the mock functions, then runs the fragment under the
+   project's `RunConfigMode` (sandbox default). Mock value literals are
+   MATERIALIZED via `evaluate` (RQ1 — any Lua value expression, incl. function
+   literals), so a sandbox-stripped call inside a literal fails at runtime, not
+   at validation.
+3. **Live state:** post-run, `MockLiveState` introspects the surviving engine
+   (LuaSwift #21) so the navigator shows actual written values rather than
+   `(run to populate live state)`.
+4. **Invoke (F5.3):** `<Enter>` on a live function row opens the invoke form;
+   `Effect.invokeLuaCall` carries the raw call-expression string; the AppDriver
+   runs lint → no-dots target check → `evaluate("return <expr>")`; the first
+   return value renders `→ <display>` in the Output tab.
+
+### 11.4 Debugger pause concurrency model (OQ2 resolution, summarised)
+
+The VM thread runs `engine.runDebug(_:chunkName:)` synchronously. On each
+LINE/CALL/RET event the `DebugHookAdapter`:
+
+1. checks breakpoints / stepping depth (call-stack depth, not call/ret counting —
+   R4) to decide whether this event is a pause;
+2. on a pause, EAGERLY snapshots all-frame locals/upvalues + call stack into
+   `Sendable` models (R3 — no post-callback inspector access), posts
+   `AppEvent.debugPaused(DebugSnapshot)`;
+3. BLOCKS on `DebugCommandMailbox.take()` (bounded wait, SEC-01) until a
+   `LuaDebugCommand` arrives. Command delivery is `nonisolated`/direct-to-mailbox
+   (NOT an executor hop — avoids the serial-executor deadlock, PERF-11).
+
+**Globals** are an explicit `g` action, captured EAGERLY IN-PLACE via
+`inspector.globals()` at the current pause in the SAME handler invocation —
+no re-pause, no internal step. `requestGlobals` sets a latch and signals the
+mailbox condition; the two-predicate wake returns the `serviceGlobals` sentinel
+so the handler captures and re-parks without consuming a command. The single
+empty state at any pause is `(no globals defined)` (DOM-10); `(globals pending…)`
+is the in-flight feedback. `debugResumed` (posted on an actual step/continue)
+drives the §6.9 Case-2 "VM running… (showing last pause)" retained-dimmed render.
+**`stop` (`x`)** delivers `.stop` AND `requestCancellation()` so a parked VM is
+force-unwound; the watchdog timeout reuses the same `.stop` path (surfacing the
+neutral `Session stopped.`).
+
+### 11.5 Session lifecycle + RunState gate
+
+`SessionEngine` is created on a mock-aware/debug run and is the single owner of
+the live engine and the `DebugSession`. It is ended — and the engine discarded
+(R10 leak guard) — on stop, a new run, or reload (RQ3 implicit end-session: no
+`<C-x>` key). The P1 `RunState` gate still serialises runs; a debug run takes the
+same gate, so `<C-g>` while a run is in progress is declined with
+`A run is already in progress.` (ux-spec §6.5 `<C-g>` precondition transients).
+
+### 11.6 Structured errors + tracebacks (F6.4)
+
+With LuaSwift #19 (`LuaRuntimeFailure { message, line, traceback, frames }`) and
+#23 (`chunkName`), runs and debug runs pass the fragment's
+`FragmentProvenance.displayName` as `chunkName`, so engine-reported frame names
+are faithful. The heuristic `LuaErrorLineParser` is DELETED (§5.3). Error mapping
+lives in `MoonSwiftCore/Diagnostics/LuaErrorDiagnostics.swift`; traceback render
+is `MoonSwiftTUI/Render` (TracebackRenderTests gate the exact output).
+
+## 12. Completions subsystem (P3 — catalog completions, hover, optional LuaLS)
+
+The completions subsystem is the third consumer of the single `LuaModuleCatalog`
+(after luacheck globals in P1 and meta-file generation in P3b). It has two
+layers: an always-present **native** layer (catalog + live mocks, F7a) and an
+**optional** type-aware layer backed by `lua-language-server` (F7b). Per §4.7,
+no feature logic lives in `Reducer.swift`/`Renderer.swift` — only minimal
+exhaustive-switch dispatch lines; the logic lives in dedicated extension/view
+files.
+
+### 12.1 Native completions and hover (F7a)
+
+- **Source of truth:** `LuaModuleCatalog.completionItems(prefix:liveMocks:tomlProbed:)`
+  (`Catalog/CatalogConsumers+Completion.swift`) merges static `luaswift.*`
+  catalog items with post-run live-mock names. The query is **pure** (no engine
+  call, PERF-03) — `liveMocks`/`tomlProbed` are snapshotted by the reducer.
+- **Flow:** the reducer emits `Effect.queryCompletions` / `Effect.queryHover`;
+  `AppDriver+CompletionEffects` runs the pure query on a background `Task` and
+  posts `AppEvent.completionsReady` / `.hoverReady`. `CompletionReducer` handles
+  popup navigation and the `FocusState` transitions (`.completionPopup`,
+  `.hoverOverlay`); `CompletionView`/`HoverView` render them. Trigger contract:
+  the popup activates only on an explicit dot after a known prefix
+  (`luaswift.`, `luaswift.json.`, …).
+
+### 12.2 Optional lua-language-server (F7b)
+
+When `lua-language-server` is on `PATH`, a long-lived `LuaLSClient` actor (owned
+by `AppDriver`) adds a type-aware diagnostics layer:
+
+- **Meta generation** is pure and Core-side: `MetaFileGenerator`
+  (`MoonSwiftCore/LuaLS/`) turns the catalog into one `---@meta` file per module
+  plus a `.luarc.json` (`runtime.version = Lua 5.4`, `workspace.library`,
+  `diagnostics.globals`). It is deterministic, so a hash of its output backs the
+  `meta-version` regeneration sentinel.
+- **Cache + spawn + transport** are TUI-side (`MoonSwiftTUI/LuaLS/`):
+  `LuaLSCache` owns the per-project 0700 cache (`<project-hash>` =
+  SHA-256 of the realpath'd `moonswift.toml`, SEC-06) and the 30-day AND-predicate
+  eviction (DATA-N02); `LuaLSProcess` is the hardened subprocess transport
+  (curated env per §7.3, idempotent SIGTERM teardown); `LuaLSDiagnosticMapper`
+  maps LSP diagnostics (0-based) to MoonSwift `Diagnostic`s (1-based, `.luals`
+  source).
+- **Wiring:** two effects (`Effect.spawnLuaLS` on project load — tears down any
+  prior client, prepares the cache, spawns; `Effect.lualsSync` alongside each
+  `.lint` — full-document sync of the current fragment) and two events
+  (`AppEvent.lualsDiagnostics` — merged into the Diagnostics tab beside luacheck,
+  kept in a separate `BottomPaneState.lualsDiagnostics` field so a lint pass
+  never drops them; `AppEvent.lualsUnavailable` — one-time status note). The
+  client is injected via a factory (`makeLuaLSClient`) that is `nil` in
+  skeleton/test mode, so the effects are no-ops there.
+- **Degradation:** absent binary or mid-session child death degrades silently to
+  the F7a native layer; teardown is idempotent so a racing termination is
+  harmless. Document sync is wired at the `.lint` seam (a deliberate minimal
+  coupling), not per-keystroke.
+
+Full design + supply-chain audit: `docs/internals/luals.md`. Effect names diverge
+from the F7b PRD's `spawnLuaLS(projectRoot:)`/`generateLuaLSMeta` — the reducer
+has no project URL (the driver resolves it from `state.launch`) and meta-gen folds
+into spawn rather than a separate effect (the no-stub rule forbids a dead case).

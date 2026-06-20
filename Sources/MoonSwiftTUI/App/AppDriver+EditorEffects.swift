@@ -51,7 +51,17 @@ extension AppDriver {
     ///
     /// Must be called from the UI thread (render/terminal-class, same constraint as
     /// `spawnEditorAndWait`).
-    func spawnEditorFallbackAndWait(fragment: LuaSourceFragment) {
+    /// - Parameter runEditor: the per-iteration "open the editor on this file"
+    ///   step. Defaults to the real `spawnEditorAndWait` (pump-park, terminal
+    ///   suspend/resume, `$EDITOR` spawn). Tests inject a closure that mutates
+    ///   the file in place to simulate the user editing, so the reopen loop can
+    ///   be driven without a real `$EDITOR` or TTY (P4 audit gap #5).
+    func spawnEditorFallbackAndWait(
+        fragment: LuaSourceFragment,
+        runEditor: ((URL) -> Void)? = nil
+    ) {
+        let editStep: (URL) -> Void = runEditor ?? { [self] url in spawnEditorAndWait(url: url) }
+
         // Resolve the project root early; no-op if unavailable.
         guard let projectRoot = projectDirectoryURL() else {
             channel.post(.writeBackFailed(.ioFailure("Project root unavailable")))
@@ -124,7 +134,7 @@ extension AppDriver {
         // Skeleton path: if no lint service is injected, skip the pre-pass loop
         // and post synthetic success immediately (same skeleton contract as writeBack).
         guard let lint = lintService else {
-            spawnEditorAndWait(url: editURL)
+            editStep(editURL)
             // CR-023 skeleton path: use fragment-derived SourceID, not state.selection.
             let fragmentID = Self.sourceID(for: fragment, projectRoot: projectRoot)
             Task { [channel] in
@@ -138,7 +148,7 @@ extension AppDriver {
         // read file, syntax pre-pass. On error: inject comment block and loop.
         // On success: break and dispatch write-back.
         while true {
-            spawnEditorAndWait(url: editURL)
+            editStep(editURL)
 
             // Read the edited bytes from the temp file (or the source file).
             let editedText: String

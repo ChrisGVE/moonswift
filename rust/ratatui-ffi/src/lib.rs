@@ -48,8 +48,8 @@ pub use guard::rffi_last_error;
 
 // Terminal lifecycle
 pub use terminal::{
-    rffi_emergency_restore, rffi_terminal_init, rffi_terminal_resume, rffi_terminal_size,
-    rffi_terminal_suspend, rffi_terminal_teardown,
+    rffi_begin_frame, rffi_emergency_restore, rffi_terminal_init, rffi_terminal_resume,
+    rffi_terminal_size, rffi_terminal_suspend, rffi_terminal_teardown,
 };
 
 // Event pump

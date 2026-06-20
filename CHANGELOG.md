@@ -11,6 +11,68 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+#### Mocking (P2 F5)
+
+- Sharing-area mocks: define Swift-served values (`[[mock.value]]`) and
+  Swift-backed functions (`[[mock.function]]`, behaviors `echo-args` /
+  `fixed-return` / `raise-error`) in `moonswift.toml`. Lua reads mock values and
+  calls mock functions during a run. Value/return literals accept any Lua value
+  expression (scalars, tables, function literals), syntax-checked at load and
+  materialized under the project's run mode (sandbox by default).
+- Mock Environment navigator section (below a `─── Mock Environment ───`
+  divider) with add (`a`), edit (`e`), and delete (`d`, confirmed with
+  `Delete this mock? [y/N]`). Post-run it shows live values via introspection;
+  before the first run it shows `(run to populate live state)`.
+- Lua invocation (F5.3): `<Enter>` on a live function row opens a single
+  call-expression input (e.g. `on_event("tick", 42)`); the expression is
+  syntax-linted, its target enforced to a bare top-level identifier, and
+  evaluated as `return <expr>` under the run mode. The first return value renders
+  `→ <value>` in the Output tab. A successful invoke closes the form; a failed
+  control keeps it open with the typed text retained.
+- A mock session ends implicitly on a new run, a reload, or `<C-r>` (no
+  end-session key is introduced).
+
+#### Debugging (P2 F6)
+
+- Debug run (`<C-g>`), line breakpoints (`b`), and stepping (`s`/`i`/`o`/`c`,
+  stop `x`) with a paused status-bar hint.
+- Debug tab (`3`) with variable inspection and the call stack: Locals, Upvalues,
+  Globals, and Call Stack sections. `j`/`k` move a row cursor; `<Enter>` selects
+  a frame (re-rendering its locals/upvalues from the eagerly-captured snapshot,
+  no engine re-entry) or expands a table value inline. Press `g` to capture a
+  bounded, filtered globals slice; a capped slice shows `(… N more globals)`.
+  Cyclic / depth-limited values render `(cycle)` / `(…)`.
+- Structured runtime errors and tracebacks (F6.4): a Lua error renders its
+  message plus a full traceback in the Output tab, with faithful frame names —
+  embedded fragments show `<filename>:<jsonpath>` rather than a synthetic chunk
+  name (via LuaSwift `chunkName`). Replaces the heuristic line parser.
+
+#### Completions & hover (P3 F7)
+
+- Completion popup (`<C-space>` in the code pane): a scrollable list (`j`/`k`,
+  up to 10 visible) of `luaswift.*` catalog items plus post-run live-mock names,
+  each with a short signature. `<Enter>` opens the selected item's hover overlay
+  (the code pane is read-only — no insertion); `<Esc>` dismisses.
+- Hover overlay (`K`, or `<Enter>` from the popup): a centered box showing a
+  symbol's name, full signature, and documentation, scrolling when the content
+  overflows. A symbol with no documentation — or a `K` that lands on no known
+  symbol — still opens the overlay, showing `(no documentation available)`; `K`
+  is never a silent no-op.
+- Optional `lua-language-server` integration (F7b): when the binary is on
+  `PATH`, MoonSwift spawns it as a stdio LSP child, feeds it generated `---@meta`
+  type files describing the `luaswift.*` namespace (cached per project under
+  `~/Library/Caches/moonswift/luals/`), and merges its type-aware diagnostics
+  into the Diagnostics tab. The child runs with a credential-free curated
+  environment. When the binary is absent, completions/luacheck are unchanged and
+  a one-time note `lua-language-server not found — using native catalog.` is
+  shown. See `docs/internals/luals.md`.
+
+#### Layout
+
+- Pane split ratios persist to `[settings]` (`navigator_split` / `bottom_split`):
+  resizing the navigator (`<`/`>`) or bottom pane (`{`/`}`) auto-saves the ratio,
+  and it is restored on project load. Out-of-range values are flagged and clamped.
+
 #### Editing subsystem (embedded Neovim + `$EDITOR` fallback)
 
 - In-place editing via embedded Neovim (`<C-e>`): spawns `nvim --embed --clean`
@@ -91,6 +153,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - LuaSwift bumped to 1.12.4; `cooperativeCancellation` performance fix
   included in that release resolves a long-tail latency regression in the
   instruction-limit hook path.
+- Code-pane `b` is now "toggle breakpoint"; the previous `b` (scroll up one full
+  page) moves to `<C-b>` (UX-01).
+
+### Removed
+
+- `LuaErrorLineParser` (and its tests): structured `LuaRuntimeFailure` frames
+  from LuaSwift #19 carry faithful line numbers, so the heuristic regex parser
+  is gone (F6.4).
 
 ### Fixed
 
@@ -98,7 +168,22 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `FileHandle` after teardown (`NSFileHandleOperationException` is uncatchable
   in Swift).
 
-## [0.1.0] - 2026-06-08
+#### Editing subsystem (P4 F8b audit)
+
+- Conflict modal `[o]`/`[c]`/`[d]` now return to the correct surface: the nvim
+  pane when a live `:w` session raised the conflict, the code pane when the
+  `$EDITOR` fallback did (previously always returned to the nvim pane, stranding
+  the fallback case on a dead "Connecting…" placeholder).
+- Paste events are forwarded into the embedded nvim pane via `nvim_paste`
+  (verbatim, single undo block) instead of being dropped.
+- `:w` syntax errors on the nvim path now surface a persistent status-bar
+  message (cleared by the next `:w`, keystroke, or nvim exit) instead of a 1.5 s
+  toast that vanished before it could be read; the buffer stays open with the
+  edits intact.
+- `grid_scroll` is correctly described as a region cell-copy (honoring the
+  `left..<right` column sub-region) rather than a reference-shift.
+- A persistent write-block message no longer freezes in the status bar after an
+  nvim exit that bypasses the key handler (crash, `:q` via a mapping).
 
 First public preview (P1 feature set). MoonSwift is a terminal UI editor and
 runner for Lua fragments embedded in structured files (JSON/YAML/TOML) and
@@ -148,7 +233,9 @@ standalone `.lua` files.
 - `LintService`: two-layer lint (syntax pre-pass + embedded luacheck) backed by
   a `LuaModuleCatalog` (base / conditional / opt-in / compile-flag-gated module
   availability).
-- Diagnostics: `LuaError`→`Diagnostic` mapping with a line parser.
+- Diagnostics: `LuaError`→`Diagnostic` mapping with a line parser (the line
+  parser was later removed in F6.4 once structured `LuaRuntimeFailure` frames
+  shipped — see [Unreleased]).
 - Background timing primitives: `TickSource` (arm/disarm timer) and `EventPump`
   with a park/unpark handshake for editor suspension.
 
@@ -160,7 +247,7 @@ standalone `.lua` files.
 - `RenderBackend` protocol with a production `RatatuiKitBackend`, a
   `CommandInterpreter`, and an FFI-free `RecordingRenderBackend` test double.
 
-#### CLI (moonswift)
+#### CLI (mswift)
 
 - Typed argument parser with `sysexits`-style exit codes (0 success, 64 usage,
   65 data error, 70 internal error).
@@ -197,7 +284,7 @@ standalone `.lua` files.
   tag → GitHub release with artifact upload → build-provenance attestation
   (`actions/attest-build-provenance`) → clean x86_64 verify job (`swift build`
   in binaryTarget mode, no Rust toolchain).  Also builds and attaches a
-  notarization-ready universal `moonswift` binary.
+  notarization-ready universal `mswift` binary.
 - `RELEASING.md` — documents the release pipeline, the branch-protection bypass
   allowance setup for `github-actions[bot]`, the `TAP_DISPATCH_TOKEN` Homebrew
   secret, recovery procedures, and notarization instructions.
@@ -216,7 +303,7 @@ standalone `.lua` files.
   table, `MouseKind` enum, `FFICellWriter.writeCells` bitfield extractions)
   to preserve readability alignment while allowing mechanical formatting
   everywhere else.
-- SPM package skeleton: targets `moonswift`, `MoonSwiftCore`, `MoonSwiftTUI`,
+- SPM package skeleton: targets `mswift`, `MoonSwiftCore`, `MoonSwiftTUI`,
   `RatatuiKit`, `CRatatuiFFI`, `CTreeSitterTOML`; Swift 6 language mode;
   macOS 13 minimum.
 - Vendored ratatui-ffi Rust shim (fork of holo-q/ratatui-ffi) in
@@ -276,7 +363,15 @@ standalone `.lua` files.
   rather than failing later at evaluation.
 - Diagnostics-tab jump/yank index offset corrected.
 - FIFO notice ordering fixed and the dead `clearedNoticeInserted` flag removed.
-- `resize(0,0)` sentinel treated as a clean quit.
+- Terminal I/O failure (closed TTY / SIGHUP) produces a clean quit via a
+  dedicated `terminalClosed` signal (logged before exit); a transient content
+  resize of 0×0 is now a harmless no-op. Previously 0×0 was overloaded as the
+  quit sentinel.
+- FFI event-discriminant ABI realigned: the RatatuiKit decode tables
+  (`RffiEventKind`/`RffiKeyCode`/`RffiMouseKind`/`RffiMouseButton`) had drifted
+  from the Rust shim, so every keypress decoded as `resize(0,0)` and the app
+  quit on the first keystroke; the cbindgen header now emits the discriminant
+  constants as the enforced ABI contract.
 - `q` quits from the help overlay; misleading `n`/`N` hints dropped.
 - `Coalescer` made thread-safe for cross-thread output coalescing.
 - Backslash escaped before quote in generated Lua table literals.
@@ -284,7 +379,7 @@ standalone `.lua` files.
   test instead of silently passing.
 - Lint prewarm engine-init failure is reported via `onFailed` rather than
   swallowed.
-- Release pipeline: the distributable universal `moonswift` binary is now
+- Release pipeline: the distributable universal `mswift` binary is now
   force-statically linked against the Rust shim (the source-mode build
   otherwise links the dylib, whose `install_name` is an absolute build-tree
   path — producing a `dyld: Library not loaded` failure on any other machine).

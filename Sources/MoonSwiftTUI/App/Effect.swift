@@ -11,6 +11,7 @@
 
 import CryptoKit
 import Foundation
+import LuaSwift
 import MoonSwiftCore
 import RatatuiKit
 
@@ -130,6 +131,15 @@ public enum Effect: Sendable {
     /// by AppDriver before the Task fires).
     case nvimInput(String)
 
+    /// Forward pasted text to the running nvim instance via `nvim_paste`.
+    ///
+    /// `nvim_paste` is used rather than `nvim_input` so the payload is inserted
+    /// verbatim — `nvim_input` would interpret `<...>` termcode notation and
+    /// control bytes in the pasted text — and so a multi-line paste lands as a
+    /// single undo block. No-op if no session is active (nil-guarded by
+    /// AppDriver before the Task fires).
+    case nvimPaste(String)
+
     /// Detach from the running nvim instance cleanly via `nvim_command "qa!"`.
     ///
     /// AppDriver posts `.nvimDetached` after the notify completes. The reducer
@@ -225,6 +235,111 @@ public enum Effect: Sendable {
     /// Transitions the app from empty state to the loaded project state.
     case writeProjectFile(directory: URL, luaVersion: String, sources: [String])
 
+    // MARK: Debug (P2 F6.1, ARCHITECTURE.md §10.9)
+
+    /// Start a debug run for `fragment` with the given breakpoint lines.
+    ///
+    /// `breakpoints` are fragment-relative 1-based line numbers (already
+    /// translated from the fragment-relative cursor line held in `AppState`).
+    /// AppDriver launches `SessionEngineProtocol.runForDebug` inside a background
+    /// Task; the `onPause` callback posts `AppEvent.debugPaused`; after the run
+    /// completes AppDriver posts `AppEvent.debugFinished`.
+    case debugRun(LuaSourceFragment, breakpoints: Set<Int>)
+
+    /// Tear down any active debug session and stop the debug run.
+    ///
+    /// AppDriver calls `SessionEngineProtocol.sendDebugCommand(.stop)` on the
+    /// session addressed by `id`. A stale id is a silent no-op (ARCH-06).
+    case stopDebug(DebugSessionID)
+
+    /// Deliver a stepping or continue command to a live debug session.
+    ///
+    /// AppDriver calls `SessionEngineProtocol.sendDebugCommand(id, command)`
+    /// nonisolated (PERF-11 — the serial executor is occupied by the parked
+    /// `runForDebug` block during a pause, so async dispatch would deadlock).
+    /// Stale id → silent no-op (ARCH-06). Used by F6.2 for `.stepOver`,
+    /// `.stepInto`, `.stepOut`, `.continueRun`, and `.stop` from the paused
+    /// stepping UI (distinct from `.stopDebug` which was F6.1's teardown-only path).
+    case sendDebugCommand(DebugSessionID, LuaDebugCommand)
+
+    /// Invoke a Lua function via a FULL call expression (F5.3, RQ2).
+    ///
+    /// Carries the RAW typed call expression (e.g. `on_event("tick", 42)`); the
+    /// reducer NEVER runs the controls (ARCH-R7-01 — they are side-effectful). The
+    /// AppDriver runs the three ordered controls (`AppDriver+InvokeEffects`):
+    ///   1. lint gate — `LintServiceProtocol.syntaxPrePass("return <expr>")`; a
+    ///      syntax error posts `.luaInvocationLintFailed(detail)`, stops.
+    ///   2. target no-dots check — `extractCallTarget(expr)`; a dotted/indexed/
+    ///      method target posts `.luaInvocationTargetInvalid`, stops.
+    ///   3. evaluate — `SessionEngineProtocol.invokeLuaCall(expr)`; success posts
+    ///      `.luaInvocationResult(display)`, a not-a-function / no-session failure
+    ///      posts a `.transient`, any other runtime error posts
+    ///      `.luaInvocationFailed(message)`.
+    case invokeLuaCall(String)
+
+    /// Persist the mock definitions to `[[mock.*]]` in moonswift.toml after an
+    /// add/edit/delete (F5.4). AppDriver decode-modifies-encodes the project file
+    /// (preserving all other keys) with the new `MockStore` and writes it back;
+    /// fire-and-forget on success, logged on failure. No-op without a loaded project.
+    case saveMockStore(MockStore)
+
+    /// Persist the navigator/bottom split ratios to `[settings]` in moonswift.toml
+    /// after a TUI resize (F5.6). AppDriver decode-modifies-encodes the project
+    /// file (preserving all other keys) and writes it back; fire-and-forget on
+    /// success, logged on failure. No-op when no project file is loaded.
+    case persistSplitRatios(navigatorSplit: Double, bottomSplit: Double)
+
+    /// Request the bounded/filtered user-globals slice for a paused session (F6.3 `g`).
+    ///
+    /// AppDriver calls `SessionEngineProtocol.requestGlobals(id)` nonisolated
+    /// (PERF-11 — the serial executor is parked in `runForDebug` during a pause,
+    /// so an async hop would deadlock). The session's mailbox latches the request
+    /// and the two-predicate wake services it IN-PLACE at the current pause line
+    /// (no VM advance, DOM-08); the adapter republishes a snapshot with `globals`
+    /// populated, arriving back as a fresh `AppEvent.debugPaused`. A stale id is a
+    /// silent no-op (ARCH-06).
+    case requestGlobals(DebugSessionID)
+
+    // MARK: Completions & hover (P3 F7a.2, ARCHITECTURE.md §4.7)
+
+    /// Query completion items for `prefix` and post `.completionsReady`.
+    ///
+    /// AppDriver calls `LuaModuleCatalog.v0.completionItems(prefix:liveMocks:
+    /// tomlProbed:)` on a background Task and posts the result. `liveMocks` is
+    /// snapshotted from the cached `AppState.mockLiveState` at reducer time
+    /// (PERF-03 — never a fresh per-keystroke introspection); `tomlProbed` is
+    /// the `AppState.tomlModuleAvailable` probe result. The catalog returns `[]`
+    /// for any prefix other than `luaswift.` / `luaswift.X.`, so an off-prefix
+    /// `<C-space>` is a harmless empty query.
+    case queryCompletions(prefix: String, liveMocks: [CompletionItem], tomlProbed: Bool)
+
+    /// Resolve the catalog/live-mock entry for `symbolName` and post
+    /// `.hoverReady(CompletionItem?)` (F7a.2).
+    ///
+    /// AppDriver resolves a dotted symbol (`luaswift.stringx.split`) to its
+    /// module-level item, or a bare name to a live-mock item, on a background
+    /// Task. Posts `.hoverReady(nil)` when nothing matches — the reducer opens
+    /// the overlay regardless (UX-R3-01). `liveMocks`/`tomlProbed` are
+    /// snapshotted at reducer time, as for `.queryCompletions`.
+    case queryHover(symbolName: String, liveMocks: [CompletionItem], tomlProbed: Bool)
+
+    // MARK: LuaLS (P3 F7b — optional lua-language-server, ARCHITECTURE.md §7.3)
+
+    /// Start (or restart) the lua-language-server child for the loaded project.
+    ///
+    /// AppDriver tears down any prior `LuaLSClient`, generates the catalog meta
+    /// files into the per-project cache, and spawns the server pointed at it. The
+    /// project root is resolved from current driver state (the loaded
+    /// `moonswift.toml` directory), so this case carries no payload — mirroring
+    /// `.reloadProject`/`.loadSources`. Absence degrades silently to F7a and
+    /// posts `.lualsUnavailable` once.
+    case spawnLuaLS
+
+    /// Push the current text of `fragment` to lua-language-server (full-document
+    /// sync). Emitted alongside `.lint` so a LuaLS pass accompanies each luacheck
+    /// pass. A no-op when the client is inert (binary absent / not yet spawned).
+    case lualsSync(LuaSourceFragment)
+
     // MARK: Process lifecycle
 
     /// Break the AppDriver loop, run teardown, and `exit(exitCode)`.
@@ -250,6 +365,14 @@ public enum TickInterval {
     /// Slowest interval: armed while a transient status-bar message is visible;
     /// the reducer cancels the transient after 1.5 s (ARCHITECTURE.md §3b).
     public static let transientExpiry: Duration = .milliseconds(1_500)
+
+    /// Debug-session UI poll interval — armed while a debug session is active (or
+    /// launching) to keep the loop ticking for elapsed-time / state updates
+    /// between pauses (CR-041). A dedicated constant rather than reusing
+    /// `transientExpiry`: the two are semantically unrelated (one bounds a
+    /// status-message lifetime, this paces debug-UI refresh), so retuning one must
+    /// not silently move the other. They currently share the 1.5 s value.
+    public static let debugPoll: Duration = .milliseconds(1_500)
 
     /// Debounce window for nvim resize events (Inc-8, ARCHITECTURE.md §10.8).
     ///

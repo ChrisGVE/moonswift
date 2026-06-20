@@ -6,7 +6,8 @@
 //       Covers:
 //         • resize while .nvimPane → stores pending size, arms tick
 //         • resize while .pane(.codePane) → no debounce state set
-//         • resize always updates AppState.terminalSize
+//         • a non-degenerate resize updates AppState.terminalSize; a 0×0
+//           resize is ignored and keeps the last good size
 //         • tick after debounce deadline → emits Effect.nvimResize, clears state
 //         • tick before deadline → no nvimResize emitted
 //         • modeChange in .nvimPane → updates NvimPaneState.mode
@@ -118,11 +119,22 @@ struct NvimReducerResizeTests {
         #expect(s2.nvimPendingResize == TerminalSize(cols: 100, rows: 30))
     }
 
-    @Test("0×0 sentinel resize does not set debounce state")
-    func sentinelResizeIgnored() {
+    @Test("degenerate 0×0 resize does not set debounce state")
+    func degenerateResizeDoesNotArmDebounce() {
         var s = makeResizeNvimPaneState()
         let (next, _) = applyResize(s, .resize(TerminalSize(cols: 0, rows: 0)))
         #expect(next.nvimPendingResize == nil)
+    }
+
+    /// A degenerate 0×0 resize must NOT overwrite the last good terminal size:
+    /// the renderer always needs valid dimensions, and crossterm can emit a
+    /// transient 0×0 on first input (E2E first-keystroke-quit regression).
+    @Test("0×0 resize keeps the prior terminalSize")
+    func zeroSizeResizeKeepsPriorTerminalSize() {
+        let s = makeResizeCodePaneState()  // seeded terminalSize 120×40
+        let prior = s.terminalSize
+        let (next, _) = applyResize(s, .resize(TerminalSize(cols: 0, rows: 0)))
+        #expect(next.terminalSize == prior, "Degenerate resize must not clobber the last good size")
     }
 
     // MARK: Debounce tick firing

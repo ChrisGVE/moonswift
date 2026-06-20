@@ -3,14 +3,14 @@
 
 #pragma once
 
-#include "stdbool.h"
-#include "stddef.h"
-#include "stdint.h"
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "stdint.h"
+#include "stdbool.h"
+#include "stddef.h"
 
 /**
  * Returned by rffi_poll_event when the timeout elapsed with no event.
@@ -116,6 +116,114 @@
 #define LEFT (1 << 3)
 
 #define ALL (((TOP | RIGHT) | BOTTOM) | LEFT)
+
+/**
+ * Discriminant for the `kind` field of RffiEvent.
+ */
+enum RffiEventKind
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  /**
+   * Timeout elapsed; no event. rffi_poll_event returns RFFI_TIMEOUT.
+   */
+  RffiEventKind_None = 0,
+  /**
+   * Keyboard event; see RffiKeyEvent fields.
+   */
+  RffiEventKind_Key = 1,
+  /**
+   * Terminal resize; see width/height fields.
+   */
+  RffiEventKind_Resize = 2,
+  /**
+   * Mouse event; see mouse_* fields.
+   */
+  RffiEventKind_Mouse = 3,
+  /**
+   * Bracketed-paste event (fork addition — not in upstream union).
+   * The pasted text (UTF-8) is in paste_buf / paste_len.
+   */
+  RffiEventKind_Paste = 4,
+};
+#ifndef __cplusplus
+typedef uint32_t RffiEventKind;
+#endif // __cplusplus
+
+enum RffiKeyCode
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  RffiKeyCode_Char = 0,
+  RffiKeyCode_Enter = 1,
+  RffiKeyCode_Left = 2,
+  RffiKeyCode_Right = 3,
+  RffiKeyCode_Up = 4,
+  RffiKeyCode_Down = 5,
+  RffiKeyCode_Esc = 6,
+  RffiKeyCode_Backspace = 7,
+  RffiKeyCode_Tab = 8,
+  RffiKeyCode_Delete = 9,
+  RffiKeyCode_Home = 10,
+  RffiKeyCode_End = 11,
+  RffiKeyCode_PageUp = 12,
+  RffiKeyCode_PageDown = 13,
+  RffiKeyCode_Insert = 14,
+  RffiKeyCode_F1 = 100,
+  RffiKeyCode_F2 = 101,
+  RffiKeyCode_F3 = 102,
+  RffiKeyCode_F4 = 103,
+  RffiKeyCode_F5 = 104,
+  RffiKeyCode_F6 = 105,
+  RffiKeyCode_F7 = 106,
+  RffiKeyCode_F8 = 107,
+  RffiKeyCode_F9 = 108,
+  RffiKeyCode_F10 = 109,
+  RffiKeyCode_F11 = 110,
+  RffiKeyCode_F12 = 111,
+  /**
+   * Any key code not representable above (mapped to 0 in ch).
+   */
+  RffiKeyCode_Unknown = 255,
+};
+#ifndef __cplusplus
+typedef uint32_t RffiKeyCode;
+#endif // __cplusplus
+
+/**
+ * Mouse button — 0 = none/unknown.
+ */
+enum RffiMouseButton
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  RffiMouseButton_None = 0,
+  RffiMouseButton_Left = 1,
+  RffiMouseButton_Right = 2,
+  RffiMouseButton_Middle = 3,
+};
+#ifndef __cplusplus
+typedef uint32_t RffiMouseButton;
+#endif // __cplusplus
+
+enum RffiMouseKind
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  RffiMouseKind_Down = 1,
+  RffiMouseKind_Up = 2,
+  RffiMouseKind_Drag = 3,
+  RffiMouseKind_Moved = 4,
+  RffiMouseKind_ScrollUp = 5,
+  RffiMouseKind_ScrollDown = 6,
+};
+#ifndef __cplusplus
+typedef uint32_t RffiMouseKind;
+#endif // __cplusplus
 
 /**
  * Opaque list handle. Heap-allocated; Swift holds a `*mut RffiList`.
@@ -231,9 +339,9 @@ extern "C" {
 #endif // __cplusplus
 
 /**
- * Copy the thread-local last-error string into `buf` (at most `cap - 1`
- * bytes, NUL-terminated). Returns the number of bytes written (excluding
- * NUL), or -1 if `buf` is NULL or `cap` is 0.
+ * Copy the last-error string into `buf` (at most `cap - 1` bytes,
+ * NUL-terminated). Returns the number of bytes written (excluding NUL),
+ * or -1 if `buf` is NULL or `cap` is 0.
  *
  * Call this immediately after any rffi_* function returns nonzero to
  * retrieve a human-readable error description.
@@ -267,9 +375,15 @@ int32_t rffi_flush(void *handle);
  *
  * Thread class: render/terminal (UI thread only).
  */
-int32_t rffi_write_cells(void *handle, uint16_t start_col, uint16_t start_row,
-                         const char *text, size_t text_len, uint32_t fg,
-                         uint32_t bg, uint8_t bold, uint8_t italic,
+int32_t rffi_write_cells(void *handle,
+                         uint16_t start_col,
+                         uint16_t start_row,
+                         const char *text,
+                         size_t text_len,
+                         uint32_t fg,
+                         uint32_t bg,
+                         uint8_t bold,
+                         uint8_t italic,
                          uint8_t underline);
 
 /**
@@ -283,8 +397,7 @@ int32_t rffi_write_cells(void *handle, uint16_t start_col, uint16_t start_row,
  *
  * Thread class: render/terminal (UI thread only).
  */
-int32_t rffi_clear_rect(void *handle, uint16_t col, uint16_t row,
-                        uint16_t width, uint16_t height);
+int32_t rffi_clear_rect(void *handle, uint16_t col, uint16_t row, uint16_t width, uint16_t height);
 
 /**
  * Poll for the next terminal event, blocking for at most `timeout_ms`
@@ -308,11 +421,12 @@ int32_t rffi_poll_event(struct RffiEvent *out, int32_t timeout_ms);
  *
  * Parameters:
  *   parent    — the rectangle to split.
- *   direction — 0 = vertical (horizontal stacks), 1 = horizontal (side by
- * side). kinds     — array of `len` constraint-kind constants
- * (constraint_kind::*). values_a  — primary values (length / percent / min /
- * max / fill-weight / ratio numerator). values_b  — secondary values; only used
- * for RATIO (denominator); may be NULL for all other kinds (treated as all-1s).
+ *   direction — 0 = vertical (horizontal stacks), 1 = horizontal (side by side).
+ *   kinds     — array of `len` constraint-kind constants (constraint_kind::*).
+ *   values_a  — primary values (length / percent / min / max / fill-weight /
+ *               ratio numerator).
+ *   values_b  — secondary values; only used for RATIO (denominator); may be
+ *               NULL for all other kinds (treated as all-1s).
  *   spacing   — gap in cells between each child (usually 0).
  *   out_rects — caller-allocated output array of at least `len` RffiRect.
  *   out_len   — capacity of `out_rects`; must be >= `len`.
@@ -322,10 +436,14 @@ int32_t rffi_poll_event(struct RffiEvent *out, int32_t timeout_ms);
  *
  * Thread class: render/terminal (UI thread only).
  */
-int32_t rffi_layout_split(struct RffiRect parent, uint32_t direction,
-                          const uint32_t *kinds, const uint16_t *values_a,
-                          const uint16_t *values_b, size_t len,
-                          uint16_t spacing, struct RffiRect *out_rects,
+int32_t rffi_layout_split(struct RffiRect parent,
+                          uint32_t direction,
+                          const uint32_t *kinds,
+                          const uint16_t *values_a,
+                          const uint16_t *values_b,
+                          size_t len,
+                          uint16_t spacing,
+                          struct RffiRect *out_rects,
                           size_t out_len);
 
 /**
@@ -344,6 +462,17 @@ void *rffi_terminal_init(void);
 /**
  * Leave the alternate screen, show the cursor, restore termios, and free the
  * terminal handle. After this call the pointer is invalid.
+ *
+ * # Use-after-free safety
+ *
+ * The Box is wrapped in ManuallyDrop so that early returns on I/O errors do
+ * NOT free the allocation. The pointer therefore remains valid across the
+ * fallible I/O calls, and a Swift-side retry (or the emergency-restore path)
+ * will not reconstruct a RffiTerminal from freed memory. The explicit
+ * `ManuallyDrop::drop` at the end of the success path is the single free site.
+ *
+ * After any return from this function — success or error — the caller must
+ * treat the handle as invalid and must not pass it to any other rffi_* call.
  *
  * Thread class: render/terminal (UI thread only).
  */
@@ -365,6 +494,16 @@ int32_t rffi_terminal_suspend(void *handle);
  * Thread class: render/terminal (UI thread only).
  */
 int32_t rffi_terminal_resume(void *handle);
+
+/**
+ * Begin a new render frame: resize the off-screen accumulation buffer to the
+ * current terminal size and clear it to blank. Call once at the start of each
+ * render cycle, before any widget or cell draw; finish the cycle with
+ * `rffi_flush`, which presents the accumulated buffer in a single draw.
+ *
+ * Thread class: render/terminal (UI thread only).
+ */
+int32_t rffi_begin_frame(void *handle);
 
 /**
  * Emergency terminal restore callable from signal handlers (ARCHITECTURE.md
@@ -425,14 +564,12 @@ int32_t rffi_list_state_free(struct RffiListState *st);
 /**
  * Append a plain-text item (single uniform style) to the list.
  */
-int32_t rffi_list_append_item(struct RffiList *lst, const char *text_utf8,
-                              struct RffiStyle style);
+int32_t rffi_list_append_item(struct RffiList *lst, const char *text_utf8, struct RffiStyle style);
 
 /**
  * Append a span-array item (mixed styles on one line) to the list.
  */
-int32_t rffi_list_append_item_spans(struct RffiList *lst,
-                                    const struct RffiSpan *spans, size_t len);
+int32_t rffi_list_append_item_spans(struct RffiList *lst, const struct RffiSpan *spans, size_t len);
 
 /**
  * Set the selected item index. Pass -1 to clear the selection.
@@ -442,14 +579,12 @@ int32_t rffi_list_set_selected(struct RffiList *lst, int32_t index);
 /**
  * Set the highlight style applied to the selected row.
  */
-int32_t rffi_list_set_highlight_style(struct RffiList *lst,
-                                      struct RffiStyle style);
+int32_t rffi_list_set_highlight_style(struct RffiList *lst, struct RffiStyle style);
 
 /**
  * Set the highlight symbol prefix (e.g. "» "). NULL clears it.
  */
-int32_t rffi_list_set_highlight_symbol(struct RffiList *lst,
-                                       const char *sym_utf8);
+int32_t rffi_list_set_highlight_symbol(struct RffiList *lst, const char *sym_utf8);
 
 /**
  * Set scroll offset within the list.
@@ -467,9 +602,12 @@ int32_t rffi_list_set_direction(struct RffiList *lst, uint32_t dir);
  * border_type: 0 = Plain, 1 = Rounded, 2 = Double, 3 = Thick.
  * borders_bits: bitfield (see block::border_bits).
  */
-int32_t rffi_list_set_block(struct RffiList *lst, uint8_t borders_bits,
-                            uint32_t border_type, uint16_t pad_left,
-                            uint16_t pad_top, uint16_t pad_right,
+int32_t rffi_list_set_block(struct RffiList *lst,
+                            uint8_t borders_bits,
+                            uint32_t border_type,
+                            uint16_t pad_left,
+                            uint16_t pad_top,
+                            uint16_t pad_right,
                             uint16_t pad_bottom,
                             const struct RffiSpan *title_spans,
                             size_t title_len);
@@ -490,14 +628,14 @@ int32_t rffi_list_state_set_offset(struct RffiListState *st, size_t offset);
  * If the list has a selected index, renders with stateful highlighting.
  * Thread class: render/terminal (UI thread only).
  */
-int32_t rffi_list_draw(void *handle, const struct RffiList *lst,
-                       struct RffiRect rect);
+int32_t rffi_list_draw(void *handle, const struct RffiList *lst, struct RffiRect rect);
 
 /**
  * Draw the list with an explicit list-state (external selection tracking).
  * Thread class: render/terminal (UI thread only).
  */
-int32_t rffi_list_draw_stateful(void *handle, const struct RffiList *lst,
+int32_t rffi_list_draw_stateful(void *handle,
+                                const struct RffiList *lst,
                                 const struct RffiListState *st,
                                 struct RffiRect rect);
 
@@ -533,8 +671,7 @@ int32_t rffi_paragraph_line_break(struct RffiParagraph *para);
 /**
  * Set text alignment: 0 = Left, 1 = Center, 2 = Right.
  */
-int32_t rffi_paragraph_set_alignment(struct RffiParagraph *para,
-                                     uint32_t align);
+int32_t rffi_paragraph_set_alignment(struct RffiParagraph *para, uint32_t align);
 
 /**
  * Enable or disable word-wrapping. trim = 1 trims leading whitespace.
@@ -544,22 +681,23 @@ int32_t rffi_paragraph_set_wrap(struct RffiParagraph *para, uint8_t trim);
 /**
  * Set scroll offset (x = column offset, y = row offset).
  */
-int32_t rffi_paragraph_set_scroll(struct RffiParagraph *para, uint16_t x,
-                                  uint16_t y);
+int32_t rffi_paragraph_set_scroll(struct RffiParagraph *para, uint16_t x, uint16_t y);
 
 /**
  * Set the base style applied to the paragraph as a whole.
  */
-int32_t rffi_paragraph_set_style(struct RffiParagraph *para,
-                                 struct RffiStyle style);
+int32_t rffi_paragraph_set_style(struct RffiParagraph *para, struct RffiStyle style);
 
 /**
  * Set the block (borders + title) for this paragraph.
  */
 int32_t rffi_paragraph_set_block(struct RffiParagraph *para,
-                                 uint8_t borders_bits, uint32_t border_type,
-                                 uint16_t pad_left, uint16_t pad_top,
-                                 uint16_t pad_right, uint16_t pad_bottom,
+                                 uint8_t borders_bits,
+                                 uint32_t border_type,
+                                 uint16_t pad_left,
+                                 uint16_t pad_top,
+                                 uint16_t pad_right,
+                                 uint16_t pad_bottom,
                                  const struct RffiSpan *title_spans,
                                  size_t title_len);
 
@@ -567,8 +705,7 @@ int32_t rffi_paragraph_set_block(struct RffiParagraph *para,
  * Draw the paragraph into a rect of the terminal frame buffer.
  * Thread class: render/terminal (UI thread only).
  */
-int32_t rffi_paragraph_draw(void *handle, const struct RffiParagraph *para,
-                            struct RffiRect rect);
+int32_t rffi_paragraph_draw(void *handle, const struct RffiParagraph *para, struct RffiRect rect);
 
 /**
  * Create a new empty tabs handle.
@@ -598,9 +735,12 @@ int32_t rffi_tabs_set_styles(struct RffiTabs *t, struct RffiTabsStyles styles);
 /**
  * Set the block (borders + title) for the tabs bar.
  */
-int32_t rffi_tabs_set_block(struct RffiTabs *t, uint8_t borders_bits,
-                            uint32_t border_type, uint16_t pad_left,
-                            uint16_t pad_top, uint16_t pad_right,
+int32_t rffi_tabs_set_block(struct RffiTabs *t,
+                            uint8_t borders_bits,
+                            uint32_t border_type,
+                            uint16_t pad_left,
+                            uint16_t pad_top,
+                            uint16_t pad_right,
                             uint16_t pad_bottom,
                             const struct RffiSpan *title_spans,
                             size_t title_len);
@@ -609,11 +749,10 @@ int32_t rffi_tabs_set_block(struct RffiTabs *t, uint8_t borders_bits,
  * Draw the tabs bar into a rect of the terminal frame buffer.
  * Thread class: render/terminal (UI thread only).
  */
-int32_t rffi_tabs_draw(void *handle, const struct RffiTabs *t,
-                       struct RffiRect rect);
+int32_t rffi_tabs_draw(void *handle, const struct RffiTabs *t, struct RffiRect rect);
 
 #ifdef __cplusplus
-} // extern "C"
-#endif // __cplusplus
+}  // extern "C"
+#endif  // __cplusplus
 
-#endif /* RATATUI_FFI_H */
+#endif  /* RATATUI_FFI_H */

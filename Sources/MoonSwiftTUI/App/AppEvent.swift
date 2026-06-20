@@ -92,6 +92,15 @@ public enum AppEvent: Sendable {
     /// returns Effect.loadSources and other startup effects (ARCH §3a).
     case appStarted
 
+    /// The terminal I/O source failed irrecoverably (closed TTY / SIGHUP):
+    /// `EventPump` posts this when `pollEvent` throws. The AppDriver loop treats
+    /// it as a clean EOF quit (code 0). This is a DEDICATED fatal signal — it is
+    /// deliberately NOT overloaded onto `resize(0,0)`, because a genuine content
+    /// resize of 0×0 (which crossterm can emit transiently on the first input
+    /// event) must remain a harmless no-op, not a quit (CR-019 revision; E2E
+    /// first-keystroke-quit fix).
+    case terminalClosed
+
     // MARK: Terminal input (EventPump → EventChannel)
 
     /// A key was pressed. The reducer dispatches based on focus and key.
@@ -181,6 +190,18 @@ public enum AppEvent: Sendable {
 
     /// A full luacheck pass completed with zero or more diagnostics.
     case lintFinished([Diagnostic])
+
+    // MARK: LuaLS (F7b — optional lua-language-server)
+
+    /// lua-language-server published a fresh diagnostics batch (already mapped to
+    /// `.luals`-sourced `Diagnostic`s). The reducer merges these into the
+    /// Diagnostics tab alongside the luacheck/pre-pass findings.
+    case lualsDiagnostics([Diagnostic])
+
+    /// lua-language-server is unavailable (absent from PATH, or the child failed
+    /// to spawn). The reducer shows a one-time status-bar note and otherwise
+    /// leaves the native F7a behaviour intact.
+    case lualsUnavailable
 
     // MARK: Highlighter (Highlighter callback)
 
@@ -284,6 +305,86 @@ public enum AppEvent: Sendable {
     /// finishes constructing `DiffViewState` (ARCHITECTURE.md §10.4.10,
     /// §10.3d). The reducer transitions focus to `.diffView(.ready(state))`.
     case diffViewReady(DiffViewState)
+
+    // MARK: Debug (P2 F6.1, ARCHITECTURE.md §10.9)
+
+    /// The debug run paused at a breakpoint or step. Carries the snapshot
+    /// published by the `DebugHookAdapter`'s `onPause` callback.
+    ///
+    /// Posted by `AppDriver+DebugEffects` inside the `onPause` closure passed to
+    /// `SessionEngineProtocol.runForDebug`. The reducer updates `AppState` with
+    /// the snapshot and auto-shows the Debug tab.
+    case debugPaused(DebugSnapshot)
+
+    /// The debug run finished (breakpoints exhausted, error, or cancellation).
+    ///
+    /// Posted by `AppDriver+DebugEffects` after `runForDebug` returns.
+    /// The reducer clears the active debug session ID from `AppState`.
+    case debugFinished(DebugSessionID, CoreRunOutcome)
+
+    /// The paused VM resumed executing (step or continue command delivered).
+    ///
+    /// Posted by `AppDriver+DebugEffects` via the `onResumed` callback passed to
+    /// `makeDebugHookHandler` (F6.0 §step 5b / ARCH-07). This triggers the
+    /// §6.9 Case-2 "VM running after a pause" state: the Debug tab retains the
+    /// last pause snapshot but renders it dimmed under the `VM running…
+    /// (showing last pause)` header. The reducer clears `currentDebugSnapshot`
+    /// so the tab's rendering branch switches to Case 2.
+    ///
+    /// A stale `sessionID` (session already torn down) is a silent no-op.
+    case debugResumed(DebugSessionID)
+
+    /// A post-run live-state introspection snapshot is ready (F5.4). Posted by
+    /// the AppDriver after `Effect.queryLiveState` reads the session engine's
+    /// `liveState()` (introspection-backed — `registeredValueServerNames` /
+    /// `globalValue` etc., never TUI bookkeeping). The reducer stores it in
+    /// `AppState.mockLiveState`; the navigator's Mock Environment section then
+    /// shows the live values instead of `(run to populate live state)`.
+    case mockLiveStateReady(MockLiveState)
+
+    // MARK: Lua invocation (P2 F5.3, ARCH-R7-01)
+
+    /// The F5.3 invoke succeeded: the FIRST return value rendered to a display
+    /// string (ux-spec §6.3/§7.5). Posted by `AppDriver+InvokeEffects` after
+    /// `SessionEngineProtocol.invokeLuaCall` returns. The reducer appends
+    /// `→ <display>` to the Output tab, closes the invoke form, and returns focus
+    /// to the navigator (the invoke is a one-shot action, §6.6 lifecycle).
+    case luaInvocationResult(String)
+
+    /// The F5.3 lint gate (control 1) rejected the call expression. Carries the
+    /// raw syntax-error detail; the reducer shows `Invalid call expression:
+    /// <detail>` inline in the invoke form and keeps the form open with the typed
+    /// text preserved (§6.5/§6.6).
+    case luaInvocationLintFailed(String)
+
+    /// The F5.3 target no-dots check (control 2) rejected the call target (a
+    /// dotted / indexed / method head). The reducer shows `Invalid function name.`
+    /// inline and keeps the form open (§6.5/§6.6).
+    case luaInvocationTargetInvalid
+
+    /// The F5.3 evaluate step (control 3) raised a runtime error that is NOT the
+    /// not-a-function case (e.g. a sandbox-blocked argument or an error thrown by
+    /// the function body). Carries the error message; the reducer shows it inline
+    /// and keeps the form open for correction (§6.6 lifecycle). The not-a-function
+    /// and no-session cases surface as `.transient` instead.
+    case luaInvocationFailed(String)
+
+    // MARK: Completions & hover (P3 F7a.2, ARCHITECTURE.md §4.7)
+
+    /// Completion items are ready for the popup (F7a.2). Posted by
+    /// `AppDriver+CompletionEffects` after `Effect.queryCompletions` reads
+    /// `LuaModuleCatalog.completionItems(prefix:liveMocks:tomlProbed:)`. The
+    /// reducer opens the popup when the list is non-empty; an empty list is a
+    /// no-op (nothing to complete at the cursor prefix — ux-spec §7.6).
+    case completionsReady([CompletionItem])
+
+    /// Hover data is ready for the overlay (F7a.2). Posted by
+    /// `AppDriver+CompletionEffects` after `Effect.queryHover` resolves the
+    /// symbol under the cursor. The payload is `nil` when the symbol has no
+    /// catalog entry; the reducer opens the overlay REGARDLESS, titled by
+    /// `AppState.hoverPendingSymbol` over `(no documentation available)`
+    /// (UX-R3-01 — `K` is never a silent no-op).
+    case hoverReady(CompletionItem?)
 }
 
 // MARK: - HighlightSpan

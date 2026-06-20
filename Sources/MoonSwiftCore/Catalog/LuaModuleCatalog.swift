@@ -7,8 +7,9 @@
 //            that luacheck's std= key expects, so the linter knows which globals
 //            are valid.
 //
-//         2. completionItems(prefix:) — returns [CompletionItem] for the TUI
-//            completion engine (P3a scope; stub in P1).
+//         2. completionItems(prefix:liveMocks:tomlProbed:) — returns [CompletionItem]
+//            for the TUI completion engine (F7a.1). Implementation in
+//            CatalogConsumers+Completion.swift (CONS-R2-01 — two-parameter form only).
 //
 //         3. luaLSMetaFiles() — returns [GeneratedFile] for LuaLS meta files
 //            (P3b scope; stub in P1).
@@ -114,6 +115,36 @@ public struct LuaModuleCatalog: Sendable {
         Set(optInModules.map(\.tableName))
     }
 
+    /// The set of catalog-reserved symbol names for mock-function collision detection.
+    ///
+    /// A mock function whose `name` equals any member of this set collides with
+    /// a known catalog symbol and is rejected at validation (F5.5 rule).
+    ///
+    /// Includes:
+    /// - `"luaswift"` — the top-level namespace global itself.
+    /// - All non-empty module table names (e.g. `"json"`, `"yaml"`, `"regex"`).
+    /// - All root-module function names (e.g. `"extend_stdlib"`).
+    ///
+    /// **Conservative choice:** only top-level identifiers are checked because mock
+    /// functions register themselves as bare Lua globals; a dotted sub-function
+    /// (`json.decode`) cannot conflict with a bare-identifier mock name.
+    public var catalogSymbolNames: Set<String> {
+        var names: Set<String> = ["luaswift"]
+        for module in modules {
+            if module.tableName.isEmpty {
+                // Root module — its functions go directly into the luaswift table.
+                // They are accessed as luaswift.extend_stdlib, not as bare globals,
+                // but we include them for conservative collision detection.
+                for fn in module.functions {
+                    names.insert(fn.name)
+                }
+            } else {
+                names.insert(module.tableName)
+            }
+        }
+        return names
+    }
+
     // MARK: - luacheck globals producer
 
     /// Produces the globals table that luacheck's `std=` option expects.
@@ -186,33 +217,16 @@ public struct LuaModuleCatalog: Sendable {
         return ["luaswift": ["fields": luaswiftFields]]
     }
 
-    // MARK: - Completion items (P3a stub)
+    // MARK: - Completion items
 
-    /// Returns completion items for the given prefix string.
-    ///
-    /// P1 stub — returns an empty array. P3a replaces this body with real
-    /// prefix-filtered completion construction from the catalog data.
-    ///
-    /// - Parameter prefix: The Lua text before the cursor (e.g. `"luaswift.json."`).
-    /// - Returns: An empty array in P1. P3a populates this with `CompletionItem` values.
-    public func completionItems(prefix: String) -> [String] {
-        // P3a integration point: replace with CompletionItem construction.
-        _ = prefix
-        return []
-    }
+    // The canonical `completionItems(prefix:liveMocks:tomlProbed:) -> [CompletionItem]`
+    // method lives in CatalogConsumers+Completion.swift (F7a.1, CONS-R2-01).
+    // There is no one-parameter overload — callers always pass the live-mock slice.
 
-    // MARK: - LuaLS meta files (P3b stub)
+    // MARK: - LuaLS meta files (F7b)
 
-    /// Returns generated LuaLS meta files describing the luaswift namespace.
-    ///
-    /// P1 stub — returns an empty array. P3b replaces this body with real
-    /// `.luarc/meta/` file generation from the catalog data.
-    ///
-    /// - Returns: An empty array in P1. P3b populates this with `GeneratedFile` values.
-    public func luaLSMetaFiles() -> [GeneratedFile] {
-        // P3b integration point: generate LuaLS-compatible meta stubs.
-        return []
-    }
+    // The `luaLSMetaFiles() -> [GeneratedFile]` consumer lives in
+    // CatalogConsumers+Meta.swift (F7b), delegating to the pure MetaFileGenerator.
 
     // MARK: - Private helpers
 

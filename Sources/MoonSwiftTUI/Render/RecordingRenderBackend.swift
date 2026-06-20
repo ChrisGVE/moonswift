@@ -34,7 +34,8 @@ public final class RecordingRenderBackend: RenderBackend {
         case beginFrame(size: TerminalSize, defaultStyle: CellStyle)
         case flush
         case titleBar(rect: Rect, left: String, badges: [String], style: CellStyle)
-        case navigatorList(rect: Rect, items: [Span], selectedIndex: Int?, title: [Span])
+        case navigatorList(
+            rect: Rect, items: [Span], selectedIndex: Int?, title: [Span], highlightStyle: CellStyle)
         case paragraph(rect: Rect, lines: [[Span]], block: BlockConfig?)
         case tabBar(rect: Rect, tabs: [String], selectedIndex: Int)
         case block(rect: Rect, config: BlockConfig, borderStyle: CellStyle)
@@ -93,9 +94,13 @@ public final class RecordingRenderBackend: RenderBackend {
         rect: Rect,
         items: [Span],
         selectedIndex: Int?,
-        title: [Span]
+        title: [Span],
+        highlightStyle: CellStyle
     ) throws {
-        calls.append(.navigatorList(rect: rect, items: items, selectedIndex: selectedIndex, title: title))
+        calls.append(
+            .navigatorList(
+                rect: rect, items: items, selectedIndex: selectedIndex, title: title,
+                highlightStyle: highlightStyle))
         if errorOnCall == .navigatorList { throw RecordingError.injected }
     }
 
